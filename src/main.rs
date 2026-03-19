@@ -21,7 +21,12 @@ enum AppResult {
     Cancelled(Option<String>),
 }
 
-fn run_complete(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i32> {
+fn run_complete(
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    bindings: &config::KeyBindings,
+) -> io::Result<i32> {
     let candidates: Vec<Candidate> = io::stdin()
         .lock()
         .lines()
@@ -42,7 +47,7 @@ fn run_complete(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<
     ui::render::draw(&mut guard.tty, &app)?;
 
     let result = loop {
-        match input::read_action()? {
+        match input::read_action(bindings)? {
             input::Action::MoveDown => {
                 app.move_down();
                 ui::render::draw(&mut guard.tty, &app)?;
@@ -131,12 +136,14 @@ fn run_complete(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<
 
 fn main() {
     let cli = Cli::parse();
+    let cfg = config::Config::load();
+    let bindings = cfg.key_bindings();
     match cli.command {
         Command::Complete {
             prefix,
             cursor_row,
             cursor_col,
-        } => match run_complete(prefix, cursor_row, cursor_col) {
+        } => match run_complete(prefix, cursor_row, cursor_col, &bindings) {
             Ok(code) => process::exit(code),
             Err(e) => {
                 let _ = crossterm::terminal::disable_raw_mode();

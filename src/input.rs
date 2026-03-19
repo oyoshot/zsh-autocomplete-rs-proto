@@ -1,6 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
+use crate::config::KeyBindings;
+
+#[derive(Debug, Clone, Copy)]
 pub enum Action {
     MoveDown,
     MoveUp,
@@ -14,7 +17,7 @@ pub enum Action {
     None,
 }
 
-pub fn read_action() -> std::io::Result<Action> {
+pub fn read_action(bindings: &KeyBindings) -> std::io::Result<Action> {
     if !event::poll(Duration::from_millis(100))? {
         return Ok(Action::None);
     }
@@ -23,14 +26,14 @@ pub fn read_action() -> std::io::Result<Action> {
         Event::Key(KeyEvent {
             code, modifiers, ..
         }) => Ok(match code {
-            KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => Action::MoveUp,
-            KeyCode::Tab => Action::Confirm,
-            KeyCode::Char(' ') => Action::DismissWithSpace,
+            KeyCode::BackTab => bindings.shift_tab,
+            KeyCode::Tab => bindings.tab,
+            KeyCode::Char(' ') => bindings.space,
             KeyCode::PageDown => Action::PageDown,
             KeyCode::PageUp => Action::PageUp,
             KeyCode::Down => Action::MoveDown,
             KeyCode::Up => Action::MoveUp,
-            KeyCode::Enter => Action::Confirm,
+            KeyCode::Enter => bindings.enter,
             KeyCode::Esc => Action::Cancel,
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Action::Cancel,
             KeyCode::Backspace => Action::Backspace,
