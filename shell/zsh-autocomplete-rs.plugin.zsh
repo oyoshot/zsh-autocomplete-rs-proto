@@ -13,7 +13,7 @@ source "${_zacrs_dir}/_zacrs_gather.zsh"
 source "${_zacrs_dir}/_zacrs_compsys.zsh"
 
 # Settings via zstyle (defaults)
-zstyle -s ':zacrs:' min-input '_zacrs_min_input' || _zacrs_min_input=2
+zstyle -s ':zacrs:' min-input '_zacrs_min_input' || _zacrs_min_input=1
 
 # Internal state
 typeset -g _zacrs_prev_lbuffer=""
@@ -114,36 +114,39 @@ _zacrs_tab_complete() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
-    # Skip if already showing popup
     (( _zacrs_in_popup )) && return
 
-    # Skip if buffer hasn't changed
     [[ "$LBUFFER" == "$_zacrs_prev_lbuffer" ]] && return
     _zacrs_prev_lbuffer="$LBUFFER"
 
-    # Skip if suppressed
-    (( _zacrs_suppressed )) && return
+    # Buffer ends with space → no word to complete → skip
+    [[ "$LBUFFER" == *" " ]] && return
 
-    # Clear suppression on space (word boundary)
-    if [[ "$LBUFFER" == *" " ]]; then
+    # Suppression: reaching here means a non-space char was typed → new word
+    if (( _zacrs_suppressed )); then
         _zacrs_suppressed=0
-        return
     fi
 
-    # Extract prefix and check minimum length
     local prefix="$(_zacrs_get_prefix)"
     [[ ${#prefix} -lt $_zacrs_min_input ]] && return
 
-    # Gather candidates
-    local candidates_str
-    candidates_str="$(_zacrs_gather "$LBUFFER")"
+    # Gather candidates: use compsys for 2nd+ words, gather as fallback
+    local candidates_str=""
+    if [[ "$LBUFFER" != "$prefix" ]]; then
+        _zacrs_captured=()
+        zle _zacrs_compsys 2>/dev/null
+        if (( ${#_zacrs_captured} > 0 )); then
+            candidates_str="${(pj:\n:)_zacrs_captured}"
+        fi
+    fi
+    if [[ -z "$candidates_str" ]]; then
+        candidates_str="$(_zacrs_gather "$LBUFFER")"
+    fi
     [[ -z "$candidates_str" ]] && return
 
     local -a cands
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
-
-    # Need at least 2 candidates for auto-popup
     [[ ${#cands[@]} -lt 2 ]] && return
 
     _zacrs_in_popup=1
