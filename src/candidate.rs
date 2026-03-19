@@ -6,6 +6,18 @@ pub struct Candidate {
 }
 
 impl Candidate {
+    pub fn kind_priority(&self) -> u8 {
+        match self.kind.as_str() {
+            "directory" => 0,
+            "file" => 1,
+            "command" => 2,
+            "alias" => 3,
+            "builtin" => 4,
+            "function" => 5,
+            _ => 6,
+        }
+    }
+
     pub fn parse_line(line: &str) -> Self {
         let mut parts = line.splitn(3, '\t');
         let text = parts.next().unwrap_or("").to_string();

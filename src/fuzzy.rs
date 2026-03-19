@@ -20,14 +20,20 @@ impl FuzzyMatcher {
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
         if query.is_empty() {
-            return candidates
+            let mut results: Vec<ScoredCandidate> = candidates
                 .iter()
-                .enumerate()
-                .map(|(i, c)| ScoredCandidate {
+                .map(|c| ScoredCandidate {
                     candidate: c.clone(),
-                    score: (candidates.len() - i) as u32,
+                    score: 0,
                 })
                 .collect();
+            results.sort_by(|a, b| {
+                a.candidate
+                    .kind_priority()
+                    .cmp(&b.candidate.kind_priority())
+                    .then_with(|| a.candidate.text.cmp(&b.candidate.text))
+            });
+            return results;
         }
 
         let pattern = Pattern::new(
@@ -51,7 +57,12 @@ impl FuzzyMatcher {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.candidate.kind_priority().cmp(&b.candidate.kind_priority()))
+                .then_with(|| a.candidate.text.cmp(&b.candidate.text))
+        });
         results
     }
 }
