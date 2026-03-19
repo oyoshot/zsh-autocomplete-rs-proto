@@ -129,6 +129,8 @@ _zacrs_line_pre_redraw() {
 
     local prefix="$(_zacrs_get_prefix)"
     [[ ${#prefix} -lt $_zacrs_min_input ]] && return
+    # "." and ".." are path literals, not dotfile prefixes — skip auto-trigger
+    [[ "$prefix" == "." || "$prefix" == ".." ]] && return
 
     # Gather candidates: use compsys for 2nd+ words, gather as fallback
     local candidates_str=""
