@@ -467,6 +467,88 @@ _expand → _complete → _complete:-fuzzy → _correct → _approximate → _ig
 | `_approximate` | max-errors: `min(2, (PREFIX+SUFFIX)/3)`, compadd パッチ |
 | `_ignored` | (標準動作) |
 
+## zstyle 設定一覧
+
+### .autocomplete__config で設定 (補完システム)
+
+| zstyle パターン | キー | 値 |
+|----------------|------|-----|
+| `:completion:*` | `use-cache` | `yes` |
+| `:completion:*` | `cache-path` | `$XDG_CACHE_HOME/zsh/compcache` (動的) |
+| `:completion:*` | `completer` | `_expand _complete _complete:-fuzzy _correct _approximate _ignored` |
+| `:completion:*` | `max-errors` | `min(2, (PREFIX+SUFFIX)/3)` (動的) |
+| `:completion:*` | `matcher-list` | `m:{[:lower:]-}={[:upper:]_} r:\|[.]=**` |
+| `:completion:*-fuzzy:*` | `matcher-list` | 3段階 (lower→upper+dot, +separator, +any) |
+| `:completion:*:options` | `matcher` | `b:-=+` |
+| `:completion:*` | `prefix-needed` | `yes` |
+| `:completion:*:functions` | `ignored-patterns` | `*.*` `*:*` `+*` |
+| `:completion:*:users` | `ignored-patterns` | `_*` |
+| `:completion:*:widgets` | `ignored-patterns` | `*.*` `*:*` |
+| `:completion:*` | `single-ignored` | `''` |
+| `:completion:*:expand-alias:*` | `complete` | `yes` |
+| `:completion:*:expand:*` | `tag-order` | `expansions all-expansions` |
+| `:completion:*:expand:*` | `accept-exact` | `continue` |
+| `:completion:*:expand:*` | `add-space` | `no` |
+| `:completion:*:expand:*` | `glob` | `yes` |
+| `:completion:*:expand:*` | `keep-prefix` | `no` |
+| `:completion:*:expand:*` | `substitute` | `yes` |
+| `:completion:*:expand:*` | `subst-globs-only` | `yes` |
+| `:completion:*:-command-:*` | `tag-order` | (動的: path/command 別) |
+| `:completion:*:-tilde-:*` | `tag-order` | `directory-stack named-directories` |
+| `:completion:*:(approximate\|correct):*` | `tag-order` | `! original` |
+| `:completion:*:cd:*` | `complete-options` | `yes` |
+| `:completion:*:cd:*` | `tag-order` | `! directory-stack` |
+| `:completion:*:fc:*` | `tag-order` | `options` |
+| `:completion:*:git-*:*` | `tag-order` | (動的: nmatches > 0 時のみ) |
+| `:completion:*` | `ignore-parents` | `parent pwd directory` |
+| `:completion:*:paths` | `expand` | `suffix` |
+| `:completion:*:paths` | `list-suffixes` | `yes` |
+| `:completion:*:paths` | `special-dirs` | `no` |
+| `:completion:*` | `group-name` | `''` |
+| `:completion:*:-command-:*` | `group-name` | `commands` |
+| `:completion:*:all-expansions` | `group-name` | `expansion` |
+| `:completion:*` | `group-order` | `expansions options aliases ... directories executables` |
+| `:completion:*` | `file-patterns` | `*(-/):directories %p(#q^-/):globbed-files` |
+| `:completion:*:-command-:*` | `file-patterns` | (動的) |
+| `:completion:*:(.\|source):*` | `file-patterns` | (*.zwc 除外) |
+| `:completion:*:parameters` | `list-grouped` | `no` |
+| `:completion:*:descriptions` | `format` | `%{\e[0;1;2m%}%d%{\e[0m%}` |
+| `:completion:*:warnings` | `format` | `no matching %d completions` |
+| `:completion:*:messages` | `format` | `%F{9}%d%f` |
+| `:completion:*:history-lines` | `format` | `''` |
+| `:completion:*` | `auto-description` | `%d` |
+| `:completion:*:parameters` | `extra-verbose` | `yes` |
+| `:completion:*:default` | `select-prompt` | `%F{black}%K{12}line %l %p%f%k` |
+| `:completion:*` | `insert-sections` | `yes` |
+| `:completion:*` | `separate-sections` | `yes` |
+| `:completion:*` | `command` | `- COLUMNS=999` (Zsh < 5.9) |
+
+### precmd で削除される設定
+| zstyle パターン | キー | 処理 |
+|----------------|------|------|
+| `*` | `menu` | 全パターンから削除 |
+| `*` | `list-prompt` | 全パターンから削除 |
+| `:completion:*:*:*:*:default` | `menu` | `no no-select` に強制設定 |
+
+### ランタイムで参照される設定 (ユーザーカスタマイズ可能)
+
+| zstyle パターン | キー | デフォルト | 用途 |
+|----------------|------|-----------|------|
+| `:autocomplete:$mod` | `enabled` | `true` | モジュール有効/無効 |
+| `:autocomplete:` | `default-context` | (なし) | デフォルト補完コンテキスト |
+| `:autocomplete:` | `delay` / `min-delay` | `0.05` | 非同期補完の遅延 (秒) |
+| `:autocomplete:$context` | `timeout` | `1.0` | 補完タイムアウト (秒) |
+| `:autocomplete:$context:` | `min-input` | `1` (context あり: `0`) | 最小入力文字数 |
+| `:autocomplete:$context:` | `ignored-input` | (なし) | 無視するパターン |
+| `:autocomplete:$context:` | `list-lines` | `16` | 最大表示行数 |
+| `:autocomplete:$curcontext` | `insert-unambiguous` | (なし) | unambiguous 自動挿入 |
+| `:autocomplete:$WIDGET:` | `add-space` | `executables aliases functions builtins reserved-words commands` | 自動スペース付加対象 |
+| `:autocomplete:$context:history-lines` | `add-semicolon` | `true` | セミコロン自動付加 |
+| `:autocomplete::compinit` | `arguments` | (なし) | compinit 追加引数 |
+| `:autocomplete:$LASTWIDGET:` | `ignore` | (なし) | 特定ウィジェット後の補完無効化 |
+| `:chpwd:` | `recent-dirs-file` | `$XDG_DATA_HOME/zsh/chpwd-recent-dirs` | 最近ディレクトリファイル |
+| `:chpwd:` | `recent-dirs-max` | `0` (無制限) | 最大保存数 |
+
 ## グローバル変数
 
 | 変数 | 型 | 用途 |
