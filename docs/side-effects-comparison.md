@@ -4,73 +4,77 @@
 
 ### 1. グローバルオプション変更
 
-| オプション | 変更箇所 | 影響 |
-|-----------|---------|------|
-| `autopushd` | `.autocomplete__recent-dirs:precmd` | `cd` でディレクトリスタックに自動 push |
-| `pushdignoredups` | `.autocomplete__recent-dirs:precmd` | スタック内の重複を無視 |
-| `NO_listbeep` | `plugin.zsh` (L1: `unsetopt listbeep`) | 補完リスト表示時のビープ音を無効化 |
+| オプション        | 変更箇所                               | 影響                                   |
+| ----------------- | -------------------------------------- | -------------------------------------- |
+| `autopushd`       | `.autocomplete__recent-dirs:precmd`    | `cd` でディレクトリスタックに自動 push |
+| `pushdignoredups` | `.autocomplete__recent-dirs:precmd`    | スタック内の重複を無視                 |
+| `NO_listbeep`     | `plugin.zsh` (L1: `unsetopt listbeep`) | 補完リスト表示時のビープ音を無効化     |
 
 ### 2. 環境変数変更
 
-| 変数 | 値 | 変更箇所 |
-|------|-----|---------|
-| `ZLE_REMOVE_SUFFIX_CHARS` | `$' /;\n\r\t'` | `.autocomplete__config` |
-| `ZLE_SPACE_SUFFIX_CHARS` | `'\|&<>-+'` | `.autocomplete__config` |
-| `FPATH` / `fpath` | Completions ディレクトリを先頭に追加 | `.autocomplete__main` |
-| `ZSH_AUTOSUGGEST_USE_ASYNC` | `yes` | `.autocomplete__async` |
-| `ZSH_AUTOSUGGEST_MANUAL_REBIND` | `1` | `.autocomplete__widgets` |
-| `ZSH_AUTOSUGGEST_ORIGINAL_WIDGET_PREFIX` | `.autosuggest-orig-` | `.autocomplete__widgets` |
+| 変数                                     | 値                                   | 変更箇所                 |
+| ---------------------------------------- | ------------------------------------ | ------------------------ |
+| `ZLE_REMOVE_SUFFIX_CHARS`                | `$' /;\n\r\t'`                       | `.autocomplete__config`  |
+| `ZLE_SPACE_SUFFIX_CHARS`                 | `'\|&<>-+'`                          | `.autocomplete__config`  |
+| `FPATH` / `fpath`                        | Completions ディレクトリを先頭に追加 | `.autocomplete__main`    |
+| `ZSH_AUTOSUGGEST_USE_ASYNC`              | `yes`                                | `.autocomplete__async`   |
+| `ZSH_AUTOSUGGEST_MANUAL_REBIND`          | `1`                                  | `.autocomplete__widgets` |
+| `ZSH_AUTOSUGGEST_ORIGINAL_WIDGET_PREFIX` | `.autosuggest-orig-`                 | `.autocomplete__widgets` |
 
 ### 3. Keybinding 大量上書き
 
 #### main keymap
-| キー | ウィジェット | 用途 |
-|------|-------------|------|
-| `\t` (Tab) | `complete-word` | Tab 補完 |
-| `Shift+Tab` | `expand-word` | 展開 |
-| `Up` (`\e[A`, `\eOA`) | `up-line-or-search` | 上移動/検索 |
-| `Down` (`\e[B`, `\eOB`) | `down-line-or-select` | 下移動/選択 |
-| `Alt+Up` | `history-search-backward` | 履歴逆方向検索 |
-| `Alt+Down` | `menu-select` | メニュー選択 |
+
+| キー                    | ウィジェット              | 用途           |
+| ----------------------- | ------------------------- | -------------- |
+| `\t` (Tab)              | `complete-word`           | Tab 補完       |
+| `Shift+Tab`             | `expand-word`             | 展開           |
+| `Up` (`\e[A`, `\eOA`)   | `up-line-or-search`       | 上移動/検索    |
+| `Down` (`\e[B`, `\eOB`) | `down-line-or-select`     | 下移動/選択    |
+| `Alt+Up`                | `history-search-backward` | 履歴逆方向検索 |
+| `Alt+Down`              | `menu-select`             | メニュー選択   |
 
 #### emacs keymap
-| キー | ウィジェット |
-|------|-------------|
-| `^P` | `up-line-or-search` |
-| `^N` | `down-line-or-select` |
-| `\ep` | `history-search-backward` |
-| `\en` | `menu-select` |
-| `^R` | `history-incremental-search-backward` |
-| `^S` | `menu-search` |
-| `^X/` | `recent-paths` |
+
+| キー  | ウィジェット                          |
+| ----- | ------------------------------------- |
+| `^P`  | `up-line-or-search`                   |
+| `^N`  | `down-line-or-select`                 |
+| `\ep` | `history-search-backward`             |
+| `\en` | `menu-select`                         |
+| `^R`  | `history-incremental-search-backward` |
+| `^S`  | `menu-search`                         |
+| `^X/` | `recent-paths`                        |
 
 #### vicmd keymap
-| キー | ウィジェット |
-|------|-------------|
-| `k` | `up-line-or-search` |
-| `j` | `down-line-or-select` |
-| `^P` | `history-search-backward` |
-| `^N` | `menu-select` |
-| `/` | `history-incremental-search-backward` |
-| `?` | `menu-search` |
+
+| キー | ウィジェット                          |
+| ---- | ------------------------------------- |
+| `k`  | `up-line-or-search`                   |
+| `j`  | `down-line-or-select`                 |
+| `^P` | `history-search-backward`             |
+| `^N` | `menu-select`                         |
+| `/`  | `history-incremental-search-backward` |
+| `?`  | `menu-search`                         |
 
 #### menuselect keymap
-| キー | ウィジェット |
-|------|-------------|
-| `\t` (Tab) | `menu-complete` |
-| `Shift+Tab` | `reverse-menu-complete` |
-| `^@` (Ctrl+Space) | `accept-and-hold` |
-| `\ev` | `accept-and-hold` |
-| `^_` | `undo` |
-| `\eu` | `undo` |
-| `PageUp` | `backward-word` |
-| `PageDown` | `forward-word` |
-| `Up` | `up-history` |
-| `Down` | `down-history` |
-| `^P` / `Alt+Up` | `vi-backward-blank-word` |
-| `^N` / `Alt+Down` | `vi-forward-blank-word` |
-| `^R` | `history-incremental-search-backward` |
-| `^S` | `history-incremental-search-forward` |
+
+| キー              | ウィジェット                          |
+| ----------------- | ------------------------------------- |
+| `\t` (Tab)        | `menu-complete`                       |
+| `Shift+Tab`       | `reverse-menu-complete`               |
+| `^@` (Ctrl+Space) | `accept-and-hold`                     |
+| `\ev`             | `accept-and-hold`                     |
+| `^_`              | `undo`                                |
+| `\eu`             | `undo`                                |
+| `PageUp`          | `backward-word`                       |
+| `PageDown`        | `forward-word`                        |
+| `Up`              | `up-history`                          |
+| `Down`            | `down-history`                        |
+| `^P` / `Alt+Up`   | `vi-backward-blank-word`              |
+| `^N` / `Alt+Down` | `vi-forward-blank-word`               |
+| `^R`              | `history-incremental-search-backward` |
+| `^S`              | `history-incremental-search-forward`  |
 
 ### 4. compinit 多重実行・パッチ
 
@@ -123,26 +127,27 @@ TRAPQUIT() { zle -M "${(F)funcfiletrace}"; zle -R; return 131 }
 
 ### 9. ZLE フック登録
 
-| フック | ウィジェット |
-|--------|-------------|
-| `line-init` | `.autocomplete:async:reset-context` |
-| `line-pre-redraw` | `.autocomplete:async:complete` |
-| `line-finish` | `.autocomplete:async:clear` |
-| `isearch-update` | `.autocomplete:async:isearch-update` |
-| `isearch-exit` | `.autocomplete:async:isearch-exit` |
+| フック            | ウィジェット                         |
+| ----------------- | ------------------------------------ |
+| `line-init`       | `.autocomplete:async:reset-context`  |
+| `line-pre-redraw` | `.autocomplete:async:complete`       |
+| `line-finish`     | `.autocomplete:async:clear`          |
+| `isearch-update`  | `.autocomplete:async:isearch-update` |
+| `isearch-exit`    | `.autocomplete:async:isearch-exit`   |
 
 ### 10. ファイルシステム副作用
 
-| パス | 内容 |
-|------|------|
+| パス                                    | 内容                                     |
+| --------------------------------------- | ---------------------------------------- |
 | `$XDG_STATE_HOME/zsh-autocomplete/log/` | 日付別ログファイル (7日でローテーション) |
-| `$XDG_CACHE_HOME/zsh/compcache/` | 補完キャッシュ + zcompile |
-| `$XDG_CACHE_HOME/zsh/compdump` | compinit ダンプファイル |
-| `$XDG_DATA_HOME/zsh/chpwd-recent-dirs` | 最近ディレクトリ |
+| `$XDG_CACHE_HOME/zsh/compcache/`        | 補完キャッシュ + zcompile                |
+| `$XDG_CACHE_HOME/zsh/compdump`          | compinit ダンプファイル                  |
+| `$XDG_DATA_HOME/zsh/chpwd-recent-dirs`  | 最近ディレクトリ                         |
 
 ### 11. zstyle 大量設定
 
 `.autocomplete__config` で 70+ の zstyle 設定を行う：
+
 - `use-cache`, `cache-path`, `completer`, `max-errors`, `matcher-list`
 - `prefix-needed`, `ignored-patterns`, `single-ignored`
 - `tag-order` (command, tilde, approximate, cd, fc, git)
@@ -154,6 +159,7 @@ TRAPQUIT() { zle -M "${(F)funcfiletrace}"; zle -R; return 131 }
 ### 12. カスタムウィジェット登録
 
 **ZLE ウィジェット (7個)**:
+
 - `up-line-or-search`
 - `down-line-or-select`
 - `history-search-backward`
@@ -163,6 +169,7 @@ TRAPQUIT() { zle -M "${(F)funcfiletrace}"; zle -R; return 131 }
 - `history-incremental-search-backward`, `recent-paths` (toggle-context)
 
 **Completion ウィジェット (9個)**:
+
 - `complete-word`, `menu-complete`, `menu-select` (同一実装)
 - `reverse-menu-complete`
 - `insert-unambiguous-or-complete`
@@ -187,12 +194,12 @@ done
 
 ### 2. Tab/Backspace/Arrow 上書き
 
-| キー | ウィジェット |
-|------|-------------|
-| `^I` (Tab) | `shell-popup-tab-complete` |
+| キー             | ウィジェット                       |
+| ---------------- | ---------------------------------- |
+| `^I` (Tab)       | `shell-popup-tab-complete`         |
 | `^?` (Backspace) | `shell-popup-backward-delete-char` |
-| `\e[D` (Left) | `shell-popup-backward-char` |
-| `\e[C` (Right) | `shell-popup-forward-char` |
+| `\e[D` (Left)    | `shell-popup-backward-char`        |
+| `\e[C` (Right)   | `shell-popup-forward-char`         |
 
 ### 3. 候補収集の制限
 
@@ -204,25 +211,25 @@ done
 
 ## zsh-autocomplete-rs での抑制戦略
 
-| 元の副作用 | 本プロジェクトの対策 |
-|-----------|---------------------|
-| **グローバルオプション変更** (autopushd, listbeep 等) | 一切変更しない |
-| **ZLE_REMOVE_SUFFIX_CHARS 等の変更** | 一切変更しない |
-| **FPATH 変更** | 一切変更しない |
-| **keybinding 大量上書き** (15+ keys) | `^I` (Tab) のみ上書き。自動トリガーは `line-pre-redraw` ZLE フック |
-| **全 ASCII rebind** (sandbox の問題) | `line-pre-redraw` フックに置換。キーバインドへの介入なし |
-| **compinit 多重実行** | compinit を呼ばない。ユーザー環境の補完システムをそのまま利用 |
-| **compinit パッチ** | `_main_complete` 等にパッチしない |
-| **completer チェーン拡張** | ユーザーの completer 設定をそのまま使用 |
-| **CDPATH クリア** | CDPATH に触れない |
-| **TRAPINT/TRAPQUIT 上書き** | trap 不使用。Ctrl+C は Rust 側の raw mode で処理 |
-| **precmd フック** | 不使用。初期化は `source` 時に完結 |
-| **ZLE フック大量登録** (5個) | `line-pre-redraw` のみ 1 個 |
-| **ファイルシステム副作用** | ログ・キャッシュ・ダンプファイルなし (Phase 4 で設定ファイルのみ) |
-| **zstyle 大量設定** (70+) | zstyle に触れない |
-| **カスタムウィジェット大量登録** (16個) | 最小限 (`_zacrs_tab_complete`, `_zacrs_line_pre_redraw`) |
-| **候補収集の制限** (sandbox) | glob + commands/aliases/builtins/functions。将来は zpty + compadd override |
-| **Autosuggest との統合コード** | 不要。副作用がないため衝突しない |
+| 元の副作用                                            | 本プロジェクトの対策                                                       |
+| ----------------------------------------------------- | -------------------------------------------------------------------------- |
+| **グローバルオプション変更** (autopushd, listbeep 等) | 一切変更しない                                                             |
+| **ZLE_REMOVE_SUFFIX_CHARS 等の変更**                  | 一切変更しない                                                             |
+| **FPATH 変更**                                        | 一切変更しない                                                             |
+| **keybinding 大量上書き** (15+ keys)                  | `^I` (Tab) のみ上書き。自動トリガーは `line-pre-redraw` ZLE フック         |
+| **全 ASCII rebind** (sandbox の問題)                  | `line-pre-redraw` フックに置換。キーバインドへの介入なし                   |
+| **compinit 多重実行**                                 | compinit を呼ばない。ユーザー環境の補完システムをそのまま利用              |
+| **compinit パッチ**                                   | `_main_complete` 等にパッチしない                                          |
+| **completer チェーン拡張**                            | ユーザーの completer 設定をそのまま使用                                    |
+| **CDPATH クリア**                                     | CDPATH に触れない                                                          |
+| **TRAPINT/TRAPQUIT 上書き**                           | trap 不使用。Ctrl+C は Rust 側の raw mode で処理                           |
+| **precmd フック**                                     | 不使用。初期化は `source` 時に完結                                         |
+| **ZLE フック大量登録** (5個)                          | `line-pre-redraw` のみ 1 個                                                |
+| **ファイルシステム副作用**                            | ログ・キャッシュ・ダンプファイルなし (Phase 4 で設定ファイルのみ)          |
+| **zstyle 大量設定** (70+)                             | zstyle に触れない                                                          |
+| **カスタムウィジェット大量登録** (16個)               | 最小限 (`_zacrs_tab_complete`, `_zacrs_line_pre_redraw`)                   |
+| **候補収集の制限** (sandbox)                          | glob + commands/aliases/builtins/functions。将来は zpty + compadd override |
+| **Autosuggest との統合コード**                        | 不要。副作用がないため衝突しない                                           |
 
 ### 設計原則
 
