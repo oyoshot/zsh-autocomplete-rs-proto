@@ -261,7 +261,12 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
     Ok(())
 }
 
-pub fn clear_rect(tty: &mut std::fs::File, popup_row: u16, popup_height: u16, cursor_row: u16) -> std::io::Result<()> {
+pub fn clear_rect(
+    tty: &mut std::fs::File,
+    popup_row: u16,
+    popup_height: u16,
+    cursor_row: u16,
+) -> std::io::Result<()> {
     for i in 0..popup_height {
         crossterm::execute!(
             tty,

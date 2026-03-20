@@ -62,7 +62,11 @@ impl FuzzyMatcher {
             b.score
                 .cmp(&a.score)
                 .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                .then_with(|| a.candidate.kind_priority().cmp(&b.candidate.kind_priority()))
+                .then_with(|| {
+                    a.candidate
+                        .kind_priority()
+                        .cmp(&b.candidate.kind_priority())
+                })
                 .then_with(|| a.candidate.text.cmp(&b.candidate.text))
         });
         results
@@ -129,7 +133,10 @@ mod tests {
         // Short options (-j, -v) should come before long options (--release, --verbose)
         let first_long = texts.iter().position(|t| t.starts_with("--")).unwrap();
         let last_short = texts.iter().rposition(|t| !t.starts_with("--")).unwrap();
-        assert!(last_short < first_long, "short options should precede long: {texts:?}");
+        assert!(
+            last_short < first_long,
+            "short options should precede long: {texts:?}"
+        );
     }
 
     #[test]
