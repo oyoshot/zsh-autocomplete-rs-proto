@@ -73,7 +73,7 @@ _zacrs_compsys_func() {
                 for _disp_elem in "${(@P)_disp_array_name}"; do
                     if [[ "$_disp_elem" == *"$_sep"* ]]; then
                         _key="${_disp_elem%%"$_sep"*}"
-                        _key="${_key%"${_key##*[! ]}"}"
+                        _key="${_key%"${_key##*[! ]}"}"  # trim trailing spaces (_describe pads for alignment)
                         _desc_map[$_key]="${_disp_elem#*"$_sep"}"
                     fi
                 done
