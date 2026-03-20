@@ -12,9 +12,6 @@ source "${_zacrs_dir}/_zacrs_util.zsh"
 source "${_zacrs_dir}/_zacrs_gather.zsh"
 source "${_zacrs_dir}/_zacrs_compsys.zsh"
 
-# Settings via zstyle (defaults)
-zstyle -s ':zacrs:' min-input '_zacrs_min_input' || _zacrs_min_input=1
-
 # Internal state
 typeset -g _zacrs_prev_lbuffer=""
 typeset -g _zacrs_suppressed=0
@@ -109,21 +106,11 @@ _zacrs_invoke() {
 # === Tab completion widget ===
 
 _zacrs_tab_complete() {
-    # Hide cursor early to prevent visible jumps during candidate gathering
-    printf '\e[?25l' > /dev/tty
-
     _zacrs_clear_popup
 
-    local prefix="$(_zacrs_get_prefix)"
+    local prefix="${LBUFFER##* }"
 
-    # Fallback to default completion if no prefix
-    if [[ -z "$prefix" ]]; then
-        printf '\e[?25h' > /dev/tty
-        zle expand-or-complete
-        return
-    fi
-
-    # Try compsys first for full context-aware completion
+    # 候補収集: compsys → gather fallback
     _zacrs_captured=()
     if [[ -n "$ZACRS_DEBUG" ]]; then
         zle _zacrs_compsys
@@ -135,15 +122,12 @@ _zacrs_tab_complete() {
     if (( ${#_zacrs_captured} > 0 )); then
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
-
-    # Fallback to simple gather if compsys returned nothing
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
     fi
 
-    # Fallback if still no candidates
+    # 候補なし → default zsh 補完にフォールバック
     if [[ -z "$candidates_str" ]]; then
-        printf '\e[?25h' > /dev/tty
         zle expand-or-complete
         return
     fi
@@ -152,24 +136,23 @@ _zacrs_tab_complete() {
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
 
-    # Single candidate: complete immediately
+    # 単一候補 → 即補完
     if [[ ${#cands[@]} -eq 1 ]]; then
         local text="${cands[1]%%	*}"
         LBUFFER="${LBUFFER%$prefix}${text}"
         unset POSTDISPLAY
         zle reset-prompt
-        printf '\e[?25h' > /dev/tty
         return
     fi
 
     _zacrs_suppressed=0
     _zacrs_invoke "$prefix" "$candidates_str"
-    # cursor is shown by the Rust binary's draw() at the end
 }
 
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
+    # LBUFFER が変わってなければスキップ
     if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
         _zacrs_clear_popup
     else
@@ -177,27 +160,29 @@ _zacrs_line_pre_redraw() {
     fi
     _zacrs_prev_lbuffer="$LBUFFER"
 
-    # Buffer ends with space → no word to complete → skip
-    [[ "$LBUFFER" == *" " ]] && return
+    # 空 or 空白のみ → コマンド未入力なのでスキップ
+    [[ ! "$LBUFFER" =~ [^[:space:]] ]] && return
 
-    # Suppression: reaching here means a non-space char was typed → new word
+    # DismissWithSpace 後の抑制: 非空 prefix 入力で解除
+    local prefix="${LBUFFER##* }"
     if (( _zacrs_suppressed )); then
-        _zacrs_suppressed=0
+        if [[ -n "$prefix" ]]; then
+            _zacrs_suppressed=0
+        else
+            return
+        fi
     fi
 
-    local prefix="$(_zacrs_get_prefix)"
-    [[ ${#prefix} -lt $_zacrs_min_input ]] && return
-    # "." and ".." are path literals, not dotfile prefixes — skip auto-trigger
-    [[ "$prefix" == "." || "$prefix" == ".." ]] && return
-
-    # Gather candidates: use compsys for 2nd+ words, gather as fallback
+    # 候補収集: compsys → gather fallback
     local candidates_str=""
-    if [[ "$LBUFFER" != "$prefix" ]]; then
-        _zacrs_captured=()
+    _zacrs_captured=()
+    if [[ -n "$ZACRS_DEBUG" ]]; then
+        zle _zacrs_compsys
+    else
         zle _zacrs_compsys 2>/dev/null
-        if (( ${#_zacrs_captured} > 0 )); then
-            candidates_str="${(pj:\n:)_zacrs_captured}"
-        fi
+    fi
+    if (( ${#_zacrs_captured} > 0 )); then
+        candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
@@ -207,10 +192,8 @@ _zacrs_line_pre_redraw() {
     local -a cands
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
-    # オプション候補（-始まり）なら1件でも表示、それ以外は2件以上必要
-    [[ ${#cands[@]} -lt 2 && "$prefix" != -* ]] && return
+    [[ ${#cands[@]} -eq 0 ]] && return
 
-    # 非ブロッキング render（_zacrs_invoke の代わり）
     _zacrs_render "$prefix" "$candidates_str"
 }
 

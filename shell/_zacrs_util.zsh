@@ -12,8 +12,3 @@ _zacrs_get_cursor_pos() {
     cursor_row=$(( row_str - 1 ))
     cursor_col=$(( col_str - 1 ))
 }
-
-# Extract the current word prefix from LBUFFER
-_zacrs_get_prefix() {
-    print -r -- "${LBUFFER##* }"
-}

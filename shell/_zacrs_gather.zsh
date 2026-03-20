@@ -7,7 +7,10 @@
 _zacrs_gather() {
     local lbuffer="$1"
     local prefix="${lbuffer##* }"
-    [[ -z "$prefix" ]] && return
+    # 空バッファ（コマンド未入力）のみスキップ
+    if [[ -z "$prefix" && ! "$lbuffer" =~ [^[:space:]] ]]; then
+        return
+    fi
 
     # Determine if prefix is the first word (command position)
     local is_first_word=0
