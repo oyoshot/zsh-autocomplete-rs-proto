@@ -115,3 +115,87 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Action;
+
+    // --- parse_action ---
+
+    #[test]
+    fn parse_action_move_down() {
+        assert_eq!(parse_action("move-down", Action::None), Action::MoveDown);
+    }
+
+    #[test]
+    fn parse_action_move_up() {
+        assert_eq!(parse_action("move-up", Action::None), Action::MoveUp);
+    }
+
+    #[test]
+    fn parse_action_confirm() {
+        assert_eq!(parse_action("confirm", Action::None), Action::Confirm);
+    }
+
+    #[test]
+    fn parse_action_dismiss() {
+        assert_eq!(
+            parse_action("dismiss", Action::None),
+            Action::DismissWithSpace
+        );
+    }
+
+    #[test]
+    fn parse_action_cancel() {
+        assert_eq!(parse_action("cancel", Action::None), Action::Cancel);
+    }
+
+    #[test]
+    fn parse_action_page_down() {
+        assert_eq!(parse_action("page-down", Action::None), Action::PageDown);
+    }
+
+    #[test]
+    fn parse_action_page_up() {
+        assert_eq!(parse_action("page-up", Action::None), Action::PageUp);
+    }
+
+    #[test]
+    fn parse_action_unknown_returns_default() {
+        assert_eq!(
+            parse_action("unknown", Action::MoveDown),
+            Action::MoveDown
+        );
+        assert_eq!(parse_action("", Action::Cancel), Action::Cancel);
+    }
+
+    // --- key_bindings ---
+
+    #[test]
+    fn default_keybindings() {
+        let bindings = Config::default().key_bindings();
+        assert_eq!(bindings.tab, Action::MoveDown);
+        assert_eq!(bindings.shift_tab, Action::MoveUp);
+        assert_eq!(bindings.enter, Action::Confirm);
+        assert_eq!(bindings.space, Action::DismissWithSpace);
+    }
+
+    #[test]
+    fn key_bindings_overrides() {
+        let config = Config {
+            max_visible: 10,
+            keybindings: KeybindingsRaw {
+                tab: Some("confirm".to_string()),
+                shift_tab: None,
+                enter: None,
+                space: Some("cancel".to_string()),
+            },
+        };
+        let bindings = config.key_bindings();
+        assert_eq!(bindings.tab, Action::Confirm);
+        assert_eq!(bindings.shift_tab, Action::MoveUp);
+        assert_eq!(bindings.enter, Action::Confirm);
+        assert_eq!(bindings.space, Action::Cancel);
+    }
+}

@@ -325,3 +325,72 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::candidate::Candidate;
+
+    // --- truncate_to_width ---
+
+    #[test]
+    fn ascii_within_limit() {
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+    }
+
+    #[test]
+    fn ascii_exact_width() {
+        assert_eq!(truncate_to_width("hello", 5), "hello");
+    }
+
+    #[test]
+    fn ascii_exceeds() {
+        assert_eq!(truncate_to_width("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn empty_string() {
+        assert_eq!(truncate_to_width("", 5), "");
+    }
+
+    #[test]
+    fn zero_width() {
+        assert_eq!(truncate_to_width("hello", 0), "…");
+    }
+
+    #[test]
+    fn cjk_boundary() {
+        // CJK chars are width 2; "あいう" with max_width=3 → "あ" fits (w=2), "い" would be 4 > 3
+        assert_eq!(truncate_to_width("あいう", 3), "あ…");
+    }
+
+    // --- layout_candidate ---
+
+    #[test]
+    fn layout_no_description() {
+        let c = Candidate {
+            text: "git".to_string(),
+            description: String::new(),
+            kind: String::new(),
+        };
+        let layout = layout_candidate(&c, 20);
+        assert_eq!(layout.text, "git");
+        assert_eq!(layout.gap, 17);
+        assert!(layout.description.is_empty());
+    }
+
+    #[test]
+    fn layout_with_description() {
+        let c = Candidate {
+            text: "git".to_string(),
+            description: "command".to_string(),
+            kind: String::new(),
+        };
+        let layout = layout_candidate(&c, 20);
+        assert_eq!(layout.text, "git");
+        assert_eq!(layout.description, "command");
+        let text_w = UnicodeWidthStr::width(layout.text.as_str());
+        let desc_w = UnicodeWidthStr::width(layout.description.as_str());
+        assert_eq!(text_w + layout.gap + desc_w, 20);
+    }
+}

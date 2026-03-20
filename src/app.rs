@@ -148,3 +148,244 @@ pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
         prefix.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::candidate::Candidate;
+
+    fn make_candidates(items: &[&str]) -> Vec<Candidate> {
+        items
+            .iter()
+            .map(|s| Candidate {
+                text: s.to_string(),
+                description: String::new(),
+                kind: String::new(),
+            })
+            .collect()
+    }
+
+    // --- compute_common_prefix ---
+
+    #[test]
+    fn common_prefix_empty_candidates() {
+        let result = compute_common_prefix(&[], "foo");
+        assert_eq!(result, "foo");
+    }
+
+    #[test]
+    fn common_prefix_single_candidate() {
+        let candidates = make_candidates(&["foobar"]);
+        let result = compute_common_prefix(&candidates, "fo");
+        assert_eq!(result, "foobar");
+    }
+
+    #[test]
+    fn common_prefix_shared() {
+        let candidates = make_candidates(&["foobar", "foobaz"]);
+        let result = compute_common_prefix(&candidates, "fo");
+        assert_eq!(result, "fooba");
+    }
+
+    #[test]
+    fn common_prefix_no_shared_beyond_prefix() {
+        let candidates = make_candidates(&["foo", "bar"]);
+        let result = compute_common_prefix(&candidates, "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn common_prefix_case_insensitive() {
+        let candidates = make_candidates(&["Foo", "foo"]);
+        let result = compute_common_prefix(&candidates, "f");
+        assert_eq!(result, "Foo");
+    }
+
+    // --- App::new ---
+
+    #[test]
+    fn new_sets_filter_to_common_prefix() {
+        let candidates = make_candidates(&["foobar", "foobaz"]);
+        let app = App::new(candidates, "fo".to_string(), 5, 10);
+        assert_eq!(app.filter_text, "fooba");
+    }
+
+    #[test]
+    fn new_filters_candidates() {
+        let candidates = make_candidates(&["foobar", "foobaz", "bar"]);
+        let app = App::new(candidates, "fo".to_string(), 5, 10);
+        assert_eq!(app.filtered.len(), 2);
+        assert!(!app.filtered.iter().any(|c| c.text == "bar"));
+    }
+
+    #[test]
+    fn new_empty_candidates() {
+        let app = App::new(Vec::new(), "fo".to_string(), 5, 10);
+        assert!(app.filtered.is_empty());
+        assert_eq!(app.selected, 0);
+    }
+
+    // --- move_down ---
+
+    #[test]
+    fn move_down_increments() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.move_down();
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn move_down_wraps() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.selected = app.filtered.len() - 1;
+        app.move_down();
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn move_down_empty_noop() {
+        let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
+        app.move_down();
+        assert_eq!(app.selected, 0);
+    }
+
+    // --- move_up ---
+
+    #[test]
+    fn move_up_decrements() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.selected = 2;
+        app.move_up();
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn move_up_wraps() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.move_up();
+        assert_eq!(app.selected, app.filtered.len() - 1);
+    }
+
+    #[test]
+    fn move_up_empty_noop() {
+        let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
+        app.move_up();
+        assert_eq!(app.selected, 0);
+    }
+
+    // --- page_down / page_up ---
+
+    const FIFTEEN_ITEMS: &[&str] = &[
+        "a", "b", "c", "d", "e", "f", "g", "h",
+        "i", "j", "k", "l", "m", "n", "o",
+    ];
+
+    #[test]
+    fn page_down_by_max_visible() {
+        let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
+        app.page_down();
+        assert_eq!(app.selected, 10);
+    }
+
+    #[test]
+    fn page_down_clamps() {
+        let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
+        app.selected = 10;
+        app.page_down();
+        assert_eq!(app.selected, 14);
+    }
+
+    #[test]
+    fn page_up_by_max_visible() {
+        let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
+        app.selected = 14;
+        app.page_up();
+        assert_eq!(app.selected, 4);
+    }
+
+    #[test]
+    fn page_up_clamps() {
+        let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
+        app.selected = 3;
+        app.page_up();
+        assert_eq!(app.selected, 0);
+    }
+
+    // --- type_char / backspace ---
+
+    #[test]
+    fn type_char_narrows() {
+        let candidates = make_candidates(&["alpha", "alpine", "zzz"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        let before = app.filtered.len();
+        app.type_char('a');
+        app.type_char('l');
+        app.type_char('p');
+        app.type_char('i');
+        assert!(app.filtered.len() < before);
+    }
+
+    #[test]
+    fn backspace_widens() {
+        let candidates = make_candidates(&["alpha", "alpine", "zzz"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.type_char('a');
+        app.type_char('l');
+        app.type_char('p');
+        app.type_char('i');
+        let narrow = app.filtered.len();
+        app.backspace();
+        assert!(app.filtered.len() > narrow);
+    }
+
+    #[test]
+    fn type_char_resets_selection() {
+        let candidates = make_candidates(&["alpha", "alpine", "zzz"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.move_down();
+        app.move_down();
+        assert!(app.selected > 0);
+        app.type_char('a');
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    // --- accessors ---
+
+    #[test]
+    fn selected_candidate_correct() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.move_down();
+        let selected = app.selected_candidate().unwrap();
+        assert_eq!(selected.text, app.filtered[1].text);
+    }
+
+    #[test]
+    fn selected_candidate_empty_none() {
+        let app = App::new(Vec::new(), "".to_string(), 5, 10);
+        assert!(app.selected_candidate().is_none());
+    }
+
+    #[test]
+    fn visible_candidates_respects_scroll() {
+        let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
+        app.scroll_offset = 5;
+        let visible = app.visible_candidates();
+        assert_eq!(visible.len(), 10);
+        assert_eq!(visible[0].text, "f");
+    }
+
+    #[test]
+    fn visible_selected_index_offset() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.selected = 2;
+        app.scroll_offset = 1;
+        assert_eq!(app.visible_selected_index(), Some(1));
+    }
+}

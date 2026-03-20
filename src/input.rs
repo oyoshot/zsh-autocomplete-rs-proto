@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::config::KeyBindings;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     MoveDown,
     MoveUp,

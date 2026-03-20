@@ -57,3 +57,57 @@ impl Popup {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::candidate::Candidate;
+
+    fn make_app(items: &[&str], prefix: &str, cursor_row: u16, cursor_col: u16) -> App {
+        let candidates: Vec<Candidate> = items
+            .iter()
+            .map(|s| Candidate {
+                text: s.to_string(),
+                description: String::new(),
+                kind: String::new(),
+            })
+            .collect();
+        App::new(candidates, prefix.to_string(), cursor_row, cursor_col)
+    }
+
+    // terminal::size() returns real size in a terminal, fallback (80,24) otherwise.
+    // Tests use dynamic cursor positions relative to terminal size for robustness.
+
+    #[test]
+    fn popup_below_cursor() {
+        let app = make_app(&["alpha", "beta", "gamma"], "", 5, 10);
+        let popup = Popup::compute(&app);
+        assert_eq!(popup.row, app.cursor_row + 1);
+    }
+
+    #[test]
+    fn popup_above_when_no_space() {
+        let (_, term_rows) = terminal::size().unwrap_or((80, 24));
+        let cursor_row = term_rows.saturating_sub(2);
+        let app = make_app(&["alpha", "beta", "gamma"], "", cursor_row, 10);
+        let popup = Popup::compute(&app);
+        assert!(popup.row < app.cursor_row);
+    }
+
+    #[test]
+    fn popup_width_clamped() {
+        let long_text = "a".repeat(70);
+        let app = make_app(&[&long_text], "", 5, 0);
+        let popup = Popup::compute(&app);
+        assert_eq!(popup.width, MAX_POPUP_WIDTH);
+    }
+
+    #[test]
+    fn popup_col_near_right_edge() {
+        let (term_cols, _) = terminal::size().unwrap_or((80, 24));
+        let cursor_col = term_cols.saturating_sub(5);
+        let app = make_app(&["alpha", "beta"], "", 5, cursor_col);
+        let popup = Popup::compute(&app);
+        assert!(popup.col + popup.width <= term_cols);
+    }
+}
