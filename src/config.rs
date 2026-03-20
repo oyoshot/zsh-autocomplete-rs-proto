@@ -12,7 +12,7 @@ fn config_path() -> Option<PathBuf> {
 pub struct Config {
     pub max_visible: usize,
     pub keybindings: KeybindingsRaw,
-    pub theme_raw: ThemeRaw,
+    theme_raw: ThemeRaw,
 }
 
 impl Default for Config {
@@ -43,7 +43,7 @@ pub struct KeybindingsRaw {
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct ThemeRaw {
+struct ThemeRaw {
     pub border: Option<String>,
     #[serde(rename = "selected-fg")]
     pub selected_fg: Option<String>,
