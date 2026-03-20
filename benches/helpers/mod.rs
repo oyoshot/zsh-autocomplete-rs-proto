@@ -122,6 +122,7 @@ pub fn generate_candidates(count: usize) -> Vec<Candidate> {
     candidates
 }
 
+#[allow(dead_code)]
 pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate> {
     let mut candidates = Vec::with_capacity(count);
     for i in 0..count {

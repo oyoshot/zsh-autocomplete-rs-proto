@@ -410,7 +410,7 @@ mod tests {
         let app = App::new(candidates, "".to_string(), 5, 10);
         // Both break conditions in the old Backspace handler are false
         assert!(!app.filtered.is_empty());
-        assert!(!(app.filter_text.len() < app.prefix.len()));
+        assert!(app.filter_text.len() >= app.prefix.len());
     }
 
     #[test]
