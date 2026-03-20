@@ -117,7 +117,7 @@ fn damerau_levenshtein_fallback(
     results
 }
 
-fn damerau_levenshtein(a: &str, b: &str) -> usize {
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let len_a = a.len();

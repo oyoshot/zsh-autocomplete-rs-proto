@@ -122,7 +122,7 @@ impl App {
     }
 }
 
-fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
+pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
     if candidates.is_empty() {
         return prefix.to_string();
     }

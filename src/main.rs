@@ -1,16 +1,9 @@
-mod app;
-mod candidate;
-mod cli;
-mod config;
-mod fuzzy;
-mod input;
-mod tty;
-mod ui;
+use zsh_autocomplete_rs::app::App;
+use zsh_autocomplete_rs::candidate::Candidate;
+use zsh_autocomplete_rs::cli::{Cli, Command};
+use zsh_autocomplete_rs::{config, input, tty, ui};
 
-use app::App;
-use candidate::Candidate;
 use clap::Parser;
-use cli::{Cli, Command};
 use std::io::{self, BufRead};
 use std::process;
 use tty::TtyGuard;

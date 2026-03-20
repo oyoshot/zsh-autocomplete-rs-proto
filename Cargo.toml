@@ -2,6 +2,15 @@
 name = "zsh-autocomplete-rs"
 version = "0.1.0"
 edition = "2024"
+autobenches = false
+
+[lib]
+name = "zsh_autocomplete_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zsh-autocomplete-rs"
+path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.28"
@@ -11,3 +20,14 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 dirs = "6"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "fuzzy_bench"
+harness = false
+
+[[bench]]
+name = "text_processing_bench"
+harness = false

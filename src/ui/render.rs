@@ -311,7 +311,7 @@ pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     Ok(())
 }
 
-fn truncate_to_width(s: &str, max_width: usize) -> String {
+pub fn truncate_to_width(s: &str, max_width: usize) -> String {
     let mut width = 0;
     let mut result = String::new();
     for c in s.chars() {
