@@ -134,6 +134,45 @@ fn run_complete(
     }
 }
 
+fn run_render(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i32> {
+    let candidates: Vec<Candidate> = io::stdin()
+        .lock()
+        .lines()
+        .filter_map(|line| line.ok())
+        .filter(|line| !line.is_empty())
+        .map(|line| Candidate::parse_line(&line))
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(1);
+    }
+
+    let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
+
+    ui::render::cap_visible_for_render(&mut app);
+
+    if app.max_visible == 0 {
+        return Ok(1);
+    }
+
+    let mut tty = tty::open_tty_write()?;
+    ui::render::draw_popup_only(&mut tty, &app)?;
+
+    let popup = ui::popup::Popup::compute(&app);
+    println!(
+        "popup_row={} popup_height={} cursor_row={}",
+        popup.row, popup.height, app.cursor_row
+    );
+
+    Ok(0)
+}
+
+fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i32> {
+    let mut tty = tty::open_tty_write()?;
+    ui::render::clear_rect(&mut tty, popup_row, popup_height, cursor_row)?;
+    Ok(0)
+}
+
 fn main() {
     let cli = Cli::parse();
     let cfg = config::Config::load();
@@ -147,6 +186,28 @@ fn main() {
             Ok(code) => process::exit(code),
             Err(e) => {
                 let _ = crossterm::terminal::disable_raw_mode();
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        },
+        Command::Render {
+            prefix,
+            cursor_row,
+            cursor_col,
+        } => match run_render(prefix, cursor_row, cursor_col) {
+            Ok(code) => process::exit(code),
+            Err(e) => {
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        },
+        Command::Clear {
+            popup_row,
+            popup_height,
+            cursor_row,
+        } => match run_clear(popup_row, popup_height, cursor_row) {
+            Ok(code) => process::exit(code),
+            Err(e) => {
                 eprintln!("error: {}", e);
                 process::exit(1);
             }

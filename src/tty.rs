@@ -30,3 +30,10 @@ impl Drop for TtyGuard {
         let _ = terminal::disable_raw_mode();
     }
 }
+
+pub fn open_tty_write() -> io::Result<File> {
+    File::options()
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|e| io::Error::new(e.kind(), "failed to open /dev/tty for write"))
+}

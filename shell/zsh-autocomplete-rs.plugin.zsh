@@ -18,9 +18,54 @@ zstyle -s ':zacrs:' min-input '_zacrs_min_input' || _zacrs_min_input=1
 # Internal state
 typeset -g _zacrs_prev_lbuffer=""
 typeset -g _zacrs_suppressed=0
-typeset -g _zacrs_in_popup=0
+typeset -g _zacrs_popup_visible=0
+typeset -g _zacrs_popup_row=0
+typeset -g _zacrs_popup_height=0
+typeset -g _zacrs_popup_cursor_row=0
 
-# === Core: invoke Rust binary ===
+# === Non-blocking render (auto-trigger) ===
+
+_zacrs_render() {
+    local prefix="$1" candidates_str="$2"
+    local cursor_row=0 cursor_col=0
+    _zacrs_get_cursor_pos
+
+    local output
+    output=$(printf '%s' "$candidates_str" | \
+        "$ZACRS_BIN" render \
+        --prefix "$prefix" \
+        --cursor-row "$cursor_row" \
+        --cursor-col "$cursor_col")
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 && -n "$output" ]]; then
+        _zacrs_popup_visible=1
+        local token
+        for token in ${(s: :)output}; do
+            local key="${token%%=*}" val="${token#*=}"
+            case "$key" in
+                popup_row)    _zacrs_popup_row=$val ;;
+                popup_height) _zacrs_popup_height=$val ;;
+                cursor_row)   _zacrs_popup_cursor_row=$val ;;
+            esac
+        done
+    fi
+}
+
+# === Clear popup (zsh-native, no process spawn) ===
+
+_zacrs_clear_popup() {
+    (( _zacrs_popup_visible )) || return 0
+    printf '\e7' > /dev/tty
+    local i
+    for (( i = 0; i < _zacrs_popup_height; i++ )); do
+        printf '\e[%d;1H\e[2K' $(( _zacrs_popup_row + i + 1 )) > /dev/tty
+    done
+    printf '\e8' > /dev/tty
+    _zacrs_popup_visible=0
+}
+
+# === Core: invoke Rust binary (blocking, for Tab) ===
 
 _zacrs_invoke() {
     local prefix="$1"
@@ -63,6 +108,8 @@ _zacrs_invoke() {
 # === Tab completion widget ===
 
 _zacrs_tab_complete() {
+    _zacrs_clear_popup
+
     local prefix="$(_zacrs_get_prefix)"
 
     # Fallback to default completion if no prefix
@@ -114,9 +161,11 @@ _zacrs_tab_complete() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
-    (( _zacrs_in_popup )) && return
-
-    [[ "$LBUFFER" == "$_zacrs_prev_lbuffer" ]] && return
+    if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
+        _zacrs_clear_popup
+    else
+        return
+    fi
     _zacrs_prev_lbuffer="$LBUFFER"
 
     # Buffer ends with space → no word to complete → skip
@@ -152,10 +201,28 @@ _zacrs_line_pre_redraw() {
     # オプション候補（-始まり）なら1件でも表示、それ以外は2件以上必要
     [[ ${#cands[@]} -lt 2 && "$prefix" != -* ]] && return
 
-    _zacrs_in_popup=1
-    _zacrs_invoke "$prefix" "$candidates_str"
-    _zacrs_in_popup=0
+    # 非ブロッキング render（_zacrs_invoke の代わり）
+    _zacrs_render "$prefix" "$candidates_str"
 }
+
+# === Widget wrappers: Enter/Ctrl-C でポップアップクリア ===
+
+_zacrs_accept_line() {
+    _zacrs_clear_popup
+    zle .accept-line
+}
+zle -N accept-line _zacrs_accept_line
+
+_zacrs_send_break() {
+    _zacrs_clear_popup
+    _zacrs_prev_lbuffer=""
+    zle .send-break
+}
+zle -N send-break _zacrs_send_break
+
+# === ターミナルリサイズ対応 ===
+
+TRAPWINCH() { _zacrs_clear_popup }
 
 # === Register widgets and keybindings ===
 

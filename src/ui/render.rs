@@ -165,6 +165,117 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Cap max_visible to fit available space without scrolling (for render mode).
+pub fn cap_visible_for_render(app: &mut App) {
+    let (_, term_rows) = terminal::size().unwrap_or((80, 24));
+    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+
+    if space_below < 3 {
+        app.max_visible = 0;
+        return;
+    }
+
+    let max_items = (space_below - 2) as usize;
+    if app.max_visible > max_items {
+        app.max_visible = max_items;
+    }
+}
+
+pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+    let popup = Popup::compute(app);
+    let inner = (popup.width - 2) as usize;
+
+    crossterm::execute!(tty, cursor::Hide)?;
+
+    // Top border with filter text
+    let filter_label = format!(" {} ", &app.filter_text);
+    let filter_w = UnicodeWidthStr::width(filter_label.as_str());
+    let remaining = inner.saturating_sub(filter_w);
+
+    crossterm::execute!(
+        tty,
+        cursor::MoveTo(popup.col, popup.row),
+        Print("┌"),
+        Print(&filter_label),
+        Print("─".repeat(remaining)),
+        Print("┐"),
+    )?;
+
+    // Candidate rows
+    let visible = app.visible_candidates();
+    let highlight_idx = app.visible_selected_index();
+
+    for (i, candidate) in visible.iter().enumerate() {
+        let layout = layout_candidate(candidate, inner);
+
+        crossterm::execute!(tty, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+
+        if Some(i) == highlight_idx {
+            crossterm::execute!(
+                tty,
+                Print("│"),
+                SetAttribute(Attribute::Reverse),
+                Print(&layout.text),
+                Print(" ".repeat(layout.gap)),
+                Print(&layout.description),
+                SetAttribute(Attribute::NoReverse),
+                ResetColor,
+                Print("│"),
+            )?;
+        } else {
+            crossterm::execute!(tty, Print("│"), Print(&layout.text))?;
+
+            if !layout.description.is_empty() {
+                crossterm::execute!(
+                    tty,
+                    Print(" ".repeat(layout.gap)),
+                    SetForegroundColor(theme::DESCRIPTION_COLOR),
+                    Print(&layout.description),
+                    ResetColor,
+                )?;
+            } else {
+                crossterm::execute!(tty, Print(" ".repeat(layout.gap)))?;
+            }
+
+            crossterm::execute!(tty, Print("│"))?;
+        }
+    }
+
+    // Bottom border
+    crossterm::execute!(
+        tty,
+        cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
+        Print("└"),
+        Print("─".repeat(inner)),
+        Print("┘"),
+    )?;
+
+    // Restore cursor to original position (zsh manages cursor)
+    crossterm::execute!(
+        tty,
+        cursor::MoveTo(app.cursor_col, app.cursor_row),
+        cursor::Show,
+    )?;
+    tty.flush()?;
+
+    Ok(())
+}
+
+pub fn clear_rect(tty: &mut std::fs::File, popup_row: u16, popup_height: u16, cursor_row: u16) -> std::io::Result<()> {
+    for i in 0..popup_height {
+        crossterm::execute!(
+            tty,
+            cursor::MoveTo(0, popup_row + i),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+        )?;
+    }
+
+    crossterm::execute!(tty, cursor::MoveTo(0, cursor_row))?;
+    tty.flush()?;
+
+    Ok(())
+}
+
 pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     let popup = Popup::compute(app);
 
