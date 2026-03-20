@@ -253,6 +253,7 @@ _zacrs_line_pre_redraw() {
 
 _zacrs_accept_line() {
     _zacrs_clear_popup
+    _zacrs_prev_lbuffer="$LBUFFER"
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
