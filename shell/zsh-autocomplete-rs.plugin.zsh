@@ -66,7 +66,8 @@ _zacrs_clear_popup() {
 
 _zacrs_invoke() {
     local prefix="$1"
-    local candidates_str="$2"
+    local prefix_len="$2"
+    local candidates_str="$3"
 
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
@@ -81,17 +82,24 @@ _zacrs_invoke() {
 
     unset POSTDISPLAY
 
+    local base
+    if (( prefix_len > 0 )); then
+        base="${LBUFFER[1,-(prefix_len+1)]}"
+    else
+        base="$LBUFFER"
+    fi
+
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         # Confirm: replace prefix with selected candidate
-        LBUFFER="${LBUFFER%$prefix}${output}"
+        LBUFFER="${base}${output}"
         _zacrs_suppressed=0
     elif [[ $exit_code -eq 2 && -n "$output" ]]; then
         # DismissWithSpace: text+space, suppress until next word
-        LBUFFER="${LBUFFER%$prefix}${output}"
+        LBUFFER="${base}${output}"
         _zacrs_suppressed=1
     elif [[ $exit_code -eq 1 && -n "$output" ]]; then
         # Cancel with text change
-        LBUFFER="${LBUFFER%$prefix}${output}"
+        LBUFFER="${base}${output}"
         _zacrs_suppressed=0
     elif [[ $exit_code -eq 1 ]]; then
         # Cancel with no change
@@ -108,8 +116,6 @@ _zacrs_invoke() {
 _zacrs_tab_complete() {
     _zacrs_clear_popup
 
-    local prefix="${LBUFFER##* }"
-
     # 候補収集: compsys → gather fallback
     _zacrs_captured=()
     if [[ -n "$ZACRS_DEBUG" ]]; then
@@ -118,16 +124,30 @@ _zacrs_tab_complete() {
         zle _zacrs_compsys 2>/dev/null
     fi
 
+    # compsys コンテキストから prefix 取得
+    local prefix prefix_len
+    if (( _zacrs_ctx_valid )); then
+        prefix="$_zacrs_ctx_prefix"
+        prefix_len=$_zacrs_ctx_prefix_len
+    else
+        prefix="${LBUFFER##* }"
+        prefix_len=${#prefix}
+    fi
+
     local candidates_str=""
     if (( ${#_zacrs_captured} > 0 )); then
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
+        if [[ -n "$candidates_str" ]]; then
+            prefix="${LBUFFER##* }"
+            prefix_len=${#prefix}
+        fi
     fi
 
-    # タイポ補正: prefix matchで候補なし & コマンド位置 → 全コマンドをfuzzyに渡す
-    if [[ -z "$candidates_str" && "$LBUFFER" == "$prefix" && ${#prefix} -ge 2 ]]; then
+    # タイポ補正: コマンド位置で候補なし → 全コマンドをfuzzyに渡す
+    if [[ -z "$candidates_str" && ${#prefix} -ge 2 ]] && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
         candidates_str="$(_zacrs_gather --all-commands)"
     fi
 
@@ -145,7 +165,13 @@ _zacrs_tab_complete() {
     if [[ ${#cands[@]} -eq 1 ]]; then
         local text="${cands[1]%%	*}"
         local kind="${${cands[1]##*	}}"
-        LBUFFER="${LBUFFER%$prefix}${text}"
+        local base
+        if (( prefix_len > 0 )); then
+            base="${LBUFFER[1,-(prefix_len+1)]}"
+        else
+            base="$LBUFFER"
+        fi
+        LBUFFER="${base}${text}"
         [[ "$kind" == "directory" && "$text" != */ ]] && LBUFFER+="/"
         _zacrs_prev_lbuffer="$LBUFFER"
         unset POSTDISPLAY
@@ -154,7 +180,7 @@ _zacrs_tab_complete() {
     fi
 
     _zacrs_suppressed=0
-    _zacrs_invoke "$prefix" "$candidates_str"
+    _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str"
 }
 
 # === Auto-trigger via line-pre-redraw hook ===
@@ -171,10 +197,10 @@ _zacrs_line_pre_redraw() {
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && return
 
-    # DismissWithSpace 後の抑制: 非空 prefix 入力で解除
-    local prefix="${LBUFFER##* }"
+    # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
+    local naive_prefix="${LBUFFER##* }"
     if (( _zacrs_suppressed )); then
-        if [[ -n "$prefix" ]]; then
+        if [[ -n "$naive_prefix" ]]; then
             _zacrs_suppressed=0
         else
             return
@@ -189,15 +215,27 @@ _zacrs_line_pre_redraw() {
     else
         zle _zacrs_compsys 2>/dev/null
     fi
+
+    # compsys コンテキストから prefix 取得 (render 用、LBUFFER 置換なし)
+    local prefix
+    if (( _zacrs_ctx_valid )); then
+        prefix="$_zacrs_ctx_prefix"
+    else
+        prefix="$naive_prefix"
+    fi
+
     if (( ${#_zacrs_captured} > 0 )); then
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
+        if [[ -n "$candidates_str" ]]; then
+            prefix="$naive_prefix"
+        fi
     fi
 
-    # タイポ補正: prefix matchで候補なし & コマンド位置 → 全コマンドをfuzzyに渡す
-    if [[ -z "$candidates_str" && "$LBUFFER" == "$prefix" && ${#prefix} -ge 2 ]]; then
+    # タイポ補正: コマンド位置で候補なし → 全コマンドをfuzzyに渡す
+    if [[ -z "$candidates_str" && ${#naive_prefix} -ge 2 ]] && _zacrs_is_cmd_pos "$LBUFFER" "$naive_prefix"; then
         candidates_str="$(_zacrs_gather --all-commands)"
     fi
 

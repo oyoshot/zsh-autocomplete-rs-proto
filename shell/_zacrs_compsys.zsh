@@ -32,6 +32,9 @@ _zacrs_ensure_compinit() {
 _zacrs_compsys_func() {
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
+    typeset -gi _zacrs_ctx_valid=0
+    typeset -g  _zacrs_ctx_prefix=""
+    typeset -gi _zacrs_ctx_prefix_len=0
 
     [[ -n "$ZACRS_DEBUG" ]] && print -r -- "=== compsys $(date '+%H:%M:%S') BUFFER='$BUFFER' LBUFFER='$LBUFFER' ===" >> "$ZACRS_LOG"
 
@@ -87,16 +90,38 @@ _zacrs_compsys_func() {
     }
 
     # Call the completion system entry point
+    local _zacrs_entry_found=0
     if (( $+functions[_main_complete] )); then
         _zacrs_dbg "entry: _main_complete"
         _main_complete
+        _zacrs_entry_found=1
     elif (( $+functions[_normal] )); then
         _zacrs_dbg "entry: _normal (fallback)"
         _normal
+        _zacrs_entry_found=1
     else
         _zacrs_dbg "entry: NONE FOUND (even after compinit attempt)"
     fi
 
+    # ---- Capture completion context ----
+    if (( _zacrs_entry_found )); then
+        _zacrs_ctx_valid=1
+        _zacrs_ctx_prefix="${IPREFIX}${PREFIX}"
+
+        # Raw prefix length on LBUFFER (preserves quotes/escapes)
+        if [[ "$LBUFFER" == *[[:space:]] || -z "$LBUFFER" ]]; then
+            _zacrs_ctx_prefix_len=0
+        else
+            local -a _zacrs_zwords=( ${(z)LBUFFER} )
+            if (( ${#_zacrs_zwords} > 0 )); then
+                _zacrs_ctx_prefix_len=${#_zacrs_zwords[-1]}
+            else
+                _zacrs_ctx_prefix_len=0
+            fi
+        fi
+
+        _zacrs_dbg "context: PREFIX='$PREFIX' IPREFIX='$IPREFIX' ctx_prefix='$_zacrs_ctx_prefix' raw_len=$_zacrs_ctx_prefix_len"
+    fi
     _zacrs_dbg "result: compadd_calls=$_zacrs_compadd_calls captured=${#_zacrs_captured}"
 
     unfunction compadd 2>/dev/null

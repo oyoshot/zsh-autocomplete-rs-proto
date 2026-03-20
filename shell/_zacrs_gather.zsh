@@ -31,9 +31,9 @@ _zacrs_gather() {
         return
     fi
 
-    # Determine if prefix is the first word (command position)
+    # Determine if prefix is in command position (first word, or after | ; && ||)
     local is_first_word=0
-    [[ "$lbuffer" == "$prefix" ]] && is_first_word=1
+    _zacrs_is_cmd_pos "$lbuffer" "$prefix" && is_first_word=1
 
     # File/directory candidates
     local f
