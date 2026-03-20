@@ -71,46 +71,50 @@ impl FuzzyMatcher {
         });
 
         if results.is_empty() && query.len() >= 2 {
-            results = self.damerau_levenshtein_fallback(candidates, query);
+            results = damerau_levenshtein_fallback(candidates, query);
         }
 
         results
     }
+}
 
-    fn damerau_levenshtein_fallback(
-        &self,
-        candidates: &[Candidate],
-        query: &str,
-    ) -> Vec<ScoredCandidate> {
-        let max_dist = if query.len() <= 4 { 1 } else { 2 };
+fn damerau_levenshtein_fallback(
+    candidates: &[Candidate],
+    query: &str,
+) -> Vec<ScoredCandidate> {
+    let max_dist = if query.len() <= 4 { 1 } else { 2 };
 
-        let mut results: Vec<ScoredCandidate> = candidates
-            .iter()
-            .filter_map(|candidate| {
-                if query.len().abs_diff(candidate.text.len()) > max_dist {
-                    return None;
-                }
-                let dist = damerau_levenshtein(query, &candidate.text);
-                if dist <= max_dist {
-                    let score = (100u32).saturating_sub(dist as u32 * 30);
-                    Some(ScoredCandidate {
-                        candidate: candidate.clone(),
-                        score,
-                    })
-                } else {
-                    None
-                }
+    let mut results: Vec<ScoredCandidate> = candidates
+        .iter()
+        .filter_map(|candidate| {
+            if query.len().abs_diff(candidate.text.len()) > max_dist {
+                return None;
+            }
+            let dist = damerau_levenshtein(query, &candidate.text);
+            if dist <= max_dist {
+                let score = (100u32).saturating_sub(dist as u32 * 30);
+                Some(ScoredCandidate {
+                    candidate: candidate.clone(),
+                    score,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
+            .then_with(|| {
+                a.candidate
+                    .kind_priority()
+                    .cmp(&b.candidate.kind_priority())
             })
-            .collect();
-
-        results.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-        });
-        results
-    }
+            .then_with(|| a.candidate.text.cmp(&b.candidate.text))
+    });
+    results
 }
 
 fn damerau_levenshtein(a: &str, b: &str) -> usize {
