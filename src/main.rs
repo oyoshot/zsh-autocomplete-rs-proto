@@ -87,7 +87,9 @@ fn run_complete(
             }
             input::Action::Backspace => {
                 ui::render::clear(&mut guard.tty, &app)?;
-                app.backspace();
+                if !app.backspace() {
+                    break AppResult::Cancelled(None);
+                }
                 if app.filtered.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }

@@ -105,9 +105,13 @@ impl App {
         self.update_filter();
     }
 
-    pub fn backspace(&mut self) {
+    pub fn backspace(&mut self) -> bool {
+        if self.filter_text.is_empty() {
+            return false;
+        }
         self.filter_text.pop();
         self.update_filter();
+        true
     }
 
     pub fn selected_candidate(&self) -> Option<&Candidate> {
@@ -387,5 +391,36 @@ mod tests {
         app.selected = 2;
         app.scroll_offset = 1;
         assert_eq!(app.visible_selected_index(), Some(1));
+    }
+
+    // --- Backspace on empty filter (Tab-triggered popup regression) ---
+
+    #[test]
+    fn backspace_on_empty_filter_is_noop() {
+        let candidates = make_candidates(&["add", "bisect", "clone"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        assert_eq!(app.filter_text, "");
+        assert!(!app.backspace());
+        assert_eq!(app.filter_text, "");
+        assert_eq!(app.filtered.len(), 3);
+    }
+
+    #[test]
+    fn empty_prefix_empty_filter_break_conditions() {
+        let candidates = make_candidates(&["add", "bisect", "clone"]);
+        let app = App::new(candidates, "".to_string(), 5, 10);
+        // Both break conditions in the old Backspace handler are false
+        assert!(!app.filtered.is_empty());
+        assert!(!(app.filter_text.len() < app.prefix.len()));
+    }
+
+    #[test]
+    fn backspace_below_prefix_triggers_break_condition() {
+        let candidates = make_candidates(&["log", "ls"]);
+        let mut app = App::new(candidates, "l".to_string(), 5, 10);
+        assert_eq!(app.filter_text, "l");
+        assert!(app.backspace());
+        assert_eq!(app.filter_text, "");
+        assert!(app.filter_text.len() < app.prefix.len());
     }
 }
