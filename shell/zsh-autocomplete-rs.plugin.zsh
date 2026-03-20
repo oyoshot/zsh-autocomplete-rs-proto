@@ -149,7 +149,8 @@ _zacrs_line_pre_redraw() {
     local -a cands
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
-    [[ ${#cands[@]} -lt 2 ]] && return
+    # オプション候補（-始まり）なら1件でも表示、それ以外は2件以上必要
+    [[ ${#cands[@]} -lt 2 && "$prefix" != -* ]] && return
 
     _zacrs_in_popup=1
     _zacrs_invoke "$prefix" "$candidates_str"

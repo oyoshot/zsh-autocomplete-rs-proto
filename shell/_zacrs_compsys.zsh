@@ -47,7 +47,11 @@ _zacrs_compsys_func() {
         local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _is_file=0
         local _prev=""
         for _a in "$@"; do
-            [[ "$_a" == "--" ]] && break
+            if [[ "$_prev" == -[PSX] ]]; then
+                : # この "--" はフラグの値 → breakしない
+            else
+                [[ "$_a" == "--" ]] && break
+            fi
             [[ "$_a" == "-O" || "$_a" == "-D" ]] && { _skip=1; break; }
             [[ "$_prev" == "-P" ]] && _vis_prefix="$_a"
             [[ "$_prev" == "-S" ]] && _vis_suffix="$_a"
