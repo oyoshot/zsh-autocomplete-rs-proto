@@ -21,6 +21,11 @@ impl App {
         cursor_row: u16,
         cursor_col: u16,
     ) -> Self {
+        // Clamp cursor position to terminal bounds (safety net)
+        let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
+        let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
+
         let lcp = compute_common_prefix(&candidates, &prefix);
         let mut app = App {
             all_candidates: candidates,
