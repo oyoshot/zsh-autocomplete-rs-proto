@@ -31,6 +31,7 @@ impl FuzzyMatcher {
                 a.candidate
                     .kind_priority()
                     .cmp(&b.candidate.kind_priority())
+                    .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
                     .then_with(|| a.candidate.text.cmp(&b.candidate.text))
             });
             return results;
@@ -60,6 +61,7 @@ impl FuzzyMatcher {
         results.sort_by(|a, b| {
             b.score
                 .cmp(&a.score)
+                .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
                 .then_with(|| a.candidate.kind_priority().cmp(&b.candidate.kind_priority()))
                 .then_with(|| a.candidate.text.cmp(&b.candidate.text))
         });
@@ -105,5 +107,55 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
+    }
+
+    fn make_candidates_with_kind(items: &[(&str, &str)]) -> Vec<Candidate> {
+        items
+            .iter()
+            .map(|(text, kind)| Candidate {
+                text: text.to_string(),
+                description: String::new(),
+                kind: kind.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn short_options_before_long_options() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["--release", "--verbose", "-j", "-v"]);
+        let results = m.filter(&candidates, "-");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        // Short options (-j, -v) should come before long options (--release, --verbose)
+        let first_long = texts.iter().position(|t| t.starts_with("--")).unwrap();
+        let last_short = texts.iter().rposition(|t| !t.starts_with("--")).unwrap();
+        assert!(last_short < first_long, "short options should precede long: {texts:?}");
+    }
+
+    #[test]
+    fn shorter_command_preferred() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["gi-compile-repository", "git", "gitk"]);
+        let results = m.filter(&candidates, "gi");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert_eq!(texts[0], "git", "git should be first: {texts:?}");
+    }
+
+    #[test]
+    fn empty_query_kind_then_len_sort() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates_with_kind(&[
+            ("longcmd", "command"),
+            ("ab", "command"),
+            ("z", "file"),
+            ("abc", "command"),
+        ]);
+        let results = m.filter(&candidates, "");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        // file (priority 1) before command (priority 2), then by len, then alphabetical
+        assert_eq!(texts[0], "z");
+        assert_eq!(texts[1], "ab");
+        assert_eq!(texts[2], "abc");
+        assert_eq!(texts[3], "longcmd");
     }
 }
