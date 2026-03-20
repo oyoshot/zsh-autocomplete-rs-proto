@@ -213,6 +213,13 @@ _zacrs_line_pre_redraw() {
 
     # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
     local naive_prefix="${LBUFFER##* }"
+    if (( _zacrs_suppressed )); then
+        if [[ -n "$naive_prefix" ]]; then
+            _zacrs_suppressed=0
+        else
+            return
+        fi
+    fi
 
     # lbase 計算: 最後のスペースより前の部分（コマンド＋引数の文脈）
     local lbase
@@ -226,14 +233,6 @@ _zacrs_line_pre_redraw() {
     if [[ "$lbase" != "$_zacrs_cached_lbase" ]]; then
         _zacrs_cached_candidates=""
         _zacrs_cached_lbase="$lbase"
-    fi
-
-    if (( _zacrs_suppressed )); then
-        if [[ -n "$naive_prefix" ]]; then
-            _zacrs_suppressed=0
-        else
-            return
-        fi
     fi
 
     # 候補収集: compsys → gather fallback
