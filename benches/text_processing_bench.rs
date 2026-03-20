@@ -8,7 +8,11 @@ use zsh_autocomplete_rs::ui::render::truncate_to_width;
 fn bench_truncate_to_width(c: &mut Criterion) {
     let cases = [
         ("ascii_no_trunc", "cargo-build --release", 40),
-        ("ascii_trunc", "cargo-build --release --target x86_64-unknown-linux-gnu", 20),
+        (
+            "ascii_trunc",
+            "cargo-build --release --target x86_64-unknown-linux-gnu",
+            20,
+        ),
         ("cjk_no_trunc", "ファイル一覧", 20),
         ("cjk_trunc", "ファイル一覧を表示するコマンド", 10),
         ("mixed_no_trunc", "git-日本語テスト", 30),
@@ -17,9 +21,13 @@ fn bench_truncate_to_width(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("truncate_to_width");
     for (name, input, width) in cases {
-        group.bench_with_input(BenchmarkId::from_parameter(name), &(input, width), |b, &(s, w)| {
-            b.iter(|| truncate_to_width(s, w));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(name),
+            &(input, width),
+            |b, &(s, w)| {
+                b.iter(|| truncate_to_width(s, w));
+            },
+        );
     }
     group.finish();
 }
@@ -29,7 +37,10 @@ fn bench_parse_line(c: &mut Criterion) {
         ("1field", "git"),
         ("2fields", "git\tversion control"),
         ("3fields", "git\tversion control\tcommand"),
-        ("long_desc", "git\tthe stupid content tracker - a revision control system\tcommand"),
+        (
+            "long_desc",
+            "git\tthe stupid content tracker - a revision control system\tcommand",
+        ),
     ];
 
     let mut group = c.benchmark_group("parse_line");
@@ -67,5 +78,10 @@ fn bench_compute_common_prefix(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_truncate_to_width, bench_parse_line, bench_compute_common_prefix);
+criterion_group!(
+    benches,
+    bench_truncate_to_width,
+    bench_parse_line,
+    bench_compute_common_prefix
+);
 criterion_main!(benches);

@@ -23,7 +23,7 @@ fn run_complete(
     let candidates: Vec<Candidate> = io::stdin()
         .lock()
         .lines()
-        .filter_map(|line| line.ok())
+        .map_while(Result::ok)
         .filter(|line| !line.is_empty())
         .map(|line| Candidate::parse_line(&line))
         .collect();
@@ -133,7 +133,7 @@ fn run_render(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i3
     let candidates: Vec<Candidate> = io::stdin()
         .lock()
         .lines()
-        .filter_map(|line| line.ok())
+        .map_while(Result::ok)
         .filter(|line| !line.is_empty())
         .map(|line| Candidate::parse_line(&line))
         .collect();

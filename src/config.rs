@@ -163,10 +163,7 @@ mod tests {
 
     #[test]
     fn parse_action_unknown_returns_default() {
-        assert_eq!(
-            parse_action("unknown", Action::MoveDown),
-            Action::MoveDown
-        );
+        assert_eq!(parse_action("unknown", Action::MoveDown), Action::MoveDown);
         assert_eq!(parse_action("", Action::Cancel), Action::Cancel);
     }
 

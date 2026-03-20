@@ -7,10 +7,14 @@ fn filter_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("filter_scaling");
     for size in [100, 1_000, 10_000] {
         let candidates = helpers::generate_candidates(size);
-        group.bench_with_input(BenchmarkId::from_parameter(size), &candidates, |b, cands| {
-            let mut matcher = FuzzyMatcher::new();
-            b.iter(|| matcher.filter(cands, "git"));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &candidates,
+            |b, cands| {
+                let mut matcher = FuzzyMatcher::new();
+                b.iter(|| matcher.filter(cands, "git"));
+            },
+        );
     }
     group.finish();
 }
@@ -48,12 +52,21 @@ fn bench_damerau_levenshtein(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("damerau_levenshtein");
     for (name, a, b) in pairs {
-        group.bench_with_input(BenchmarkId::from_parameter(name), &(a, b), |bench, &(a, b)| {
-            bench.iter(|| damerau_levenshtein(a, b));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(name),
+            &(a, b),
+            |bench, &(a, b)| {
+                bench.iter(|| damerau_levenshtein(a, b));
+            },
+        );
     }
     group.finish();
 }
 
-criterion_group!(benches, filter_scaling, filter_query_variants, bench_damerau_levenshtein);
+criterion_group!(
+    benches,
+    filter_scaling,
+    filter_query_variants,
+    bench_damerau_levenshtein
+);
 criterion_main!(benches);

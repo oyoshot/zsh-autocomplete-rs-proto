@@ -94,7 +94,10 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     for (i, candidate) in visible.iter().enumerate() {
         let layout = layout_candidate(candidate, inner);
 
-        crossterm::queue!(&mut buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        crossterm::queue!(
+            &mut buf,
+            cursor::MoveTo(popup.col, popup.row + 1 + i as u16)
+        )?;
 
         if Some(i) == highlight_idx {
             crossterm::queue!(
@@ -199,7 +202,10 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
     for (i, candidate) in visible.iter().enumerate() {
         let layout = layout_candidate(candidate, inner);
 
-        crossterm::queue!(&mut buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        crossterm::queue!(
+            &mut buf,
+            cursor::MoveTo(popup.col, popup.row + 1 + i as u16)
+        )?;
 
         if Some(i) == highlight_idx {
             crossterm::queue!(
