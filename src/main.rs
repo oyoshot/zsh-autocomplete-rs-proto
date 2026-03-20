@@ -149,13 +149,12 @@ fn run_render(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i3
 
     let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
 
-    ui::render::cap_visible_for_render(&mut app);
+    let mut tty = tty::open_tty_write()?;
+    ui::render::ensure_space(&mut tty, &mut app)?;
 
     if app.max_visible == 0 {
         return Ok(1);
     }
-
-    let mut tty = tty::open_tty_write()?;
     ui::render::draw_popup_only(&mut tty, &app)?;
 
     let popup = ui::popup::Popup::compute(&app);

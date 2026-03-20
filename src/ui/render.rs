@@ -165,22 +165,6 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Cap max_visible to fit available space without scrolling (for render mode).
-pub fn cap_visible_for_render(app: &mut App) {
-    let (_, term_rows) = terminal::size().unwrap_or((80, 24));
-    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-
-    if space_below < 3 {
-        app.max_visible = 0;
-        return;
-    }
-
-    let max_items = (space_below - 2) as usize;
-    if app.max_visible > max_items {
-        app.max_visible = max_items;
-    }
-}
-
 pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
