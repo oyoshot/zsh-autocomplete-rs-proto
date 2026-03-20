@@ -13,7 +13,7 @@ name = "zsh-autocomplete-rs"
 path = "src/main.rs"
 
 [dependencies]
-crossterm = "0.28"
+crossterm = "0.29"
 nucleo-matcher = "0.3"
 unicode-width = "0.2"
 clap = { version = "4", features = ["derive"] }
