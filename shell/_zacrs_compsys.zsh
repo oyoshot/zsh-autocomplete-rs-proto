@@ -47,10 +47,10 @@ _zacrs_compsys_func() {
         (( _zacrs_compadd_calls++ ))
 
         # Skip probe calls that use -O or -D (internal completion system tests)
-        local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0
+        local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0 _disp_array_name=""
         local _prev=""
         for _a in "$@"; do
-            if [[ "$_prev" == -[pPSX] ]]; then
+            if [[ "$_prev" == -[pPSXd] ]]; then
                 : # この "--" はフラグの値 → breakしない
             else
                 [[ "$_a" == "--" ]] && break
@@ -60,11 +60,26 @@ _zacrs_compsys_func() {
             [[ "$_prev" == "-p" ]] && _hidden_prefix="$_a"
             [[ "$_prev" == "-S" ]] && _vis_suffix="$_a"
             [[ "$_prev" == "-X" ]] && _xdesc="$_a"
+            [[ "$_prev" == "-d" ]] && _disp_array_name="$_a"
             [[ "$_a" == "-f" ]] && _is_file=1
             _prev="$_a"
         done
 
         if (( ! _skip )); then
+            local -A _desc_map=()
+            if [[ -n "$_disp_array_name" ]]; then
+                local _sep="${LIST_SEPARATOR:- -- }"
+                local _disp_elem _key
+                for _disp_elem in "${(@P)_disp_array_name}"; do
+                    if [[ "$_disp_elem" == *"$_sep"* ]]; then
+                        _key="${_disp_elem%%"$_sep"*}"
+                        _key="${_key%"${_key##*[! ]}"}"
+                        _desc_map[$_key]="${_disp_elem#*"$_sep"}"
+                    fi
+                done
+                _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: disp=$_disp_array_name desc_map_size=${#_desc_map}"
+            fi
+
             local -a _zacrs_cap=()
             builtin compadd -O _zacrs_cap "$@" 2>/dev/null
 
@@ -80,7 +95,7 @@ _zacrs_compsys_func() {
                 elif [[ "$_text" == */ ]]; then
                     _kind="directory"
                 fi
-                _zacrs_captured+=( "${_text}"$'\t'"${_xdesc}"$'\t'"${_kind}" )
+                _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
             done
         else
             _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
