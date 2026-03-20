@@ -19,6 +19,8 @@ typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
 typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
+typeset -g _zacrs_cached_candidates=""
+typeset -g _zacrs_cached_lbase=""
 
 # === Non-blocking render (auto-trigger) ===
 
@@ -150,6 +152,19 @@ _zacrs_tab_complete() {
         candidates_str="$(_zacrs_gather --all-commands)"
     fi
 
+    # Fuzzy fallback: auto-trigger キャッシュを再利用
+    if [[ -z "$candidates_str" && -n "$prefix" ]]; then
+        local lbase
+        if [[ "$LBUFFER" == *" "* ]]; then
+            lbase="${LBUFFER% *} "
+        else
+            lbase=""
+        fi
+        if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
+            candidates_str="$_zacrs_cached_candidates"
+        fi
+    fi
+
     # 候補なし → default zsh 補完にフォールバック
     if [[ -z "$candidates_str" ]]; then
         zle expand-or-complete
@@ -198,6 +213,21 @@ _zacrs_line_pre_redraw() {
 
     # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
     local naive_prefix="${LBUFFER##* }"
+
+    # lbase 計算: 最後のスペースより前の部分（コマンド＋引数の文脈）
+    local lbase
+    if [[ "$LBUFFER" == *" "* ]]; then
+        lbase="${LBUFFER% *} "
+    else
+        lbase=""
+    fi
+
+    # lbase が変わったらキャッシュ無効化
+    if [[ "$lbase" != "$_zacrs_cached_lbase" ]]; then
+        _zacrs_cached_candidates=""
+        _zacrs_cached_lbase="$lbase"
+    fi
+
     if (( _zacrs_suppressed )); then
         if [[ -n "$naive_prefix" ]]; then
             _zacrs_suppressed=0
@@ -237,6 +267,17 @@ _zacrs_line_pre_redraw() {
         candidates_str="$(_zacrs_gather --all-commands)"
     fi
 
+    # キャッシュ更新: 同じ lbase で初めて候補が見つかった場合
+    if [[ -n "$candidates_str" && -z "$_zacrs_cached_candidates" ]]; then
+        _zacrs_cached_candidates="$candidates_str"
+    fi
+
+    # Fuzzy fallback: 候補なし → キャッシュから再利用
+    if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
+        candidates_str="$_zacrs_cached_candidates"
+        prefix="$naive_prefix"
+    fi
+
     [[ -z "$candidates_str" ]] && return
 
     local -a cands
@@ -252,6 +293,8 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_cached_candidates=""
+    _zacrs_cached_lbase=""
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
@@ -259,6 +302,8 @@ zle -N accept-line _zacrs_accept_line
 _zacrs_send_break() {
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
+    _zacrs_cached_candidates=""
+    _zacrs_cached_lbase=""
     zle .send-break
 }
 zle -N send-break _zacrs_send_break
