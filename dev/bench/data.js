@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774017699890,
+  "lastUpdate": 1774018298042,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -395,6 +395,204 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 774,
             "range": "± 25",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "877dd7ea3fca65f971456f35401f2930f8adb062",
+          "message": "chore(deps): bump crossterm from 0.28.1 to 0.29.0 (#3)\n\nBumps [crossterm](https://github.com/crossterm-rs/crossterm) from 0.28.1 to 0.29.0.\n- [Release notes](https://github.com/crossterm-rs/crossterm/releases)\n- [Changelog](https://github.com/crossterm-rs/crossterm/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/crossterm-rs/crossterm/commits/0.29)\n\n---\nupdated-dependencies:\n- dependency-name: crossterm\n  dependency-version: 0.29.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-03-20T23:43:55+09:00",
+          "tree_id": "f27038e14d86a9d7157b840183b8271147682c3c",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/877dd7ea3fca65f971456f35401f2930f8adb062"
+        },
+        "date": 1774018297488,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7880,
+            "range": "± 98",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 91813,
+            "range": "± 860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1126244,
+            "range": "± 52136",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 247270,
+            "range": "± 1617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 130303,
+            "range": "± 7008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 102598,
+            "range": "± 814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 26380,
+            "range": "± 234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/typo",
+            "value": 42820,
+            "range": "± 311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 191161,
+            "range": "± 8374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 22642,
+            "range": "± 1822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/identical",
+            "value": 344,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/transposition",
+            "value": 211,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/substitution",
+            "value": 337,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/long_strings",
+            "value": 2406,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/different_len",
+            "value": 261,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 95,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 99,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 94,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 93,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 100,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 93,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 34,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 58,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 78,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 74,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 849,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7498,
+            "range": "± 515",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 736,
+            "range": "± 6",
             "unit": "ns/iter"
           }
         ]
