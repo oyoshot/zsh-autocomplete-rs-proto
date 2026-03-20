@@ -44,14 +44,14 @@ pub struct KeybindingsRaw {
 
 #[derive(Debug, Deserialize, Default)]
 struct ThemeRaw {
-    pub border: Option<String>,
+    border: Option<String>,
     #[serde(rename = "selected-fg")]
-    pub selected_fg: Option<String>,
+    selected_fg: Option<String>,
     #[serde(rename = "selected-bg")]
-    pub selected_bg: Option<String>,
-    pub description: Option<String>,
-    pub filter: Option<String>,
-    pub candidate: Option<String>,
+    selected_bg: Option<String>,
+    description: Option<String>,
+    filter: Option<String>,
+    candidate: Option<String>,
 }
 
 /// Parsed keybindings passed to read_action
@@ -87,7 +87,7 @@ fn parse_action(s: &str, default: Action) -> Action {
     }
 }
 
-pub fn parse_color(s: &str) -> Option<Color> {
+pub(crate) fn parse_color(s: &str) -> Option<Color> {
     let s = s.to_lowercase();
     match s.as_str() {
         "black" => Some(Color::Black),
