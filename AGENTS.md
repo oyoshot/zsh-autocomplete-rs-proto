@@ -9,6 +9,7 @@ Use a workspace-local target dir when possible:
 - `CARGO_TARGET_DIR=target cargo build` builds the binary at `target/debug/zsh-autocomplete-rs`.
 - `CARGO_TARGET_DIR=target cargo test` runs the unit tests embedded under `src/`.
 - `cargo fmt --check` verifies Rust formatting before review.
+- `cargo clippy` runs lint checks to catch common mistakes and suggest improvements.
 - `cargo bench` runs Criterion benchmarks in `benches/`.
 - `bash test-popup.sh` performs a manual terminal popup check after `cargo build`.
 
