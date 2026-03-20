@@ -82,6 +82,7 @@ _zacrs_invoke() {
         --cursor-col "$cursor_col")
     local exit_code=$?
 
+    unset POSTDISPLAY
     zle reset-prompt
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
@@ -150,6 +151,7 @@ _zacrs_tab_complete() {
     if [[ ${#cands[@]} -eq 1 ]]; then
         local text="${cands[1]%%	*}"
         LBUFFER="${LBUFFER%$prefix}${text}"
+        unset POSTDISPLAY
         zle reset-prompt
         return
     fi
