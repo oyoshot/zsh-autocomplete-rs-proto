@@ -80,7 +80,6 @@ _zacrs_invoke() {
     local exit_code=$?
 
     unset POSTDISPLAY
-    zle reset-prompt
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         # Confirm: replace prefix with selected candidate
@@ -101,6 +100,7 @@ _zacrs_invoke() {
 
     # Prevent immediate re-trigger from line-pre-redraw
     _zacrs_prev_lbuffer="$LBUFFER"
+    zle reset-prompt
 }
 
 # === Tab completion widget ===
