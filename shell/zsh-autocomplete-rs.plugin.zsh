@@ -109,12 +109,16 @@ _zacrs_invoke() {
 # === Tab completion widget ===
 
 _zacrs_tab_complete() {
+    # Hide cursor early to prevent visible jumps during candidate gathering
+    printf '\e[?25l' > /dev/tty
+
     _zacrs_clear_popup
 
     local prefix="$(_zacrs_get_prefix)"
 
     # Fallback to default completion if no prefix
     if [[ -z "$prefix" ]]; then
+        printf '\e[?25h' > /dev/tty
         zle expand-or-complete
         return
     fi
@@ -139,6 +143,7 @@ _zacrs_tab_complete() {
 
     # Fallback if still no candidates
     if [[ -z "$candidates_str" ]]; then
+        printf '\e[?25h' > /dev/tty
         zle expand-or-complete
         return
     fi
@@ -153,11 +158,13 @@ _zacrs_tab_complete() {
         LBUFFER="${LBUFFER%$prefix}${text}"
         unset POSTDISPLAY
         zle reset-prompt
+        printf '\e[?25h' > /dev/tty
         return
     fi
 
     _zacrs_suppressed=0
     _zacrs_invoke "$prefix" "$candidates_str"
+    # cursor is shown by the Rust binary's draw() at the end
 }
 
 # === Auto-trigger via line-pre-redraw hook ===

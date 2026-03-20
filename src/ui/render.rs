@@ -56,11 +56,8 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
         let scroll_amount = (popup_height - space_below).min(app.cursor_row);
 
         if scroll_amount > 0 {
-            // Move to bottom and print newlines to scroll terminal content up
-            crossterm::execute!(tty, cursor::MoveTo(0, term_rows - 1))?;
-            for _ in 0..scroll_amount {
-                tty.write_all(b"\n")?;
-            }
+            // Scroll terminal content up without moving cursor position
+            crossterm::execute!(tty, terminal::ScrollUp(scroll_amount))?;
             app.cursor_row -= scroll_amount;
         }
     }
@@ -69,18 +66,19 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
 }
 
 pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+    let mut buf = std::io::BufWriter::new(&mut *tty);
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
 
-    crossterm::execute!(tty, cursor::Hide)?;
+    crossterm::queue!(&mut buf, cursor::Hide)?;
 
     // Top border with filter text
     let filter_label = format!(" {} ", &app.filter_text);
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(popup.col, popup.row),
         Print("┌"),
         Print(&filter_label),
@@ -95,11 +93,11 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     for (i, candidate) in visible.iter().enumerate() {
         let layout = layout_candidate(candidate, inner);
 
-        crossterm::execute!(tty, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        crossterm::queue!(&mut buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
         if Some(i) == highlight_idx {
-            crossterm::execute!(
-                tty,
+            crossterm::queue!(
+                &mut buf,
                 Print("│"),
                 SetAttribute(Attribute::Reverse),
                 Print(&layout.text),
@@ -110,27 +108,27 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
                 Print("│"),
             )?;
         } else {
-            crossterm::execute!(tty, Print("│"), Print(&layout.text))?;
+            crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
 
             if !layout.description.is_empty() {
-                crossterm::execute!(
-                    tty,
+                crossterm::queue!(
+                    &mut buf,
                     Print(" ".repeat(layout.gap)),
                     SetForegroundColor(theme::DESCRIPTION_COLOR),
                     Print(&layout.description),
                     ResetColor,
                 )?;
             } else {
-                crossterm::execute!(tty, Print(" ".repeat(layout.gap)))?;
+                crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
             }
 
-            crossterm::execute!(tty, Print("│"))?;
+            crossterm::queue!(&mut buf, Print("│"))?;
         }
     }
 
     // Bottom border
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
         Print("└"),
         Print("─".repeat(inner)),
@@ -143,41 +141,42 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     let filter_display = &app.filter_text;
     let filter_w = UnicodeWidthStr::width(filter_display.as_str()) as u16;
 
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(prefix_start_col, app.cursor_row),
         Print(filter_display),
     )?;
 
     let clear_count = prefix_w.saturating_sub(filter_w);
     if clear_count > 0 {
-        crossterm::execute!(tty, Print(" ".repeat(clear_count as usize)))?;
+        crossterm::queue!(&mut buf, Print(" ".repeat(clear_count as usize)))?;
     }
 
     let cursor_end_col = prefix_start_col + filter_w;
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(cursor_end_col, app.cursor_row),
         cursor::Show,
     )?;
-    tty.flush()?;
+    buf.flush()?;
 
     Ok(())
 }
 
 pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+    let mut buf = std::io::BufWriter::new(&mut *tty);
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
 
-    crossterm::execute!(tty, cursor::Hide)?;
+    crossterm::queue!(&mut buf, cursor::Hide)?;
 
     // Top border with filter text
     let filter_label = format!(" {} ", &app.filter_text);
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(popup.col, popup.row),
         Print("┌"),
         Print(&filter_label),
@@ -192,11 +191,11 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
     for (i, candidate) in visible.iter().enumerate() {
         let layout = layout_candidate(candidate, inner);
 
-        crossterm::execute!(tty, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        crossterm::queue!(&mut buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
         if Some(i) == highlight_idx {
-            crossterm::execute!(
-                tty,
+            crossterm::queue!(
+                &mut buf,
                 Print("│"),
                 SetAttribute(Attribute::Reverse),
                 Print(&layout.text),
@@ -207,27 +206,27 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
                 Print("│"),
             )?;
         } else {
-            crossterm::execute!(tty, Print("│"), Print(&layout.text))?;
+            crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
 
             if !layout.description.is_empty() {
-                crossterm::execute!(
-                    tty,
+                crossterm::queue!(
+                    &mut buf,
                     Print(" ".repeat(layout.gap)),
                     SetForegroundColor(theme::DESCRIPTION_COLOR),
                     Print(&layout.description),
                     ResetColor,
                 )?;
             } else {
-                crossterm::execute!(tty, Print(" ".repeat(layout.gap)))?;
+                crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
             }
 
-            crossterm::execute!(tty, Print("│"))?;
+            crossterm::queue!(&mut buf, Print("│"))?;
         }
     }
 
     // Bottom border
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
         Print("└"),
         Print("─".repeat(inner)),
@@ -235,12 +234,12 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
     )?;
 
     // Restore cursor to original position (zsh manages cursor)
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(app.cursor_col, app.cursor_row),
         cursor::Show,
     )?;
-    tty.flush()?;
+    buf.flush()?;
 
     Ok(())
 }
@@ -251,28 +250,30 @@ pub fn clear_rect(
     popup_height: u16,
     cursor_row: u16,
 ) -> std::io::Result<()> {
+    let mut buf = std::io::BufWriter::new(&mut *tty);
     for i in 0..popup_height {
-        crossterm::execute!(
-            tty,
+        crossterm::queue!(
+            &mut buf,
             cursor::MoveTo(0, popup_row + i),
             terminal::Clear(terminal::ClearType::CurrentLine),
         )?;
     }
 
-    crossterm::execute!(tty, cursor::MoveTo(0, cursor_row))?;
-    tty.flush()?;
+    crossterm::queue!(&mut buf, cursor::MoveTo(0, cursor_row))?;
+    buf.flush()?;
 
     Ok(())
 }
 
 pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+    let mut buf = std::io::BufWriter::new(&mut *tty);
     let popup = Popup::compute(app);
 
-    crossterm::execute!(tty, cursor::SavePosition)?;
+    crossterm::queue!(&mut buf, cursor::SavePosition)?;
 
     for row in popup.row..popup.row + popup.height {
-        crossterm::execute!(
-            tty,
+        crossterm::queue!(
+            &mut buf,
             cursor::MoveTo(popup.col, row),
             Print(" ".repeat(popup.width as usize)),
         )?;
@@ -283,15 +284,15 @@ pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     let prefix_start_col = app.cursor_col.saturating_sub(prefix_w);
     let max_w = prefix_w.max(filter_w);
 
-    crossterm::execute!(
-        tty,
+    crossterm::queue!(
+        &mut buf,
         cursor::MoveTo(prefix_start_col, app.cursor_row),
         Print(&app.prefix),
         Print(" ".repeat((max_w - prefix_w) as usize)),
     )?;
 
-    crossterm::execute!(tty, cursor::RestorePosition)?;
-    tty.flush()?;
+    crossterm::queue!(&mut buf, cursor::RestorePosition)?;
+    buf.flush()?;
 
     Ok(())
 }
