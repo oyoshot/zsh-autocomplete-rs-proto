@@ -118,11 +118,10 @@ _zacrs_tab_complete() {
 
     # 候補収集: compsys → gather fallback
     _zacrs_captured=()
-    if [[ -n "$ZACRS_DEBUG" ]]; then
-        zle _zacrs_compsys
-    else
-        zle _zacrs_compsys 2>/dev/null
-    fi
+    local _zacrs_fd2
+    exec {_zacrs_fd2}>&2
+    zle _zacrs_compsys 2>/dev/null
+    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
 
     # compsys コンテキストから prefix 取得
     local prefix prefix_len
@@ -210,11 +209,10 @@ _zacrs_line_pre_redraw() {
     # 候補収集: compsys → gather fallback
     local candidates_str=""
     _zacrs_captured=()
-    if [[ -n "$ZACRS_DEBUG" ]]; then
-        zle _zacrs_compsys
-    else
-        zle _zacrs_compsys 2>/dev/null
-    fi
+    local _zacrs_fd2
+    exec {_zacrs_fd2}>&2
+    zle _zacrs_compsys 2>/dev/null
+    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
 
     # compsys コンテキストから prefix 取得 (render 用、LBUFFER 置換なし)
     local prefix
