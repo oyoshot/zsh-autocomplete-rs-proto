@@ -19,6 +19,7 @@ fn run_complete(
     cursor_row: u16,
     cursor_col: u16,
     bindings: &config::KeyBindings,
+    theme: &config::Theme,
 ) -> io::Result<i32> {
     let candidates: Vec<Candidate> = io::stdin()
         .lock()
@@ -37,25 +38,25 @@ fn run_complete(
 
     // Scroll terminal to ensure blank space below cursor for popup
     ui::render::ensure_space(&mut guard.tty, &mut app)?;
-    ui::render::draw(&mut guard.tty, &app)?;
+    ui::render::draw(&mut guard.tty, &app, theme)?;
 
     let result = loop {
         match input::read_action(bindings)? {
             input::Action::MoveDown => {
                 app.move_down();
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::MoveUp => {
                 app.move_up();
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::PageDown => {
                 app.page_down();
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::PageUp => {
                 app.page_up();
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::Confirm => {
                 ui::render::clear(&mut guard.tty, &app)?;
@@ -83,7 +84,7 @@ fn run_complete(
                 if app.filtered.is_empty() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::Backspace => {
                 ui::render::clear(&mut guard.tty, &app)?;
@@ -93,7 +94,7 @@ fn run_complete(
                 if app.filtered.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                ui::render::draw(&mut guard.tty, &app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::None => {}
         }
@@ -129,7 +130,12 @@ fn run_complete(
     }
 }
 
-fn run_render(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i32> {
+fn run_render(
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    theme: &config::Theme,
+) -> io::Result<i32> {
     let candidates: Vec<Candidate> = io::stdin()
         .lock()
         .lines()
@@ -150,7 +156,7 @@ fn run_render(prefix: String, cursor_row: u16, cursor_col: u16) -> io::Result<i3
     if app.max_visible == 0 {
         return Ok(1);
     }
-    ui::render::draw_popup_only(&mut tty, &app)?;
+    ui::render::draw_popup_only(&mut tty, &app, theme)?;
 
     let popup = ui::popup::Popup::compute(&app);
     println!(
@@ -171,12 +177,13 @@ fn main() {
     let cli = Cli::parse();
     let cfg = config::Config::load();
     let bindings = cfg.key_bindings();
+    let theme = cfg.theme();
     match cli.command {
         Command::Complete {
             prefix,
             cursor_row,
             cursor_col,
-        } => match run_complete(prefix, cursor_row, cursor_col, &bindings) {
+        } => match run_complete(prefix, cursor_row, cursor_col, &bindings, &theme) {
             Ok(code) => process::exit(code),
             Err(e) => {
                 let _ = crossterm::terminal::disable_raw_mode();
@@ -188,7 +195,7 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
-        } => match run_render(prefix, cursor_row, cursor_col) {
+        } => match run_render(prefix, cursor_row, cursor_col, &theme) {
             Ok(code) => process::exit(code),
             Err(e) => {
                 eprintln!("error: {}", e);
