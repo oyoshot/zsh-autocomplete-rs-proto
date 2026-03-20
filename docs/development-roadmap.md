@@ -2,7 +2,7 @@
 
 ## フェーズ計画
 
-### Phase 1: Tab補完 + 自動トリガー + ポップアップUI（現在）
+### Phase 1: Tab補完 + 自動トリガー + ポップアップUI（完了）
 
 **ゴール**: `source plugin.zsh` して Tab でポップアップが出る
 
@@ -43,46 +43,55 @@
 3. `source shell/zsh-autocomplete-rs.plugin.zsh` して Tab で補完が動く
 4. `line-pre-redraw` で自動トリガーが動く
 
-### Phase 2: 履歴検索・最近ディレクトリ
+### Phase 2: スマート挿入 + UX 改善
 
-**ゴール**: Ctrl+R で履歴検索、Ctrl+X / で最近ディレクトリ
+**ゴール**: 補完確定時の挙動をより賢くする
 
-- zsh-autocomplete の `_autocomplete__history_lines` 相当
-  - `fc -lrm` でパターン一致する履歴を取得
-  - ファジーソート、重複除去
-- zsh-autocomplete の `_autocomplete__recent_paths` 相当
-  - `chpwd_recent_dirs` / `chpwd_recent_filehandler` で最近ディレクトリを取得
-- Rust サブコマンド追加: `history-search`, `recent-dirs`
-- Zsh 側: 新しい ZLE widget、keybinding 追加
+- unambiguous prefix の自動挿入
+  - 全候補の共通接頭辞を LBUFFER に即反映（ポップアップ表示前に）
+  - zsh-autocomplete の `_autocomplete__unambiguous` 相当
+- space 自動付加の改善
+  - kind ベースの suffix 付加ロジックの拡充（Phase 1 で基本実装済み）
+  - zsh-autocomplete の `_autocomplete__should_add_space` 相当
+- compsys 統合の強化
+  - 補完コンテキストのより正確な取得
+  - グループ情報の活用（候補のカテゴリ表示）
 
-### Phase 3: 非同期補完・スマート挿入
+### Phase 3: 非同期補完
 
-**ゴール**: バックグラウンド補完、unambiguous prefix 自動挿入
+**ゴール**: バックグラウンドで候補を収集し、体感速度を向上
 
 - `line-pre-redraw` フックからバックグラウンドで候補収集
   - zpty 内で補完を実行、完了後にポップアップ表示
   - 遅延 (delay) 設定で入力中のちらつき防止
-- スマート挿入
-  - unambiguous prefix の自動挿入
-  - space/semicolon 自動付加 (executables, commands 等)
-- zsh-autocomplete の `_autocomplete__unambiguous`, `_autocomplete__should_add_space` 相当
-
-### Phase 4: パフォーマンス・設定・拡張
-
-**ゴール**: 実用レベルのポリッシュ
-
-- キャッシュ
-  - 候補リストのキャッシュ (同一 prefix に対する重複計算を回避)
+- キャッシュの改善
+  - 候補リストのキャッシュ（同一コンテキストに対する重複計算を回避）
   - TTL ベースの無効化
-- パフォーマンス最適化
-  - 大量候補のストリーミング処理
-  - 描画の差分更新
+
+### Phase 4: 設定・ポリッシュ
+
+**ゴール**: 実用レベルのカスタマイズ性と安定性
+
 - TOML 設定システム
   - `~/.config/zsh-autocomplete-rs/config.toml`
   - テーマ、max_visible、delay、keybinding カスタマイズ
+- パフォーマンス最適化
+  - 大量候補のストリーミング処理
+  - 描画の差分更新
 - vi-mode 対応
   - vicmd keymap での keybinding
   - insert/normal モード切り替え追跡
+
+### スコープ外
+
+以下の機能は専門ツールが既に存在するため、本プロジェクトのスコープ外とする。
+
+| 機能 | 専門ツール | 理由 |
+|------|-----------|------|
+| fuzzy 履歴検索 | fzf, atuin, zsh-history-substring-search | Ctrl+R は既に成熟したエコシステムがある |
+| 最近ディレクトリ | zoxide, autojump, z | chpwd ベースのツールと競合する意味がない |
+
+zacrs のスコープは **Tab 補完のポップアップ UI** に集中する。これらのツールとは keybinding が被らず共存できる。
 
 ## 移植元マッピング表
 
@@ -107,14 +116,14 @@
 
 | 本プロジェクトの機能 | zsh-autocomplete の対応ファイル | Phase |
 |---------------------|-------------------------------|-------|
-| Tab 補完 | `.autocomplete__widgets`, `complete-word` | 1 |
-| 自動トリガー | `.autocomplete__async` (line-pre-redraw) | 1 |
-| 候補収集 | `.autocomplete__compinit`, `_main_complete` | 1 (簡易版) |
-| 履歴検索 | `_autocomplete__history_lines` | 2 |
-| 最近ディレクトリ | `_autocomplete__recent_paths`, `.autocomplete__recent-dirs` | 2 |
+| Tab 補完 | `.autocomplete__widgets`, `complete-word` | 1 (完了) |
+| 自動トリガー | `.autocomplete__async` (line-pre-redraw) | 1 (完了) |
+| 候補収集 | `.autocomplete__compinit`, `_main_complete` | 1 (完了) |
+| unambiguous 挿入 | `_autocomplete__unambiguous`, `_autocomplete__should_insert_unambiguous` | 2 |
+| space 自動付加 | `_autocomplete__should_add_space` | 2 |
 | 非同期補完 | `.autocomplete__async` (zpty + FD callback) | 3 |
-| unambiguous 挿入 | `_autocomplete__unambiguous`, `_autocomplete__should_insert_unambiguous` | 3 |
-| space 自動付加 | `_autocomplete__should_add_space` | 3 |
+| 履歴検索 | `_autocomplete__history_lines` | スコープ外 |
+| 最近ディレクトリ | `_autocomplete__recent_paths`, `.autocomplete__recent-dirs` | スコープ外 |
 
 ## ファイル構成計画
 

@@ -1,3 +1,1 @@
-use crossterm::style::Color;
-
-pub const DESCRIPTION_COLOR: Color = Color::DarkGrey;
+pub use crate::config::Theme;

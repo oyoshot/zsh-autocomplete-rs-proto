@@ -1,9 +1,11 @@
 use crate::app::App;
 use crate::candidate::Candidate;
 use crate::ui::popup::Popup;
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 use crossterm::cursor;
-use crossterm::style::{Attribute, Print, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::terminal;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
@@ -65,27 +67,38 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
     Ok(())
 }
 
-pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
-    let mut buf = std::io::BufWriter::new(&mut *tty);
+fn print_colored(
+    buf: &mut impl Write,
+    text: impl std::fmt::Display,
+    color: Option<Color>,
+) -> std::io::Result<()> {
+    if let Some(c) = color {
+        crossterm::queue!(buf, SetForegroundColor(c), Print(text), ResetColor)
+    } else {
+        crossterm::queue!(buf, Print(text))
+    }
+}
+
+fn render_popup(
+    buf: &mut std::io::BufWriter<&mut std::fs::File>,
+    app: &App,
+    theme: &Theme,
+) -> std::io::Result<()> {
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
 
-    crossterm::queue!(&mut buf, cursor::Hide)?;
+    crossterm::queue!(buf, cursor::Hide)?;
 
     // Top border with filter text
     let filter_label = format!(" {} ", &app.filter_text);
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
-    crossterm::queue!(
-        &mut buf,
-        cursor::MoveTo(popup.col, popup.row),
-        Print("┌"),
-        Print(&filter_label),
-        Print("─".repeat(remaining)),
-        Print("┐"),
-        terminal::Clear(terminal::ClearType::UntilNewLine),
-    )?;
+    crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row))?;
+    print_colored(buf, "┌", theme.border)?;
+    print_colored(buf, &filter_label, theme.filter)?;
+    print_colored(buf, format!("{}┐", "─".repeat(remaining)), theme.border)?;
+    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     // Candidate rows
     let visible = app.visible_candidates();
@@ -94,56 +107,68 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     for (i, candidate) in visible.iter().enumerate() {
         let layout = layout_candidate(candidate, inner);
 
-        crossterm::queue!(
-            &mut buf,
-            cursor::MoveTo(popup.col, popup.row + 1 + i as u16)
-        )?;
+        crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
         if Some(i) == highlight_idx {
+            print_colored(buf, "│", theme.border)?;
+            let use_explicit = theme.selected_fg.is_some() || theme.selected_bg.is_some();
+            if use_explicit {
+                if let Some(c) = theme.selected_fg {
+                    crossterm::queue!(buf, SetForegroundColor(c))?;
+                }
+                if let Some(c) = theme.selected_bg {
+                    crossterm::queue!(buf, SetBackgroundColor(c))?;
+                }
+            } else {
+                crossterm::queue!(buf, SetAttribute(Attribute::Reverse))?;
+            }
             crossterm::queue!(
-                &mut buf,
-                Print("│"),
-                SetAttribute(Attribute::Reverse),
+                buf,
                 Print(&layout.text),
                 Print(" ".repeat(layout.gap)),
                 Print(&layout.description),
-                SetAttribute(Attribute::NoReverse),
-                ResetColor,
-                Print("│"),
-                terminal::Clear(terminal::ClearType::UntilNewLine),
             )?;
+            if use_explicit {
+                crossterm::queue!(buf, ResetColor)?;
+            } else {
+                crossterm::queue!(buf, SetAttribute(Attribute::NoReverse), ResetColor)?;
+            }
+            print_colored(buf, "│", theme.border)?;
         } else {
-            crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
+            print_colored(buf, "│", theme.border)?;
+            print_colored(buf, &layout.text, theme.candidate)?;
 
             if !layout.description.is_empty() {
                 crossterm::queue!(
-                    &mut buf,
+                    buf,
                     Print(" ".repeat(layout.gap)),
-                    SetForegroundColor(theme::DESCRIPTION_COLOR),
+                    SetForegroundColor(theme.description),
                     Print(&layout.description),
                     ResetColor,
                 )?;
             } else {
-                crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
+                crossterm::queue!(buf, Print(" ".repeat(layout.gap)))?;
             }
 
-            crossterm::queue!(
-                &mut buf,
-                Print("│"),
-                terminal::Clear(terminal::ClearType::UntilNewLine),
-            )?;
+            print_colored(buf, "│", theme.border)?;
         }
+        crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
 
     // Bottom border
     crossterm::queue!(
-        &mut buf,
+        buf,
         cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
-        Print("└"),
-        Print("─".repeat(inner)),
-        Print("┘"),
-        terminal::Clear(terminal::ClearType::UntilNewLine),
     )?;
+    print_colored(buf, format!("└{}┘", "─".repeat(inner)), theme.border)?;
+    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
+
+    Ok(())
+}
+
+pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
+    let mut buf = std::io::BufWriter::new(&mut *tty);
+    render_popup(&mut buf, app, theme)?;
 
     // Update filter_text on the prompt line
     let prefix_w = UnicodeWidthStr::width(app.prefix.as_str()) as u16;
@@ -173,85 +198,9 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+pub fn draw_popup_only(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
     let mut buf = std::io::BufWriter::new(&mut *tty);
-    let popup = Popup::compute(app);
-    let inner = (popup.width - 2) as usize;
-
-    crossterm::queue!(&mut buf, cursor::Hide)?;
-
-    // Top border with filter text
-    let filter_label = format!(" {} ", &app.filter_text);
-    let filter_w = UnicodeWidthStr::width(filter_label.as_str());
-    let remaining = inner.saturating_sub(filter_w);
-
-    crossterm::queue!(
-        &mut buf,
-        cursor::MoveTo(popup.col, popup.row),
-        Print("┌"),
-        Print(&filter_label),
-        Print("─".repeat(remaining)),
-        Print("┐"),
-        terminal::Clear(terminal::ClearType::UntilNewLine),
-    )?;
-
-    // Candidate rows
-    let visible = app.visible_candidates();
-    let highlight_idx = app.visible_selected_index();
-
-    for (i, candidate) in visible.iter().enumerate() {
-        let layout = layout_candidate(candidate, inner);
-
-        crossterm::queue!(
-            &mut buf,
-            cursor::MoveTo(popup.col, popup.row + 1 + i as u16)
-        )?;
-
-        if Some(i) == highlight_idx {
-            crossterm::queue!(
-                &mut buf,
-                Print("│"),
-                SetAttribute(Attribute::Reverse),
-                Print(&layout.text),
-                Print(" ".repeat(layout.gap)),
-                Print(&layout.description),
-                SetAttribute(Attribute::NoReverse),
-                ResetColor,
-                Print("│"),
-                terminal::Clear(terminal::ClearType::UntilNewLine),
-            )?;
-        } else {
-            crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
-
-            if !layout.description.is_empty() {
-                crossterm::queue!(
-                    &mut buf,
-                    Print(" ".repeat(layout.gap)),
-                    SetForegroundColor(theme::DESCRIPTION_COLOR),
-                    Print(&layout.description),
-                    ResetColor,
-                )?;
-            } else {
-                crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
-            }
-
-            crossterm::queue!(
-                &mut buf,
-                Print("│"),
-                terminal::Clear(terminal::ClearType::UntilNewLine),
-            )?;
-        }
-    }
-
-    // Bottom border
-    crossterm::queue!(
-        &mut buf,
-        cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
-        Print("└"),
-        Print("─".repeat(inner)),
-        Print("┘"),
-        terminal::Clear(terminal::ClearType::UntilNewLine),
-    )?;
+    render_popup(&mut buf, app, theme)?;
 
     // Restore cursor to original position (zsh manages cursor)
     crossterm::queue!(
