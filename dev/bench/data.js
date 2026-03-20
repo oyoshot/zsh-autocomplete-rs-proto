@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774010765207,
+  "lastUpdate": 1774017699890,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -197,6 +197,204 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 773,
             "range": "± 6",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "36abc8447a805e5481fba8326eac875f3c08e116",
+          "message": "feat(theme): add [theme] config for popup color customization (#5)\n\n* docs(roadmap): update development phases and clarify scope\n\n- mark Phase 1 as completed\n- move smart insertion and UX work into Phase 2\n- defer async completion to Phase 3 and polish to Phase 4\n- declare history search and recent directory features out of scope\n\n* feat(theme): add [theme] config section for popup color customization\n\nAdd ANSI color defaults with config.toml override support for 6 styling\npoints: border, selected-fg/bg, description, filter, and candidate.\nDefaults preserve current appearance; invalid values gracefully fallback.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(ui): extract render_popup helper and reduce theme boilerplate\n\n- Extract shared popup rendering from draw()/draw_popup_only() into\n  render_popup(), eliminating ~170 lines of duplicated code.\n- Add print_colored() helper for the repeated color-or-plain pattern.\n- Make ThemeRaw and Config.theme_raw private (implementation detail).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(config): tighten visibility of ThemeRaw fields and parse_color\n\n- Remove pub from ThemeRaw fields (struct is already private)\n- Narrow parse_color from pub to pub(crate)\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-20T23:33:53+09:00",
+          "tree_id": "c801671eb1d88172f4564c183c5384495b240ab1",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/36abc8447a805e5481fba8326eac875f3c08e116"
+        },
+        "date": 1774017698857,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 9528,
+            "range": "± 654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 90587,
+            "range": "± 542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1109433,
+            "range": "± 137754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 223237,
+            "range": "± 3311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 115180,
+            "range": "± 1300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 94822,
+            "range": "± 464",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 25119,
+            "range": "± 106",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/typo",
+            "value": 39954,
+            "range": "± 290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 188226,
+            "range": "± 2704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 21247,
+            "range": "± 198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/identical",
+            "value": 315,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/transposition",
+            "value": 159,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/substitution",
+            "value": 317,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/long_strings",
+            "value": 2365,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/different_len",
+            "value": 225,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 92,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 96,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 92,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 91,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 98,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 92,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 33,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 58,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 81,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 77,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 138,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 863,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7554,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 774,
+            "range": "± 25",
             "unit": "ns/iter"
           }
         ]
