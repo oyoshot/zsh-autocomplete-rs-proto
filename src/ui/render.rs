@@ -84,6 +84,7 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
         Print(&filter_label),
         Print("─".repeat(remaining)),
         Print("┐"),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
     )?;
 
     // Candidate rows
@@ -106,6 +107,7 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
                 SetAttribute(Attribute::NoReverse),
                 ResetColor,
                 Print("│"),
+                terminal::Clear(terminal::ClearType::UntilNewLine),
             )?;
         } else {
             crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
@@ -122,7 +124,11 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
                 crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
             }
 
-            crossterm::queue!(&mut buf, Print("│"))?;
+            crossterm::queue!(
+                &mut buf,
+                Print("│"),
+                terminal::Clear(terminal::ClearType::UntilNewLine),
+            )?;
         }
     }
 
@@ -133,6 +139,7 @@ pub fn draw(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
         Print("└"),
         Print("─".repeat(inner)),
         Print("┘"),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
     )?;
 
     // Update filter_text on the prompt line
@@ -182,6 +189,7 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
         Print(&filter_label),
         Print("─".repeat(remaining)),
         Print("┐"),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
     )?;
 
     // Candidate rows
@@ -204,6 +212,7 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
                 SetAttribute(Attribute::NoReverse),
                 ResetColor,
                 Print("│"),
+                terminal::Clear(terminal::ClearType::UntilNewLine),
             )?;
         } else {
             crossterm::queue!(&mut buf, Print("│"), Print(&layout.text))?;
@@ -220,7 +229,11 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
                 crossterm::queue!(&mut buf, Print(" ".repeat(layout.gap)))?;
             }
 
-            crossterm::queue!(&mut buf, Print("│"))?;
+            crossterm::queue!(
+                &mut buf,
+                Print("│"),
+                terminal::Clear(terminal::ClearType::UntilNewLine),
+            )?;
         }
     }
 
@@ -231,6 +244,7 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App) -> std::io::Result<()
         Print("└"),
         Print("─".repeat(inner)),
         Print("┘"),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
     )?;
 
     // Restore cursor to original position (zsh manages cursor)
