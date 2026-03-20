@@ -69,8 +69,78 @@ impl FuzzyMatcher {
                 })
                 .then_with(|| a.candidate.text.cmp(&b.candidate.text))
         });
+
+        if results.is_empty() && query.len() >= 2 {
+            results = self.damerau_levenshtein_fallback(candidates, query);
+        }
+
         results
     }
+
+    fn damerau_levenshtein_fallback(
+        &self,
+        candidates: &[Candidate],
+        query: &str,
+    ) -> Vec<ScoredCandidate> {
+        let max_dist = if query.len() <= 4 { 1 } else { 2 };
+
+        let mut results: Vec<ScoredCandidate> = candidates
+            .iter()
+            .filter_map(|candidate| {
+                if query.len().abs_diff(candidate.text.len()) > max_dist {
+                    return None;
+                }
+                let dist = damerau_levenshtein(query, &candidate.text);
+                if dist <= max_dist {
+                    let score = (100u32).saturating_sub(dist as u32 * 30);
+                    Some(ScoredCandidate {
+                        candidate: candidate.clone(),
+                        score,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
+                .then_with(|| a.candidate.text.cmp(&b.candidate.text))
+        });
+        results
+    }
+}
+
+fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let len_a = a.len();
+    let len_b = b.len();
+
+    let mut d = vec![vec![0usize; len_b + 1]; len_a + 1];
+
+    for i in 0..=len_a {
+        d[i][0] = i;
+    }
+    for j in 0..=len_b {
+        d[0][j] = j;
+    }
+
+    for i in 1..=len_a {
+        for j in 1..=len_b {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + cost);
+            }
+        }
+    }
+
+    d[len_a][len_b]
 }
 
 #[cfg(test)]
@@ -111,6 +181,44 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn damerau_levenshtein_transposition() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["git", "grep", "gzip"]);
+        let results = m.filter(&candidates, "gti");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(texts.contains(&"git"), "gti should match git: {texts:?}");
+    }
+
+    #[test]
+    fn damerau_levenshtein_substitution() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["cargo", "cat", "curl"]);
+        let results = m.filter(&candidates, "carog");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            texts.contains(&"cargo"),
+            "carog should match cargo: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn damerau_levenshtein_respects_threshold() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["git", "grep", "gzip"]);
+        // "xyz" is too far from any candidate
+        let results = m.filter(&candidates, "xyz");
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn damerau_levenshtein_distance_basic() {
+        assert_eq!(damerau_levenshtein("git", "gti"), 1);
+        assert_eq!(damerau_levenshtein("cargo", "carog"), 1);
+        assert_eq!(damerau_levenshtein("cargo", "garco"), 2);
+        assert_eq!(damerau_levenshtein("git", "git"), 0);
     }
 
     fn make_candidates_with_kind(items: &[(&str, &str)]) -> Vec<Candidate> {

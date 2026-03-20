@@ -126,6 +126,11 @@ _zacrs_tab_complete() {
         candidates_str="$(_zacrs_gather "$LBUFFER")"
     fi
 
+    # タイポ補正: prefix matchで候補なし & コマンド位置 → 全コマンドをfuzzyに渡す
+    if [[ -z "$candidates_str" && "$LBUFFER" == "$prefix" && ${#prefix} -ge 2 ]]; then
+        candidates_str="$(_zacrs_gather --all-commands)"
+    fi
+
     # 候補なし → default zsh 補完にフォールバック
     if [[ -z "$candidates_str" ]]; then
         zle expand-or-complete
@@ -190,6 +195,12 @@ _zacrs_line_pre_redraw() {
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
     fi
+
+    # タイポ補正: prefix matchで候補なし & コマンド位置 → 全コマンドをfuzzyに渡す
+    if [[ -z "$candidates_str" && "$LBUFFER" == "$prefix" && ${#prefix} -ge 2 ]]; then
+        candidates_str="$(_zacrs_gather --all-commands)"
+    fi
+
     [[ -z "$candidates_str" ]] && return
 
     local -a cands

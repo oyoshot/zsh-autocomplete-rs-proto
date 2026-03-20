@@ -5,6 +5,25 @@
 # Format: text\tdescription\tkind
 
 _zacrs_gather() {
+    # 全コマンドモード: prefix filterなしで全候補を出力
+    if [[ "$1" == "--all-commands" ]]; then
+        local cmd
+        for cmd in ${(k)commands}; do
+            printf '%s\tcommand\tcommand\n' "$cmd"
+        done
+        for cmd in ${(k)aliases}; do
+            printf '%s\talias\talias\n' "$cmd"
+        done
+        for cmd in ${(k)builtins}; do
+            printf '%s\tbuiltin\tbuiltin\n' "$cmd"
+        done
+        for cmd in ${(k)functions}; do
+            [[ "$cmd" == _* ]] && continue
+            printf '%s\tfunction\tfunction\n' "$cmd"
+        done
+        return
+    fi
+
     local lbuffer="$1"
     local prefix="${lbuffer##* }"
     # 空バッファ（コマンド未入力）のみスキップ
