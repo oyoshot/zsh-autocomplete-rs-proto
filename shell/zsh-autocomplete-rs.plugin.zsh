@@ -139,7 +139,10 @@ _zacrs_tab_complete() {
     # 単一候補 → 即補完
     if [[ ${#cands[@]} -eq 1 ]]; then
         local text="${cands[1]%%	*}"
+        local kind="${${cands[1]##*	}}"
         LBUFFER="${LBUFFER%$prefix}${text}"
+        [[ "$kind" == "directory" && "$text" != */ ]] && LBUFFER+="/"
+        _zacrs_prev_lbuffer="$LBUFFER"
         unset POSTDISPLAY
         zle reset-prompt
         return

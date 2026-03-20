@@ -44,16 +44,17 @@ _zacrs_compsys_func() {
         (( _zacrs_compadd_calls++ ))
 
         # Skip probe calls that use -O or -D (internal completion system tests)
-        local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _is_file=0
+        local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0
         local _prev=""
         for _a in "$@"; do
-            if [[ "$_prev" == -[PSX] ]]; then
+            if [[ "$_prev" == -[pPSX] ]]; then
                 : # この "--" はフラグの値 → breakしない
             else
                 [[ "$_a" == "--" ]] && break
             fi
             [[ "$_a" == "-O" || "$_a" == "-D" ]] && { _skip=1; break; }
             [[ "$_prev" == "-P" ]] && _vis_prefix="$_a"
+            [[ "$_prev" == "-p" ]] && _hidden_prefix="$_a"
             [[ "$_prev" == "-S" ]] && _vis_suffix="$_a"
             [[ "$_prev" == "-X" ]] && _xdesc="$_a"
             [[ "$_a" == "-f" ]] && _is_file=1
@@ -66,12 +67,13 @@ _zacrs_compsys_func() {
 
             _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
 
+            local _full_prefix="${IPREFIX}${_hidden_prefix}${_vis_prefix}"
             local _m
             for _m in "${_zacrs_cap[@]}"; do
-                local _text="${_vis_prefix}${_m}${_vis_suffix}"
+                local _text="${_full_prefix}${_m}${_vis_suffix}"
                 local _kind=""
                 if (( _is_file )); then
-                    [[ -d "$_m" ]] && _kind="directory" || _kind="file"
+                    [[ -d "${_full_prefix}${_m}" ]] && _kind="directory" || _kind="file"
                 elif [[ "$_text" == */ ]]; then
                     _kind="directory"
                 fi
