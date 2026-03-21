@@ -93,10 +93,12 @@ impl FuzzyMatcher {
         let utf32_buf = &mut self.utf32_buf;
         let mut results: Vec<ScoredMatch> =
             Vec::with_capacity(fuzzy_scope.map_or(candidates.len(), <[usize]>::len));
+        let mut has_exact_match = false;
 
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
+                has_exact_match |= candidate.text == query;
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
                 if let Some(score) = pattern.score(haystack, matcher) {
@@ -108,6 +110,7 @@ impl FuzzyMatcher {
             }
         } else {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
+                has_exact_match |= candidate.text == query;
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
                 if let Some(score) = pattern.score(haystack, matcher) {
@@ -119,7 +122,7 @@ impl FuzzyMatcher {
             }
         }
 
-        if query.len() >= 2 {
+        if query.len() >= 2 && !has_exact_match {
             let dl_results = self.damerau_levenshtein_fallback_matches(candidates, query);
             if !dl_results.is_empty() {
                 let seen: HashSet<usize> = results.iter().map(|r| r.candidate_idx).collect();
@@ -154,7 +157,9 @@ impl FuzzyMatcher {
         let matcher = &mut self.matcher;
         let utf32_buf = &mut self.utf32_buf;
         let mut results = Vec::with_capacity(candidates.len());
+        let mut has_exact_match = false;
         for candidate in candidates {
+            has_exact_match |= candidate.text == query;
             utf32_buf.clear();
             let haystack = Utf32Str::new(&candidate.text, utf32_buf);
             if let Some(score) = pattern.score(haystack, matcher) {
@@ -165,7 +170,7 @@ impl FuzzyMatcher {
             }
         }
 
-        if query.len() >= 2 {
+        if query.len() >= 2 && !has_exact_match {
             let dl_results = self.damerau_levenshtein_fallback_candidates(candidates, query);
             if !dl_results.is_empty() {
                 let seen: HashSet<&str> = results
@@ -623,6 +628,20 @@ mod tests {
         let results = m.filter(&candidates, "gti");
         let git_count = results.iter().filter(|r| r.candidate.text == "git").count();
         assert_eq!(git_count, 1, "git should appear exactly once");
+    }
+
+    #[test]
+    fn exact_match_skips_dl_near_miss_candidates() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["cargo-build", "cargo-builc"]);
+        let results = m.filter(&candidates, "cargo-build");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(
+            texts,
+            vec!["cargo-build"],
+            "exact match should not pull in DL near-miss candidates: {texts:?}"
+        );
     }
 
     #[test]
