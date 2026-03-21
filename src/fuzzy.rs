@@ -23,6 +23,7 @@ pub struct ScoredMatch {
     pub score: u32,
 }
 
+#[derive(Default)]
 struct DamerauScratch {
     query_chars: Vec<char>,
     candidate_chars: Vec<char>,
@@ -247,18 +248,6 @@ fn dl_match_score(query_len: usize, candidate_len: usize, dist: usize) -> u32 {
     200u32.saturating_sub(dist as u32 * 30 + len_gap * 10)
 }
 
-impl Default for DamerauScratch {
-    fn default() -> Self {
-        Self {
-            query_chars: Vec::new(),
-            candidate_chars: Vec::new(),
-            prev_prev: Vec::new(),
-            prev: Vec::new(),
-            curr: Vec::new(),
-        }
-    }
-}
-
 impl DamerauScratch {
     fn set_query(&mut self, query: &str) {
         self.query_chars.clear();
@@ -354,8 +343,8 @@ fn damerau_levenshtein_chars(
 
     prev[0] = 0;
     let initial_end = max_dist.map_or(len_b, |dist| len_b.min(dist));
-    for j in 1..=initial_end {
-        prev[j] = j;
+    for (j, slot) in prev.iter_mut().enumerate().take(initial_end + 1).skip(1) {
+        *slot = j;
     }
 
     let eq = |x: char, y: char| -> bool {
