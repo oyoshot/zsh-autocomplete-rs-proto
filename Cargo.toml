@@ -39,3 +39,7 @@ harness = false
 [[bench]]
 name = "daemon_bench"
 harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
