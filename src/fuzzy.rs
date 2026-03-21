@@ -32,6 +32,19 @@ struct DamerauScratch {
     curr: Vec<usize>,
 }
 
+#[derive(Clone, Copy)]
+struct DamerauOptions {
+    case_insensitive: bool,
+    normalize_chars: bool,
+    max_dist: Option<usize>,
+}
+
+struct DamerauRows<'a> {
+    prev_prev: &'a mut Vec<usize>,
+    prev: &'a mut Vec<usize>,
+    curr: &'a mut Vec<usize>,
+}
+
 impl Default for FuzzyMatcher {
     fn default() -> Self {
         Self::new()
@@ -172,9 +185,12 @@ impl FuzzyMatcher {
     ) -> Vec<ScoredMatch> {
         self.dl_scratch.set_query(query);
         let query_len = self.dl_scratch.query_len();
-        let max_dist = if query_len <= 4 { 1 } else { 2 };
-        let case_insensitive = !graphemes(query).any(is_upper_case);
-        let normalize_chars = should_normalize_smart(query);
+        let options = DamerauOptions {
+            case_insensitive: !graphemes(query).any(is_upper_case),
+            normalize_chars: should_normalize_smart(query),
+            max_dist: Some(if query_len <= 4 { 1 } else { 2 }),
+        };
+        let max_dist = options.max_dist.unwrap_or(usize::MAX);
 
         let mut results = Vec::new();
         for (candidate_idx, candidate) in candidates.iter().enumerate() {
@@ -184,9 +200,7 @@ impl FuzzyMatcher {
                 continue;
             }
 
-            let dist = self
-                .dl_scratch
-                .distance(case_insensitive, normalize_chars, Some(max_dist));
+            let dist = self.dl_scratch.distance(options);
             if dist <= max_dist {
                 let score = dl_match_score(query_len, candidate_len, dist);
                 results.push(ScoredMatch {
@@ -206,9 +220,12 @@ impl FuzzyMatcher {
     ) -> Vec<ScoredCandidate> {
         self.dl_scratch.set_query(query);
         let query_len = self.dl_scratch.query_len();
-        let max_dist = if query_len <= 4 { 1 } else { 2 };
-        let case_insensitive = !graphemes(query).any(is_upper_case);
-        let normalize_chars = should_normalize_smart(query);
+        let options = DamerauOptions {
+            case_insensitive: !graphemes(query).any(is_upper_case),
+            normalize_chars: should_normalize_smart(query),
+            max_dist: Some(if query_len <= 4 { 1 } else { 2 }),
+        };
+        let max_dist = options.max_dist.unwrap_or(usize::MAX);
 
         let mut results = Vec::new();
         for candidate in candidates {
@@ -218,9 +235,7 @@ impl FuzzyMatcher {
                 continue;
             }
 
-            let dist = self
-                .dl_scratch
-                .distance(case_insensitive, normalize_chars, Some(max_dist));
+            let dist = self.dl_scratch.distance(options);
             if dist <= max_dist {
                 let score = dl_match_score(query_len, candidate_len, dist);
                 results.push(ScoredCandidate {
@@ -280,26 +295,18 @@ impl DamerauScratch {
         self.candidate_chars.len()
     }
 
-    fn distance(
-        &mut self,
-        case_insensitive: bool,
-        normalize_chars: bool,
-        max_dist: Option<usize>,
-    ) -> usize {
+    fn distance(&mut self, options: DamerauOptions) -> usize {
         let query_chars = &self.query_chars;
         let candidate_chars = &self.candidate_chars;
-        let prev_prev = &mut self.prev_prev;
-        let prev = &mut self.prev;
-        let curr = &mut self.curr;
         damerau_levenshtein_chars(
             query_chars,
             candidate_chars,
-            case_insensitive,
-            normalize_chars,
-            max_dist,
-            prev_prev,
-            prev,
-            curr,
+            options,
+            DamerauRows {
+                prev_prev: &mut self.prev_prev,
+                prev: &mut self.prev,
+                curr: &mut self.curr,
+            },
         )
     }
 }
@@ -349,13 +356,19 @@ fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
 fn damerau_levenshtein_chars(
     a: &[char],
     b: &[char],
-    case_insensitive: bool,
-    normalize_chars: bool,
-    max_dist: Option<usize>,
-    prev_prev: &mut Vec<usize>,
-    prev: &mut Vec<usize>,
-    curr: &mut Vec<usize>,
+    options: DamerauOptions,
+    rows: DamerauRows<'_>,
 ) -> usize {
+    let DamerauOptions {
+        case_insensitive,
+        normalize_chars,
+        max_dist,
+    } = options;
+    let DamerauRows {
+        prev_prev,
+        prev,
+        curr,
+    } = rows;
     let len_a = a.len();
     let len_b = b.len();
     let row_len = len_b + 1;
@@ -434,15 +447,20 @@ pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
     let mut prev_prev = Vec::new();
     let mut prev = Vec::new();
     let mut curr = Vec::new();
+    let options = DamerauOptions {
+        case_insensitive: false,
+        normalize_chars: false,
+        max_dist: None,
+    };
     damerau_levenshtein_chars(
         &a,
         &b,
-        false,
-        false,
-        None,
-        &mut prev_prev,
-        &mut prev,
-        &mut curr,
+        options,
+        DamerauRows {
+            prev_prev: &mut prev_prev,
+            prev: &mut prev,
+            curr: &mut curr,
+        },
     )
 }
 

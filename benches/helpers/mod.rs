@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use zsh_autocomplete_rs::candidate::Candidate;
 
 const COMMAND_NAMES: &[&str] = &[
