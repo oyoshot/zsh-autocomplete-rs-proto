@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -39,11 +40,7 @@ pub fn start() -> io::Result<()> {
 
     let listener = UnixListener::bind(&socket_path)?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    }
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
     let config = Config::load();
     let config_mtime = config_file_mtime();
