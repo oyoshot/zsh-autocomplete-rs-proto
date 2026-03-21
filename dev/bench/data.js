@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774087345394,
+  "lastUpdate": 1774104801629,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -1385,6 +1385,204 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 761,
             "range": "± 13",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf39c8178e7876bd2b07164c0119e13781a3cb5e",
+          "message": "feat(shell): chain subcommand popup after completion confirmation (#9)\n\n* feat(shell): chain subcommand popup after completion confirmation\n\nWhen a candidate is confirmed (Enter) or a single candidate is auto-inserted,\nautomatically trigger the next subcommand popup if the result ends with a\nspace or slash. This chains completions so that selecting \"go\" immediately\nshows go's subcommands.\n\nFor lazy-loaded completions (uv, mise, op, etc.), retry compsys once when\nthe first call returns 0 candidates — the first call triggers the deferred\nload and the second retrieves results. This retry also fires at subcommand\nposition (empty naive_prefix) during normal typing, not just chains.\n\nAlso fix single-candidate auto-insert to add trailing space for\ncommand/alias/builtin/function/file kinds, matching Rust text_with_suffix().\nGuard gather fallback to require non-empty naive_prefix, preventing file\nglob on empty prefix.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): chain after compsys command completion\n\n* fix(shell): restore chained gather fallback\n\n* fix(shell): preserve chained redraw after popup confirm\n\n* fix(shell): preserve chained redraw for single match\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-21T23:45:11+09:00",
+          "tree_id": "4a8286f6d3d197216ec23969437c8c0ef31ab6de",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/bf39c8178e7876bd2b07164c0119e13781a3cb5e"
+        },
+        "date": 1774104800982,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 8018,
+            "range": "± 817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74026,
+            "range": "± 479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 938131,
+            "range": "± 48012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 195238,
+            "range": "± 9082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 98536,
+            "range": "± 5347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 77060,
+            "range": "± 845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 15907,
+            "range": "± 360",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/typo",
+            "value": 28102,
+            "range": "± 597",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 163714,
+            "range": "± 4242",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11361,
+            "range": "± 245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/identical",
+            "value": 279,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/transposition",
+            "value": 141,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/substitution",
+            "value": 280,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/long_strings",
+            "value": 2163,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "damerau_levenshtein/different_len",
+            "value": 207,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 101,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 35,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 98,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 92,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 70,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 856,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7570,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 749,
+            "range": "± 14",
             "unit": "ns/iter"
           }
         ]
