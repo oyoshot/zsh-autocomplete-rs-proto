@@ -10,6 +10,8 @@ pub struct App {
     pub max_visible: usize,
     pub cursor_row: u16,
     pub cursor_col: u16,
+    pub term_cols: u16,
+    pub term_rows: u16,
     pub prefix: String,
     fuzzy: FuzzyMatcher,
 }
@@ -68,6 +70,8 @@ impl App {
             max_visible: 10,
             cursor_row,
             cursor_col,
+            term_cols,
+            term_rows,
             prefix,
             fuzzy,
         };

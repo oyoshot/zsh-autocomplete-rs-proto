@@ -1,5 +1,4 @@
 use crate::app::App;
-use crossterm::terminal;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_POPUP_WIDTH: u16 = 60;
@@ -14,7 +13,8 @@ pub struct Popup {
 
 impl Popup {
     pub fn compute(app: &App) -> Self {
-        let (term_cols, term_rows) = terminal::size().unwrap_or((80, 24));
+        let term_cols = app.term_cols;
+        let term_rows = app.term_rows;
 
         let visible = app.visible_candidates();
         let filter_display = format!(" {} ", &app.filter_text);
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn popup_above_when_no_space() {
-        let (_, term_rows) = terminal::size().unwrap_or((80, 24));
+        let (_, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let cursor_row = term_rows.saturating_sub(2);
         let app = make_app(&["alpha", "beta", "gamma"], "", cursor_row, 10);
         let popup = Popup::compute(&app);
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn popup_col_near_right_edge() {
-        let (term_cols, _) = terminal::size().unwrap_or((80, 24));
+        let (term_cols, _) = crossterm::terminal::size().unwrap_or((80, 24));
         let cursor_col = term_cols.saturating_sub(5);
         let app = make_app(&["alpha", "beta"], "", 5, cursor_col);
         let popup = Popup::compute(&app);

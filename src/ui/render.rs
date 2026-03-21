@@ -43,7 +43,7 @@ fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
 /// Scroll the terminal to ensure enough blank space below the cursor for the popup.
 /// Updates `app.cursor_row` and `app.max_visible` to reflect the new state.
 pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<()> {
-    let (_, term_rows) = terminal::size().unwrap_or((80, 24));
+    let term_rows = app.term_rows;
 
     // Cap max_visible if terminal is too short
     let max_popup_height = term_rows.saturating_sub(1); // 1 row for prompt
