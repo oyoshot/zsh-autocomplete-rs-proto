@@ -215,6 +215,7 @@ _zacrs_apply_result() {
     # Confirm (code 0) で末尾がスペース/スラッシュなら
     # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
     if [[ $result_code -eq 0 && "$LBUFFER" == *[\ /] ]]; then
+        _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
         _zacrs_prev_lbuffer="$LBUFFER"
