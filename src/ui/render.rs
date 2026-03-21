@@ -172,9 +172,9 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     Ok(popup)
 }
 
-pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
-    let mut buf = std::io::BufWriter::new(&mut *tty);
-    let _ = render_popup(&mut buf, app, theme)?;
+pub fn draw_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
+    let mut buf = Vec::with_capacity(2048);
+    let popup = render_popup(&mut buf, app, theme)?;
 
     // Update filter_text on the prompt line
     let prefix_w = UnicodeWidthStr::width(app.prefix.as_str()) as u16;
@@ -199,8 +199,14 @@ pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Resul
         cursor::MoveTo(cursor_end_col, app.cursor_row),
         cursor::Show,
     )?;
-    buf.flush()?;
 
+    Ok((buf, popup))
+}
+
+pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
+    let (bytes, _) = draw_to_bytes(app, theme)?;
+    tty.write_all(&bytes)?;
+    tty.flush()?;
     Ok(())
 }
 
@@ -240,8 +246,8 @@ pub fn clear_rect(
     Ok(())
 }
 
-pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
-    let mut buf = std::io::BufWriter::new(&mut *tty);
+pub fn clear_to_bytes(app: &App) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(512);
     let popup = Popup::compute(app);
 
     crossterm::queue!(&mut buf, cursor::SavePosition)?;
@@ -267,8 +273,14 @@ pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     )?;
 
     crossterm::queue!(&mut buf, cursor::RestorePosition)?;
-    buf.flush()?;
 
+    Ok(buf)
+}
+
+pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
+    let bytes = clear_to_bytes(app)?;
+    tty.write_all(&bytes)?;
+    tty.flush()?;
     Ok(())
 }
 
@@ -386,6 +398,43 @@ mod tests {
         let text_w = UnicodeWidthStr::width(layout.text.as_str());
         let desc_w = UnicodeWidthStr::width(layout.description.as_str());
         assert_eq!(text_w + layout.gap + desc_w, 20);
+    }
+
+    #[test]
+    fn draw_to_bytes_produces_output() {
+        let candidates = vec![
+            Candidate {
+                text: "git".to_string(),
+                description: "command".to_string(),
+                kind: "command".to_string(),
+            },
+            Candidate {
+                text: "grep".to_string(),
+                description: "command".to_string(),
+                kind: "command".to_string(),
+            },
+        ];
+        let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
+
+        let (bytes, popup) = draw_to_bytes(&app, &Theme::default()).unwrap();
+
+        assert!(!bytes.is_empty());
+        assert!(popup.height > 0);
+        assert!(popup.width > 0);
+    }
+
+    #[test]
+    fn clear_to_bytes_produces_output() {
+        let candidates = vec![Candidate {
+            text: "git".to_string(),
+            description: String::new(),
+            kind: String::new(),
+        }];
+        let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
+
+        let bytes = clear_to_bytes(&app).unwrap();
+
+        assert!(!bytes.is_empty());
     }
 
     #[test]

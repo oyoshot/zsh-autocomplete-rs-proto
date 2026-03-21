@@ -7,8 +7,9 @@ use std::time::SystemTime;
 
 use crate::app::App;
 use crate::candidate::Candidate;
-use crate::config::{Config, Theme};
+use crate::config::{Config, KeyBindings, Theme};
 use crate::fuzzy::FuzzyMatcher;
+use crate::input::{self, Action};
 use crate::protocol::{self, Request, Response};
 use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
@@ -17,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 struct DaemonServer {
     config: Config,
     theme: Theme,
+    key_bindings: KeyBindings,
     config_mtime: Option<SystemTime>,
     socket_path: PathBuf,
     fuzzy: Option<FuzzyMatcher>,
@@ -51,10 +53,12 @@ pub fn start() -> io::Result<()> {
     let config = Config::load();
     let config_mtime = config_file_mtime();
     let theme = config.theme();
+    let key_bindings = config.key_bindings();
 
     let mut server = DaemonServer {
         config,
         theme,
+        key_bindings,
         config_mtime,
         socket_path,
         fuzzy: Some(FuzzyMatcher::new()),
@@ -113,6 +117,7 @@ impl DaemonServer {
         if reloaded {
             self.config = Config::load();
             self.theme = self.config.theme();
+            self.key_bindings = self.config.key_bindings();
             self.config_mtime = current_mtime;
             info!(reloaded = true, "reloaded config");
         }
@@ -288,34 +293,14 @@ impl DaemonServer {
                     }
                 };
 
-                // Read candidates until END line (max 1MB)
-                const MAX_TSV_BYTES: usize = 1_048_576;
-                let mut tsv = String::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).is_err() || line.is_empty() {
-                        break;
-                    }
-                    if line.trim_end() == "END" {
-                        break;
-                    }
-                    if tsv.len() + line.len() > MAX_TSV_BYTES {
-                        // Drain remaining lines until END
-                        loop {
-                            let mut drain = String::new();
-                            if reader.read_line(&mut drain).is_err()
-                                || drain.is_empty()
-                                || drain.trim_end() == "END"
-                            {
-                                break;
-                            }
-                        }
-                        let _ = writeln!(writer, "ERROR payload too large");
+                let tsv = match read_tsv_payload(reader) {
+                    Ok(tsv) => tsv,
+                    Err(msg) => {
+                        let _ = writeln!(writer, "ERROR {}", msg);
                         let _ = writer.flush();
                         return false;
                     }
-                    tsv.push_str(&line);
-                }
+                };
 
                 let _span = info_span!(
                     "render",
@@ -354,6 +339,58 @@ impl DaemonServer {
                         let _ = writeln!(writer, "ERROR {}", msg);
                     }
                 }
+                false
+            }
+            "complete" if parts.len() == 5 => {
+                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
+                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
+                let term_cols: u16 = parts[3].parse().unwrap_or(80);
+                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let prefix = match read_text_line(reader) {
+                    Ok(prefix) => prefix,
+                    Err(_) => {
+                        warn!("invalid text complete prefix");
+                        let _ = writeln!(writer, "ERROR invalid prefix");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+
+                let tsv = match read_tsv_payload(reader) {
+                    Ok(tsv) => tsv,
+                    Err(msg) => {
+                        let _ = writeln!(writer, "ERROR {}", msg);
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+
+                let _span = info_span!(
+                    "complete",
+                    protocol = "text",
+                    prefix_len = prefix.len(),
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    payload_bytes = tsv.len()
+                )
+                .entered();
+
+                // Extend timeout for interactive session
+                use std::time::Duration;
+                stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
+
+                self.handle_complete(
+                    reader,
+                    &mut writer,
+                    prefix,
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    &tsv,
+                );
                 false
             }
             "clear" if parts.len() == 4 => {
@@ -498,6 +535,222 @@ impl DaemonServer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn handle_complete(
+        &mut self,
+        reader: &mut BufReader<&UnixStream>,
+        writer: &mut io::BufWriter<&UnixStream>,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        tsv: &str,
+    ) {
+        let candidates: Vec<Candidate> = tsv
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(Candidate::parse_line)
+            .collect();
+
+        if candidates.is_empty() {
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return;
+        }
+
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let mut app = App::new_with_matcher(
+            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
+        );
+
+        // Cap max_visible
+        let max_popup_height = term_rows.saturating_sub(1);
+        if app.max_visible as u16 + 2 > max_popup_height {
+            app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+        }
+
+        if app.max_visible == 0 {
+            self.fuzzy = Some(app.take_fuzzy());
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return;
+        }
+
+        // ensure_space: compute scroll bytes
+        let popup_height = app.max_visible as u16 + 2;
+        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+        let mut scroll_bytes = Vec::new();
+        if space_below < popup_height {
+            let scroll_amount = (popup_height - space_below).min(app.cursor_row);
+            if scroll_amount > 0 {
+                let _ = crossterm::queue!(
+                    &mut scroll_bytes,
+                    crossterm::terminal::ScrollUp(scroll_amount)
+                );
+                app.cursor_row -= scroll_amount;
+            }
+        }
+
+        // Initial frame
+        let send_frame = |writer: &mut io::BufWriter<&UnixStream>,
+                          app: &App,
+                          theme: &Theme,
+                          extra_prefix: &[u8]|
+         -> io::Result<()> {
+            let (mut tty_bytes, popup) = ui::render::draw_to_bytes(app, theme)?;
+            if !extra_prefix.is_empty() {
+                let mut combined = extra_prefix.to_vec();
+                combined.append(&mut tty_bytes);
+                tty_bytes = combined;
+            }
+            writeln!(
+                writer,
+                "FRAME popup_row={} popup_height={} cursor_row={} {}",
+                popup.row,
+                popup.height,
+                app.cursor_row,
+                tty_bytes.len()
+            )?;
+            writer.write_all(&tty_bytes)?;
+            writer.flush()
+        };
+
+        if send_frame(writer, &app, &self.theme, &scroll_bytes).is_err() {
+            self.fuzzy = Some(app.take_fuzzy());
+            return;
+        }
+
+        // Interactive loop
+        let bindings = &self.key_bindings;
+        let theme = &self.theme;
+
+        loop {
+            let mut msg_line = String::new();
+            if reader.read_line(&mut msg_line).is_err() || msg_line.is_empty() {
+                break; // Connection closed
+            }
+            let msg_line = msg_line.trim_end();
+
+            if let Some(len_str) = msg_line.strip_prefix("KEY ") {
+                let byte_count: usize = len_str.parse().unwrap_or(0);
+                if byte_count == 0 || byte_count > 16 {
+                    let _ = writeln!(writer, "NONE");
+                    let _ = writer.flush();
+                    continue;
+                }
+                let mut key_buf = vec![0u8; byte_count];
+                if io::Read::read_exact(reader, &mut key_buf).is_err() {
+                    break;
+                }
+
+                let action = input::parse_raw_bytes(&key_buf, bindings);
+
+                match action {
+                    Action::MoveDown => {
+                        app.move_down();
+                        if send_frame(writer, &app, theme, &[]).is_err() {
+                            break;
+                        }
+                    }
+                    Action::MoveUp => {
+                        app.move_up();
+                        if send_frame(writer, &app, theme, &[]).is_err() {
+                            break;
+                        }
+                    }
+                    Action::PageDown => {
+                        app.page_down();
+                        if send_frame(writer, &app, theme, &[]).is_err() {
+                            break;
+                        }
+                    }
+                    Action::PageUp => {
+                        app.page_up();
+                        if send_frame(writer, &app, theme, &[]).is_err() {
+                            break;
+                        }
+                    }
+                    Action::TypeChar(c) => {
+                        let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
+                        app.type_char(c);
+                        if app.filtered.is_empty() {
+                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                            let _ = writer.flush();
+                            break;
+                        }
+                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                            break;
+                        }
+                    }
+                    Action::Backspace => {
+                        let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
+                        if !app.backspace() {
+                            let _ = writeln!(writer, "DONE 1 ");
+                            let _ = writer.flush();
+                            break;
+                        }
+                        if app.filtered.is_empty() || app.filter_text.len() < app.prefix.len() {
+                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                            let _ = writer.flush();
+                            break;
+                        }
+                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                            break;
+                        }
+                    }
+                    Action::Confirm => {
+                        let result = match app.selected_candidate() {
+                            Some(c) => {
+                                let suffix = match c.kind.as_str() {
+                                    "directory" => {
+                                        if c.text.ends_with('/') {
+                                            ""
+                                        } else {
+                                            "/"
+                                        }
+                                    }
+                                    "command" | "alias" | "builtin" | "function" | "file" => " ",
+                                    _ => "",
+                                };
+                                format!("{}{}", c.text, suffix)
+                            }
+                            None => String::new(),
+                        };
+                        let _ = writeln!(writer, "DONE 0 {}", result);
+                        let _ = writer.flush();
+                        break;
+                    }
+                    Action::DismissWithSpace => {
+                        let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                        let _ = writer.flush();
+                        break;
+                    }
+                    Action::Cancel => {
+                        let text = if app.filter_text != app.prefix {
+                            &app.filter_text
+                        } else {
+                            ""
+                        };
+                        let _ = writeln!(writer, "DONE 1 {}", text);
+                        let _ = writer.flush();
+                        break;
+                    }
+                    Action::Resize(_, _) | Action::None => {
+                        let _ = writeln!(writer, "NONE");
+                        let _ = writer.flush();
+                    }
+                }
+            } else {
+                // Unknown message, ignore
+                let _ = writeln!(writer, "NONE");
+                let _ = writer.flush();
+            }
+        }
+
+        self.fuzzy = Some(app.take_fuzzy());
+    }
+
     fn handle_clear(&self, popup_row: u16, popup_height: u16, cursor_row: u16) -> Response {
         match ui::render::clear_rect_to_bytes(popup_row, popup_height, cursor_row) {
             Ok(tty_bytes) => {
@@ -537,6 +790,35 @@ fn init_tracing() {
 fn config_file_mtime() -> Option<SystemTime> {
     let path = dirs::config_dir()?.join("zacrs").join("config.toml");
     fs::metadata(path).ok()?.modified().ok()
+}
+
+fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
+    const MAX_TSV_BYTES: usize = 1_048_576;
+    let mut tsv = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() || line.is_empty() {
+            break;
+        }
+        if line.trim_end() == "END" {
+            break;
+        }
+        if tsv.len() + line.len() > MAX_TSV_BYTES {
+            // Drain remaining lines until END
+            loop {
+                let mut drain = String::new();
+                if reader.read_line(&mut drain).is_err()
+                    || drain.is_empty()
+                    || drain.trim_end() == "END"
+                {
+                    break;
+                }
+            }
+            return Err("payload too large".to_string());
+        }
+        tsv.push_str(&line);
+    }
+    Ok(tsv)
 }
 
 fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {

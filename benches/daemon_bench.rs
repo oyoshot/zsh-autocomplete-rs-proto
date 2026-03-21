@@ -82,5 +82,74 @@ fn daemon_render(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, daemon_ping, daemon_render);
+fn build_complete_request(candidates: &[zsh_autocomplete_rs::candidate::Candidate]) -> Vec<u8> {
+    let mut req = String::from("complete 5 2 80 24\n");
+    req.push_str("gi\n");
+    for c in candidates {
+        req.push_str(&format!("{}\t{}\t{}\n", c.text, c.description, c.kind));
+    }
+    req.push_str("END\n");
+    req.into_bytes()
+}
+
+fn read_frame(reader: &mut BufReader<&UnixStream>) -> Option<usize> {
+    let mut header = String::new();
+    reader.read_line(&mut header).ok()?;
+    if !header.starts_with("FRAME") {
+        return None;
+    }
+    let tty_len: usize = header.trim().rsplit(' ').next()?.parse().ok()?;
+    if tty_len > 0 {
+        let mut tty_bytes = vec![0u8; tty_len];
+        reader.read_exact(&mut tty_bytes).ok()?;
+    }
+    Some(tty_len)
+}
+
+/// Benchmark a full interactive complete session:
+/// 1. Send complete request (50 candidates)
+/// 2. Receive initial FRAME
+/// 3. Send KEY ↓ twice, receive FRAME each time
+/// 4. Send KEY Enter, receive DONE
+fn daemon_complete_session(c: &mut Criterion) {
+    let sock = socket_path();
+    if !text_ping(&sock) {
+        return;
+    }
+
+    let candidates = helpers::generate_candidates(50);
+    let request = build_complete_request(&candidates);
+
+    let arrow_down = b"KEY 3\n\x1b[B";
+    let enter_key = b"KEY 1\n\r";
+
+    c.bench_function("daemon_complete_session", |b| {
+        b.iter(|| {
+            let stream = UnixStream::connect(&sock).unwrap();
+            let mut writer = &stream;
+            let mut reader = BufReader::new(&stream);
+
+            // Send complete request + read initial FRAME
+            writer.write_all(&request).unwrap();
+            read_frame(&mut reader).unwrap();
+
+            // Two arrow-down keypresses
+            writer.write_all(arrow_down).unwrap();
+            read_frame(&mut reader).unwrap();
+            writer.write_all(arrow_down).unwrap();
+            read_frame(&mut reader).unwrap();
+
+            // Confirm with Enter
+            writer.write_all(enter_key).unwrap();
+            let mut done_line = String::new();
+            reader.read_line(&mut done_line).unwrap();
+            assert!(
+                done_line.starts_with("DONE"),
+                "expected DONE, got: {done_line}"
+            );
+        });
+    });
+}
+
+criterion_group!(benches, daemon_ping, daemon_render, daemon_complete_session);
 criterion_main!(benches);

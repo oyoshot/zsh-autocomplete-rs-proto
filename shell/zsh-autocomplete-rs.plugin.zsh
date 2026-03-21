@@ -28,6 +28,9 @@ typeset -g _zacrs_socket_path=""
 
 # === Daemon lifecycle ===
 
+# Try to load zsh/system for sysread (used by daemon complete)
+zmodload zsh/system 2>/dev/null
+
 # Try to load zsh/net/unix for zsocket support
 if zmodload zsh/net/unix 2>/dev/null; then
     _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
@@ -184,6 +187,143 @@ _zacrs_clear_popup() {
     _zacrs_popup_visible=0
 }
 
+# === Daemon-based interactive complete (blocking, for Tab) ===
+
+# Parse FRAME header into _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len
+_zacrs_complete_parse_frame() {
+    local header="$1"
+    _f_popup_row=0 _f_popup_height=0 _f_cursor_row=0 _f_tty_len=0
+    local token
+    local last_token=""
+    for token in ${(s: :)header}; do
+        local key="${token%%=*}" val="${token#*=}"
+        case "$key" in
+            popup_row)    _f_popup_row=$val ;;
+            popup_height) _f_popup_height=$val ;;
+            cursor_row)   _f_cursor_row=$val ;;
+        esac
+        last_token="$token"
+    done
+    # Last token (no '=' sign) is tty_len
+    [[ "$last_token" != *=* ]] && _f_tty_len=$last_token
+}
+
+_zacrs_invoke_daemon() {
+    local prefix="$1" prefix_len="$2" candidates_str="$3"
+    local cursor_row=0 cursor_col=0
+    _zacrs_get_cursor_pos
+
+    local fd
+    zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+    fd=$REPLY
+
+    # Send complete request
+    print -u $fd -- "complete $cursor_row $cursor_col $COLUMNS $LINES"
+    printf '%s\n' "$prefix" >&$fd
+    printf '%s\n' "$candidates_str" >&$fd
+    print -u $fd "END"
+
+    # Read initial FRAME
+    local header
+    IFS= read -r -u $fd header
+    if [[ "$header" != FRAME* ]]; then
+        exec {fd}<&-
+        return 1
+    fi
+
+    # Open /dev/tty fds
+    local tty_rfd tty_wfd
+    exec {tty_rfd}</dev/tty
+    exec {tty_wfd}>/dev/tty
+
+    # Display initial frame
+    local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len
+    _zacrs_complete_parse_frame "$header"
+    if (( _f_tty_len > 0 )); then
+        sysread -i $fd -o $tty_wfd -c $_f_tty_len
+    fi
+    _zacrs_popup_visible=1
+    _zacrs_popup_row=$_f_popup_row
+    _zacrs_popup_height=$_f_popup_height
+
+    # Enter raw mode
+    local saved_stty
+    saved_stty=$(stty -g < /dev/tty)
+    stty raw -echo < /dev/tty
+
+    local result_code=1 result_text=""
+    {
+        while true; do
+            # Read key bytes from /dev/tty
+            local input=""
+            sysread -i $tty_rfd -c 1 input || break
+            if [[ "$input" = $'\e' ]]; then
+                local extra=""
+                while sysread -i $tty_rfd -c 1 -t 0 extra 2>/dev/null; do
+                    input+="$extra"
+                    extra=""
+                done
+            fi
+
+            # Send to daemon
+            printf 'KEY %d\n%s' "${#input}" "$input" >&$fd
+
+            # Read response
+            IFS= read -r -u $fd header
+            case "$header" in
+                FRAME*)
+                    _zacrs_complete_parse_frame "$header"
+                    if (( _f_tty_len > 0 )); then
+                        sysread -i $fd -o $tty_wfd -c $_f_tty_len
+                    fi
+                    _zacrs_popup_row=$_f_popup_row
+                    _zacrs_popup_height=$_f_popup_height
+                    ;;
+                DONE*)
+                    local -a parts
+                    parts=( ${(s: :)header} )
+                    result_code="${parts[2]}"
+                    # Extract text after "DONE <code> "
+                    result_text="${header#DONE [0-9]## }"
+                    [[ "$result_text" == "$header" ]] && result_text=""
+                    break
+                    ;;
+                NONE) ;;
+                *) break ;;
+            esac
+        done
+    } always {
+        stty "$saved_stty" < /dev/tty
+        exec {tty_rfd}<&- {tty_wfd}>&-
+    }
+
+    exec {fd}<&-
+    _zacrs_clear_popup
+
+    # Apply result to LBUFFER (same logic as _zacrs_invoke)
+    local base
+    if (( prefix_len > 0 )); then
+        base="${LBUFFER[1,-(prefix_len+1)]}"
+    else
+        base="$LBUFFER"
+    fi
+
+    if [[ $result_code -eq 0 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=0
+    elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=1
+    elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=0
+    fi
+
+    _zacrs_prev_lbuffer="$LBUFFER"
+    zle reset-prompt
+    return 0
+}
+
 # === Core: invoke Rust binary (blocking, for Tab) ===
 
 _zacrs_invoke() {
@@ -314,6 +454,11 @@ _zacrs_tab_complete() {
     fi
 
     _zacrs_suppressed=0
+
+    # Try daemon path first, fall back to subprocess
+    if (( _zacrs_daemon_available )); then
+        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" && return
+    fi
     _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str"
 }
 
