@@ -43,6 +43,50 @@ fn filter_query_variants(c: &mut Criterion) {
     group.finish();
 }
 
+fn filter_unicode_query_variants(c: &mut Criterion) {
+    let candidates = helpers::generate_unicode_candidates(1_000);
+    let queries = [
+        ("3char", "res"),
+        ("normalized_exact", "cafe"),
+        ("unicode_typo", "äbc"),
+        ("long_normalized", "sao-paulo"),
+        ("no_match", "ωωω"),
+    ];
+
+    let mut group = c.benchmark_group("filter_unicode_query_variants");
+    for (name, query) in queries {
+        group.bench_with_input(BenchmarkId::from_parameter(name), &query, |b, &q| {
+            let mut matcher = FuzzyMatcher::new();
+            b.iter(|| matcher.filter(&candidates, q));
+        });
+    }
+    group.finish();
+}
+
+fn filter_unicode_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("filter_unicode_scaling");
+    for size in [100, 1_000, 10_000] {
+        let candidates = helpers::generate_unicode_candidates(size);
+        group.bench_with_input(
+            BenchmarkId::new("normalized_primary", size),
+            &candidates,
+            |b, cands| {
+                let mut matcher = FuzzyMatcher::new();
+                b.iter(|| matcher.filter(cands, "cafe"));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("typo_fallback", size),
+            &candidates,
+            |b, cands| {
+                let mut matcher = FuzzyMatcher::new();
+                b.iter(|| matcher.filter(cands, "äbc"));
+            },
+        );
+    }
+    group.finish();
+}
+
 fn filter_sequence(c: &mut Criterion) {
     let candidates = helpers::generate_candidates(1_000);
     let mut group = c.benchmark_group("filter_sequence");
@@ -127,6 +171,8 @@ criterion_group!(
     benches,
     filter_scaling,
     filter_query_variants,
+    filter_unicode_query_variants,
+    filter_unicode_scaling,
     filter_sequence,
     app_backspace_sequence,
     bench_damerau_levenshtein
