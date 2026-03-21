@@ -113,6 +113,10 @@ impl DaemonServer {
     }
 
     fn handle_connection(&mut self, stream: UnixStream) -> bool {
+        use std::time::Duration;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+
         let mut reader = BufReader::new(&stream);
 
         // Peek at first byte to determine protocol
