@@ -51,7 +51,6 @@ pub fn start() -> io::Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    listener.set_nonblocking(true)?;
 
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
@@ -72,21 +71,26 @@ pub fn start() -> io::Result<()> {
 }
 
 fn serve(listener: UnixListener, server: Arc<DaemonServer>) -> io::Result<()> {
-    while !server.shutdown_requested.load(Ordering::SeqCst) {
+    loop {
         match listener.accept() {
             Ok((stream, _)) => {
+                if server.shutdown_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+
                 let server = Arc::clone(&server);
                 thread::spawn(move || {
                     if server.handle_connection(stream) {
                         info!("shutdown requested");
                         server.shutdown_requested.store(true, Ordering::SeqCst);
+                        let _ = UnixStream::connect(&server.socket_path);
                     }
                 });
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
             Err(e) => {
+                if server.shutdown_requested.load(Ordering::SeqCst) {
+                    break;
+                }
                 warn!(error = %e, "accept error");
                 eprintln!("daemon: accept error: {}", e);
             }
@@ -625,7 +629,6 @@ mod tests {
         let socket_path = unique_socket_path(name);
         fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
         let listener = UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
 
         let server = Arc::new(DaemonServer {
             state: Mutex::new(DaemonState {
