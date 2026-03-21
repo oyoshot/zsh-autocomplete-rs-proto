@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use crate::candidate::Candidate;
+use nucleo_matcher::chars::{graphemes, is_upper_case, normalize, to_lower_case};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
@@ -136,7 +137,7 @@ impl FuzzyMatcher {
             }
         }
 
-        if query.len() >= 2 && !has_exact_match {
+        if matcher_len(query) >= 2 && !has_exact_match {
             let dl_results = self.damerau_levenshtein_fallback_matches(candidates, query);
             if !dl_results.is_empty() {
                 let seen: HashSet<usize> = results.iter().map(|r| r.candidate_idx).collect();
@@ -185,7 +186,7 @@ impl FuzzyMatcher {
             }
         }
 
-        if query.len() >= 2 && !has_exact_match {
+        if matcher_len(query) >= 2 && !has_exact_match {
             let dl_results = self.damerau_levenshtein_fallback_candidates(candidates, query);
             if !dl_results.is_empty() {
                 let seen: HashSet<&str> = results
@@ -209,20 +210,25 @@ impl FuzzyMatcher {
         candidates: &[Candidate],
         query: &str,
     ) -> Vec<ScoredMatch> {
-        let max_dist = if query.len() <= 4 { 1 } else { 2 };
-        let case_insensitive = !query.chars().any(|c| c.is_uppercase());
         self.dl_scratch.set_query(query);
+        let query_len = self.dl_scratch.query_len();
+        let max_dist = if query_len <= 4 { 1 } else { 2 };
+        let case_insensitive = !graphemes(query).any(is_upper_case);
+        let normalize_chars = should_normalize_smart(query);
 
         let mut results = Vec::new();
         for (candidate_idx, candidate) in candidates.iter().enumerate() {
-            if query.len().abs_diff(candidate.text.len()) > max_dist {
+            self.dl_scratch.set_candidate(&candidate.text);
+            let candidate_len = self.dl_scratch.candidate_len();
+            if query_len.abs_diff(candidate_len) > max_dist {
                 continue;
             }
 
-            self.dl_scratch.set_candidate(&candidate.text);
-            let dist = self.dl_scratch.distance(case_insensitive, Some(max_dist));
+            let dist = self
+                .dl_scratch
+                .distance(case_insensitive, normalize_chars, Some(max_dist));
             if dist <= max_dist {
-                let score = dl_match_score(query.len(), candidate.text.len(), dist);
+                let score = dl_match_score(query_len, candidate_len, dist);
                 results.push(ScoredMatch {
                     candidate_idx,
                     score,
@@ -238,20 +244,25 @@ impl FuzzyMatcher {
         candidates: &[Candidate],
         query: &str,
     ) -> Vec<ScoredCandidate> {
-        let max_dist = if query.len() <= 4 { 1 } else { 2 };
-        let case_insensitive = !query.chars().any(|c| c.is_uppercase());
         self.dl_scratch.set_query(query);
+        let query_len = self.dl_scratch.query_len();
+        let max_dist = if query_len <= 4 { 1 } else { 2 };
+        let case_insensitive = !graphemes(query).any(is_upper_case);
+        let normalize_chars = should_normalize_smart(query);
 
         let mut results = Vec::new();
         for candidate in candidates {
-            if query.len().abs_diff(candidate.text.len()) > max_dist {
+            self.dl_scratch.set_candidate(&candidate.text);
+            let candidate_len = self.dl_scratch.candidate_len();
+            if query_len.abs_diff(candidate_len) > max_dist {
                 continue;
             }
 
-            self.dl_scratch.set_candidate(&candidate.text);
-            let dist = self.dl_scratch.distance(case_insensitive, Some(max_dist));
+            let dist = self
+                .dl_scratch
+                .distance(case_insensitive, normalize_chars, Some(max_dist));
             if dist <= max_dist {
-                let score = dl_match_score(query.len(), candidate.text.len(), dist);
+                let score = dl_match_score(query_len, candidate_len, dist);
                 results.push(ScoredCandidate {
                     candidate: candidate.clone(),
                     score,
@@ -268,18 +279,53 @@ fn dl_match_score(query_len: usize, candidate_len: usize, dist: usize) -> u32 {
     200u32.saturating_sub(dist as u32 * 30 + len_gap * 10)
 }
 
+fn matcher_len(text: &str) -> usize {
+    if text.is_ascii() {
+        text.len()
+    } else {
+        graphemes(text).count()
+    }
+}
+
+fn should_normalize_smart(query: &str) -> bool {
+    graphemes(query).all(|c| normalize(c) == c)
+}
+
+fn dl_compare_char(mut c: char, case_insensitive: bool, normalize_chars: bool) -> char {
+    if normalize_chars {
+        c = normalize(c);
+    }
+    if case_insensitive {
+        c = to_lower_case(c);
+    }
+    c
+}
+
 impl DamerauScratch {
     fn set_query(&mut self, query: &str) {
         self.query_chars.clear();
-        self.query_chars.extend(query.chars());
+        self.query_chars.extend(graphemes(query));
     }
 
     fn set_candidate(&mut self, candidate: &str) {
         self.candidate_chars.clear();
-        self.candidate_chars.extend(candidate.chars());
+        self.candidate_chars.extend(graphemes(candidate));
     }
 
-    fn distance(&mut self, case_insensitive: bool, max_dist: Option<usize>) -> usize {
+    fn query_len(&self) -> usize {
+        self.query_chars.len()
+    }
+
+    fn candidate_len(&self) -> usize {
+        self.candidate_chars.len()
+    }
+
+    fn distance(
+        &mut self,
+        case_insensitive: bool,
+        normalize_chars: bool,
+        max_dist: Option<usize>,
+    ) -> usize {
         let query_chars = &self.query_chars;
         let candidate_chars = &self.candidate_chars;
         let prev_prev = &mut self.prev_prev;
@@ -289,6 +335,7 @@ impl DamerauScratch {
             query_chars,
             candidate_chars,
             case_insensitive,
+            normalize_chars,
             max_dist,
             prev_prev,
             prev,
@@ -343,6 +390,7 @@ fn damerau_levenshtein_chars(
     a: &[char],
     b: &[char],
     case_insensitive: bool,
+    normalize_chars: bool,
     max_dist: Option<usize>,
     prev_prev: &mut Vec<usize>,
     prev: &mut Vec<usize>,
@@ -368,11 +416,8 @@ fn damerau_levenshtein_chars(
     }
 
     let eq = |x: char, y: char| -> bool {
-        if case_insensitive {
-            x.eq_ignore_ascii_case(&y)
-        } else {
-            x == y
-        }
+        dl_compare_char(x, case_insensitive, normalize_chars)
+            == dl_compare_char(y, case_insensitive, normalize_chars)
     };
 
     for i in 1..=len_a {
@@ -429,7 +474,16 @@ pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
     let mut prev_prev = Vec::new();
     let mut prev = Vec::new();
     let mut curr = Vec::new();
-    damerau_levenshtein_chars(&a, &b, false, None, &mut prev_prev, &mut prev, &mut curr)
+    damerau_levenshtein_chars(
+        &a,
+        &b,
+        false,
+        false,
+        None,
+        &mut prev_prev,
+        &mut prev,
+        &mut curr,
+    )
 }
 
 #[cfg(test)]
@@ -632,6 +686,30 @@ mod tests {
         assert!(
             !texts.contains(&"git"),
             "uppercase query should not match lowercase git (distance 2 > max_dist 1): {texts:?}"
+        );
+    }
+
+    #[test]
+    fn dl_smart_case_insensitive_for_unicode() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Äa", "cat"]);
+        let results = m.filter(&candidates, "äb");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            texts.contains(&"Äa"),
+            "lowercase unicode query should match Äa case-insensitively via DL: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn dl_smart_case_sensitive_for_unicode() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["äa", "cat"]);
+        let results = m.filter(&candidates, "Äb");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            !texts.contains(&"äa"),
+            "uppercase unicode query should not match lowercase candidate via DL: {texts:?}"
         );
     }
 
