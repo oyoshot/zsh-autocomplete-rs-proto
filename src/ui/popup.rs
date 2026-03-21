@@ -16,12 +16,13 @@ impl Popup {
         let term_cols = app.term_cols;
         let term_rows = app.term_rows;
 
-        let visible = app.visible_candidates();
+        let visible = app.visible_candidate_indices();
         let filter_display = format!(" {} ", &app.filter_text);
 
         let max_content_width = visible
             .iter()
-            .map(|c| {
+            .map(|&candidate_idx| {
+                let c = &app.all_candidates[candidate_idx];
                 let text_w = UnicodeWidthStr::width(c.text.as_str()) as u16;
                 let desc_w = if c.description.is_empty() {
                     0

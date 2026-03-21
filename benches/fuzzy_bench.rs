@@ -42,6 +42,33 @@ fn filter_query_variants(c: &mut Criterion) {
     group.finish();
 }
 
+fn filter_sequence(c: &mut Criterion) {
+    let candidates = helpers::generate_candidates(1_000);
+    let mut group = c.benchmark_group("filter_sequence");
+
+    group.bench_function("full_rescan_git", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| {
+            let _ = matcher.filter_matches(&candidates, "g", None);
+            let _ = matcher.filter_matches(&candidates, "gi", None);
+            let _ = matcher.filter_matches(&candidates, "git", None);
+        });
+    });
+
+    group.bench_function("incremental_git", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| {
+            let g = matcher.filter_matches(&candidates, "g", None);
+            let g_idx: Vec<usize> = g.iter().map(|r| r.candidate_idx).collect();
+            let gi = matcher.filter_matches(&candidates, "gi", Some(&g_idx));
+            let gi_idx: Vec<usize> = gi.iter().map(|r| r.candidate_idx).collect();
+            let _ = matcher.filter_matches(&candidates, "git", Some(&gi_idx));
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_damerau_levenshtein(c: &mut Criterion) {
     let pairs = [
         ("identical", "cargo", "cargo"),
@@ -68,6 +95,7 @@ criterion_group!(
     benches,
     filter_scaling,
     filter_query_variants,
+    filter_sequence,
     bench_damerau_levenshtein
 );
 criterion_main!(benches);

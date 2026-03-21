@@ -658,7 +658,7 @@ impl DaemonServer {
                     Action::TypeChar(c) => {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         app.type_char(c);
-                        if app.filtered.is_empty() {
+                        if app.filtered_indices.is_empty() {
                             let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
                             let _ = writer.flush();
                             break;
@@ -674,7 +674,9 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if app.filtered.is_empty() || app.filter_text.len() < app.prefix.len() {
+                        if app.filtered_indices.is_empty()
+                            || app.filter_text.len() < app.prefix.len()
+                        {
                             let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
                             let _ = writer.flush();
                             break;

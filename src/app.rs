@@ -5,7 +5,7 @@ const DEFAULT_MAX_VISIBLE: usize = 10;
 
 pub struct App {
     pub all_candidates: Vec<Candidate>,
-    pub filtered: Vec<Candidate>,
+    pub filtered_indices: Vec<usize>,
     pub filter_text: String,
     pub selected: usize,
     pub scroll_offset: usize,
@@ -67,7 +67,7 @@ impl App {
         let lcp = compute_common_prefix(&candidates, &prefix);
         let mut app = App {
             all_candidates: candidates,
-            filtered: Vec::new(),
+            filtered_indices: Vec::new(),
             filter_text: lcp,
             selected: 0,
             scroll_offset: 0,
@@ -85,17 +85,23 @@ impl App {
     }
 
     pub fn update_filter(&mut self) {
-        let scored = self.fuzzy.filter(&self.all_candidates, &self.filter_text);
-        self.filtered = scored.into_iter().map(|s| s.candidate).collect();
+        self.update_filter_with_scope(None);
+    }
+
+    fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>) {
+        let scored =
+            self.fuzzy
+                .filter_matches(&self.all_candidates, &self.filter_text, fuzzy_scope);
+        self.filtered_indices = scored.into_iter().map(|s| s.candidate_idx).collect();
         self.selected = 0;
         self.scroll_offset = 0;
     }
 
     pub fn move_down(&mut self) {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
-        if self.selected + 1 < self.filtered.len() {
+        if self.selected + 1 < self.filtered_indices.len() {
             self.selected += 1;
         } else {
             self.selected = 0;
@@ -107,13 +113,13 @@ impl App {
     }
 
     pub fn move_up(&mut self) {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         if self.selected > 0 {
             self.selected -= 1;
         } else {
-            self.selected = self.filtered.len() - 1;
+            self.selected = self.filtered_indices.len() - 1;
             self.scroll_offset = self.selected.saturating_sub(self.max_visible - 1);
         }
         if self.selected < self.scroll_offset {
@@ -122,17 +128,17 @@ impl App {
     }
 
     pub fn page_down(&mut self) {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
-        self.selected = (self.selected + self.max_visible).min(self.filtered.len() - 1);
+        self.selected = (self.selected + self.max_visible).min(self.filtered_indices.len() - 1);
         if self.selected >= self.scroll_offset + self.max_visible {
             self.scroll_offset = self.selected + 1 - self.max_visible;
         }
     }
 
     pub fn page_up(&mut self) {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         self.selected = self.selected.saturating_sub(self.max_visible);
@@ -143,7 +149,8 @@ impl App {
 
     pub fn type_char(&mut self, c: char) {
         self.filter_text.push(c);
-        self.update_filter();
+        let previous = std::mem::take(&mut self.filtered_indices);
+        self.update_filter_with_scope(Some(&previous));
     }
 
     pub fn backspace(&mut self) -> bool {
@@ -156,16 +163,18 @@ impl App {
     }
 
     pub fn selected_candidate(&self) -> Option<&Candidate> {
-        self.filtered.get(self.selected)
+        self.filtered_indices
+            .get(self.selected)
+            .and_then(|&candidate_idx| self.all_candidates.get(candidate_idx))
     }
 
-    pub fn visible_candidates(&self) -> &[Candidate] {
-        let end = (self.scroll_offset + self.max_visible).min(self.filtered.len());
-        &self.filtered[self.scroll_offset..end]
+    pub fn visible_candidate_indices(&self) -> &[usize] {
+        let end = (self.scroll_offset + self.max_visible).min(self.filtered_indices.len());
+        &self.filtered_indices[self.scroll_offset..end]
     }
 
     pub fn visible_selected_index(&self) -> Option<usize> {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             return None;
         }
         Some(self.selected - self.scroll_offset)
@@ -191,14 +200,14 @@ impl App {
     }
 
     fn clamp_viewport(&mut self) {
-        if self.filtered.is_empty() {
+        if self.filtered_indices.is_empty() {
             self.selected = 0;
             self.scroll_offset = 0;
             return;
         }
 
-        self.selected = self.selected.min(self.filtered.len() - 1);
-        let max_scroll = self.filtered.len().saturating_sub(self.max_visible);
+        self.selected = self.selected.min(self.filtered_indices.len() - 1);
+        let max_scroll = self.filtered_indices.len().saturating_sub(self.max_visible);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
 
         if self.selected < self.scroll_offset {
@@ -237,6 +246,7 @@ pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
 mod tests {
     use super::*;
     use crate::candidate::Candidate;
+    use crate::fuzzy::FuzzyMatcher;
 
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {
         items
@@ -246,6 +256,13 @@ mod tests {
                 description: String::new(),
                 kind: String::new(),
             })
+            .collect()
+    }
+
+    fn filtered_texts(app: &App) -> Vec<&str> {
+        app.filtered_indices
+            .iter()
+            .map(|&candidate_idx| app.all_candidates[candidate_idx].text.as_str())
             .collect()
     }
 
@@ -298,14 +315,14 @@ mod tests {
     fn new_filters_candidates() {
         let candidates = make_candidates(&["foobar", "foobaz", "bar"]);
         let app = App::new(candidates, "fo".to_string(), 5, 10);
-        assert_eq!(app.filtered.len(), 2);
-        assert!(!app.filtered.iter().any(|c| c.text == "bar"));
+        assert_eq!(app.filtered_indices.len(), 2);
+        assert!(!filtered_texts(&app).contains(&"bar"));
     }
 
     #[test]
     fn new_empty_candidates() {
         let app = App::new(Vec::new(), "fo".to_string(), 5, 10);
-        assert!(app.filtered.is_empty());
+        assert!(app.filtered_indices.is_empty());
         assert_eq!(app.selected, 0);
     }
 
@@ -323,7 +340,7 @@ mod tests {
     fn move_down_wraps() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = app.filtered.len() - 1;
+        app.selected = app.filtered_indices.len() - 1;
         app.move_down();
         assert_eq!(app.selected, 0);
     }
@@ -351,7 +368,7 @@ mod tests {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_up();
-        assert_eq!(app.selected, app.filtered.len() - 1);
+        assert_eq!(app.selected, app.filtered_indices.len() - 1);
     }
 
     #[test]
@@ -404,12 +421,12 @@ mod tests {
     fn type_char_narrows() {
         let candidates = make_candidates(&["alpha", "alpine", "zzz"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        let before = app.filtered.len();
+        let before = app.filtered_indices.len();
         app.type_char('a');
         app.type_char('l');
         app.type_char('p');
         app.type_char('i');
-        assert!(app.filtered.len() < before);
+        assert!(app.filtered_indices.len() < before);
     }
 
     #[test]
@@ -420,9 +437,38 @@ mod tests {
         app.type_char('l');
         app.type_char('p');
         app.type_char('i');
-        let narrow = app.filtered.len();
+        let narrow = app.filtered_indices.len();
         app.backspace();
-        assert!(app.filtered.len() > narrow);
+        assert!(app.filtered_indices.len() > narrow);
+    }
+
+    #[test]
+    fn type_char_incremental_matches_full_rescan() {
+        let candidates = make_candidates(&["alpha", "alpine", "beta", "zzz"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        app.type_char('a');
+        app.type_char('l');
+        app.type_char('p');
+
+        let mut matcher = FuzzyMatcher::new();
+        let expected = matcher.filter(&app.all_candidates, &app.filter_text);
+        let expected_texts: Vec<&str> =
+            expected.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(filtered_texts(&app), expected_texts);
+    }
+
+    #[test]
+    fn type_char_keeps_dl_only_match_after_incremental_narrowing() {
+        let candidates = make_candidates(&["claude", "calculated", "cat"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        for c in "calude".chars() {
+            app.type_char(c);
+        }
+
+        assert!(filtered_texts(&app).contains(&"claude"));
     }
 
     #[test]
@@ -445,7 +491,7 @@ mod tests {
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_down();
         let selected = app.selected_candidate().unwrap();
-        assert_eq!(selected.text, app.filtered[1].text);
+        assert_eq!(selected.text, filtered_texts(&app)[1]);
     }
 
     #[test]
@@ -458,9 +504,13 @@ mod tests {
     fn visible_candidates_respects_scroll() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
         app.scroll_offset = 5;
-        let visible = app.visible_candidates();
+        let visible: Vec<&str> = app
+            .visible_candidate_indices()
+            .iter()
+            .map(|&candidate_idx| app.all_candidates[candidate_idx].text.as_str())
+            .collect();
         assert_eq!(visible.len(), 10);
-        assert_eq!(visible[0].text, "f");
+        assert_eq!(visible[0], "f");
     }
 
     #[test]
@@ -481,7 +531,7 @@ mod tests {
         assert_eq!(app.filter_text, "");
         assert!(!app.backspace());
         assert_eq!(app.filter_text, "");
-        assert_eq!(app.filtered.len(), 3);
+        assert_eq!(app.filtered_indices.len(), 3);
     }
 
     #[test]
@@ -489,7 +539,7 @@ mod tests {
         let candidates = make_candidates(&["add", "bisect", "clone"]);
         let app = App::new(candidates, "".to_string(), 5, 10);
         // Both break conditions in the old Backspace handler are false
-        assert!(!app.filtered.is_empty());
+        assert!(!app.filtered_indices.is_empty());
         assert!(app.filter_text.len() >= app.prefix.len());
     }
 
