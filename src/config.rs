@@ -128,7 +128,6 @@ pub(crate) fn parse_color(s: &str) -> Option<Color> {
     }
 }
 
-#[derive(Clone)]
 pub struct Theme {
     pub border: Option<Color>,
     pub selected_fg: Option<Color>,

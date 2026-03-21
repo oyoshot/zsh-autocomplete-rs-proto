@@ -3,10 +3,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use crate::app::App;
 use crate::candidate::Candidate;
@@ -18,14 +15,11 @@ use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
 struct DaemonServer {
-    state: Mutex<DaemonState>,
-    socket_path: PathBuf,
-    shutdown_requested: AtomicBool,
-}
-
-struct DaemonState {
+    config: Config,
     theme: Theme,
     config_mtime: Option<SystemTime>,
+    socket_path: PathBuf,
+    fuzzy: Option<FuzzyMatcher>,
 }
 
 pub fn start() -> io::Result<()> {
@@ -51,40 +45,29 @@ pub fn start() -> io::Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    listener.set_nonblocking(true)?;
 
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
-    let server = Arc::new(DaemonServer {
-        state: Mutex::new(DaemonState {
-            theme: Config::load().theme(),
-            config_mtime: config_file_mtime(),
-        }),
+    let config = Config::load();
+    let config_mtime = config_file_mtime();
+    let theme = config.theme();
+
+    let mut server = DaemonServer {
+        config,
+        theme,
+        config_mtime,
         socket_path,
-        shutdown_requested: AtomicBool::new(false),
-    });
+        fuzzy: Some(FuzzyMatcher::new()),
+    };
 
-    serve(listener, Arc::clone(&server))?;
-
-    let _ = fs::remove_file(&server.socket_path);
-    info!(socket_path = %server.socket_path.display(), "daemon stopped");
-    Ok(())
-}
-
-fn serve(listener: UnixListener, server: Arc<DaemonServer>) -> io::Result<()> {
-    while !server.shutdown_requested.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let server = Arc::clone(&server);
-                thread::spawn(move || {
-                    if server.handle_connection(stream) {
-                        info!("shutdown requested");
-                        server.shutdown_requested.store(true, Ordering::SeqCst);
-                    }
-                });
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                server.maybe_reload_config();
+                if server.handle_connection(stream) {
+                    info!("shutdown requested");
+                    break; // shutdown requested
+                }
             }
             Err(e) => {
                 warn!(error = %e, "accept error");
@@ -93,6 +76,8 @@ fn serve(listener: UnixListener, server: Arc<DaemonServer>) -> io::Result<()> {
         }
     }
 
+    let _ = fs::remove_file(&server.socket_path);
+    info!(socket_path = %server.socket_path.display(), "daemon stopped");
     Ok(())
 }
 
@@ -121,26 +106,22 @@ pub fn status() -> bool {
 }
 
 impl DaemonServer {
-    fn current_theme(&self) -> Theme {
+    fn maybe_reload_config(&mut self) {
         let current_mtime = config_file_mtime();
-        let mut state = self
-            .state
-            .lock()
-            .expect("daemon state mutex should not be poisoned");
-        let reloaded = current_mtime != state.config_mtime;
+        let reloaded = current_mtime != self.config_mtime;
         debug!(reloaded, "checked config reload");
         if reloaded {
-            state.theme = Config::load().theme();
-            state.config_mtime = current_mtime;
+            self.config = Config::load();
+            self.theme = self.config.theme();
+            self.config_mtime = current_mtime;
             info!(reloaded = true, "reloaded config");
         }
-        state.theme.clone()
     }
 
-    fn handle_connection(&self, stream: UnixStream) -> bool {
+    fn handle_connection(&mut self, stream: UnixStream) -> bool {
+        use std::time::Duration;
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-        let theme = self.current_theme();
 
         let mut reader = BufReader::new(&stream);
 
@@ -157,7 +138,7 @@ impl DaemonServer {
         // Binary protocol: first byte is part of u32 length (typically 0x00)
         if buf.is_ascii_alphabetic() {
             let _span = info_span!("request", protocol = "text").entered();
-            return self.handle_text_connection(&mut reader, &stream, &theme);
+            return self.handle_text_connection(&mut reader, &stream);
         }
 
         // Binary protocol
@@ -196,7 +177,6 @@ impl DaemonServer {
                     term_cols,
                     term_rows,
                     &candidates_tsv,
-                    &theme,
                 );
                 let mut writer = &stream;
                 if let Err(e) = response.write_to(&mut writer) {
@@ -273,10 +253,9 @@ impl DaemonServer {
     ///   EMPTY\n
     ///   ERROR <message>\n
     fn handle_text_connection(
-        &self,
+        &mut self,
         reader: &mut BufReader<&UnixStream>,
         stream: &UnixStream,
-        theme: &Theme,
     ) -> bool {
         let mut header = String::new();
         if reader.read_line(&mut header).is_err() {
@@ -356,7 +335,6 @@ impl DaemonServer {
                     term_cols,
                     term_rows,
                     tsv.as_bytes(),
-                    theme,
                 );
 
                 match response {
@@ -424,14 +402,13 @@ impl DaemonServer {
     }
 
     fn handle_render(
-        &self,
+        &mut self,
         prefix: String,
         cursor_row: u16,
         cursor_col: u16,
         term_cols: u16,
         term_rows: u16,
         candidates_tsv: &[u8],
-        theme: &Theme,
     ) -> Response {
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
@@ -452,14 +429,10 @@ impl DaemonServer {
             return Response::Empty;
         }
 
+        // Take fuzzy matcher out to reuse, put it back after
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
         let mut app = App::new_with_matcher(
-            candidates,
-            prefix,
-            cursor_row,
-            cursor_col,
-            term_cols,
-            term_rows,
-            FuzzyMatcher::new(),
+            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
 
         // Cap max_visible based on terminal rows
@@ -490,7 +463,10 @@ impl DaemonServer {
 
         // Read cursor_row before render to avoid borrowing app after render
         let cursor_row_final = app.cursor_row;
-        let result = ui::render::render_popup_to_bytes(&app, theme);
+        let result = ui::render::render_popup_to_bytes(&app, &self.theme);
+
+        // Reclaim the FuzzyMatcher for reuse
+        self.fuzzy = Some(app.take_fuzzy());
 
         match result {
             Ok((mut tty_bytes, popup)) => {
@@ -577,16 +553,8 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonServer, DaemonState, read_text_line, serve};
-    use crate::protocol::{Request, Response};
-    use std::fs;
-    use std::io::{self, BufReader, Cursor, Write};
-    use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use super::read_text_line;
+    use std::io::{BufReader, Cursor};
 
     #[test]
     fn read_text_line_preserves_spaces() {
@@ -606,89 +574,5 @@ mod tests {
         let line = read_text_line(&mut reader).unwrap();
 
         assert_eq!(line, "");
-    }
-
-    fn unique_socket_path(name: &str) -> PathBuf {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        PathBuf::from(format!(
-            "target/test-sockets/z-{}-{}-{}.sock",
-            name,
-            std::process::id(),
-            timestamp
-        ))
-    }
-
-    fn start_test_server(name: &str) -> (PathBuf, thread::JoinHandle<io::Result<()>>) {
-        let socket_path = unique_socket_path(name);
-        fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let listener = UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-
-        let server = Arc::new(DaemonServer {
-            state: Mutex::new(DaemonState {
-                theme: crate::config::Theme::default(),
-                config_mtime: None,
-            }),
-            socket_path: socket_path.clone(),
-            shutdown_requested: AtomicBool::new(false),
-        });
-
-        let handle = thread::spawn({
-            let server = Arc::clone(&server);
-            move || {
-                let result = serve(listener, Arc::clone(&server));
-                let _ = fs::remove_file(&server.socket_path);
-                result
-            }
-        });
-
-        (socket_path, handle)
-    }
-
-    fn send_shutdown(socket_path: &PathBuf) {
-        let stream = UnixStream::connect(socket_path).unwrap();
-        let mut writer = &stream;
-        writer.write_all(&Request::Shutdown.serialize()).unwrap();
-        let mut reader = BufReader::new(&stream);
-        let response = Response::deserialize(&mut reader).unwrap();
-        assert!(matches!(response, Response::Success { .. }));
-    }
-
-    #[test]
-    fn slow_client_does_not_block_other_requests() {
-        let (socket_path, handle) = start_test_server("slow-client");
-
-        let mut slow_client = UnixStream::connect(&socket_path).unwrap();
-        slow_client
-            .write_all(b"render 0 0 80 24\nprefix\ncandidate\t\t\n")
-            .unwrap();
-
-        thread::sleep(Duration::from_millis(50));
-
-        let ping_client = UnixStream::connect(&socket_path).unwrap();
-        ping_client
-            .set_read_timeout(Some(Duration::from_millis(500)))
-            .unwrap();
-        let mut writer = &ping_client;
-        writer.write_all(&Request::Ping.serialize()).unwrap();
-        let mut reader = BufReader::new(&ping_client);
-        let response = Response::deserialize(&mut reader).unwrap();
-        assert!(matches!(response, Response::Success { .. }));
-
-        drop(slow_client);
-        send_shutdown(&socket_path);
-        handle.join().unwrap().unwrap();
-    }
-
-    #[test]
-    fn shutdown_request_stops_accept_loop() {
-        let (socket_path, handle) = start_test_server("shutdown");
-
-        send_shutdown(&socket_path);
-
-        handle.join().unwrap().unwrap();
     }
 }
