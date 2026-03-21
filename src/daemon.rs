@@ -186,7 +186,8 @@ impl DaemonServer {
     /// Text protocol for zsocket (zsh direct IPC, no subprocess spawn).
     ///
     /// Request format:
-    ///   render <prefix> <row> <col> <cols> <rows>\n
+    ///   render <row> <col> <cols> <rows>\n
+    ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
@@ -220,12 +221,19 @@ impl DaemonServer {
         let mut writer = io::BufWriter::new(stream);
 
         match parts[0] {
-            "render" if parts.len() == 6 => {
-                let prefix = parts[1].to_string();
-                let cursor_row: u16 = parts[2].parse().unwrap_or(0);
-                let cursor_col: u16 = parts[3].parse().unwrap_or(0);
-                let term_cols: u16 = parts[4].parse().unwrap_or(80);
-                let term_rows: u16 = parts[5].parse().unwrap_or(24);
+            "render" if parts.len() == 5 => {
+                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
+                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
+                let term_cols: u16 = parts[3].parse().unwrap_or(80);
+                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let prefix = match read_text_line(reader) {
+                    Ok(prefix) => prefix,
+                    Err(_) => {
+                        let _ = writeln!(writer, "ERROR invalid prefix");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
 
                 // Read candidates until END line (max 1MB)
                 const MAX_TSV_BYTES: usize = 1_048_576;
@@ -412,4 +420,42 @@ impl DaemonServer {
 fn config_file_mtime() -> Option<SystemTime> {
     let path = dirs::config_dir()?.join("zacrs").join("config.toml");
     fs::metadata(path).ok()?.modified().ok()
+}
+
+fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_text_line;
+    use std::io::{BufReader, Cursor};
+
+    #[test]
+    fn read_text_line_preserves_spaces() {
+        let data = Cursor::new(b"  My Dir  \n");
+        let mut reader = BufReader::new(data);
+
+        let line = read_text_line(&mut reader).unwrap();
+
+        assert_eq!(line, "  My Dir  ");
+    }
+
+    #[test]
+    fn read_text_line_handles_empty_line() {
+        let data = Cursor::new(b"\n");
+        let mut reader = BufReader::new(data);
+
+        let line = read_text_line(&mut reader).unwrap();
+
+        assert_eq!(line, "");
+    }
 }

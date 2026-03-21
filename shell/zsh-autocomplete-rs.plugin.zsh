@@ -85,8 +85,9 @@ _zacrs_render() {
             fd=$REPLY
             local cols rows
             cols=$COLUMNS rows=$LINES
-            # Send request: header + candidates + END marker
-            print -u $fd "render $prefix $cursor_row $cursor_col $cols $rows"
+            # Send request: header + prefix line + candidates + END marker
+            print -u $fd -- "render $cursor_row $cursor_col $cols $rows"
+            printf '%s\n' "$prefix" >&$fd
             printf '%s\n' "$candidates_str" >&$fd
             print -u $fd "END"
             # Read response header
@@ -110,9 +111,13 @@ _zacrs_render() {
                     dd bs=$tty_len count=1 <&$fd 2>/dev/null > /dev/tty
                 fi
                 _zacrs_popup_visible=1
+                exec {fd}<&-
+                return
+            elif [[ "$header" == EMPTY || "$header" == ERROR* ]]; then
+                exec {fd}<&-
+                return
             fi
             exec {fd}<&-
-            return
         fi
         # Socket connect failed, daemon may have died
         _zacrs_daemon_available=0

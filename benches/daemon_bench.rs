@@ -43,7 +43,8 @@ fn text_render(sock: &str, request: &[u8]) -> Option<usize> {
 }
 
 fn build_render_request(candidates: &[zsh_autocomplete_rs::candidate::Candidate]) -> Vec<u8> {
-    let mut req = String::from("render gi 5 2 80 24\n");
+    let mut req = String::from("render 5 2 80 24\n");
+    req.push_str("gi\n");
     for c in candidates {
         req.push_str(&format!("{}\t{}\t{}\n", c.text, c.description, c.kind));
     }
