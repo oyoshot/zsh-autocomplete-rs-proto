@@ -1,6 +1,7 @@
 mod helpers;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::fuzzy::{FuzzyMatcher, damerau_levenshtein};
 
 fn filter_scaling(c: &mut Criterion) {
@@ -69,6 +70,37 @@ fn filter_sequence(c: &mut Criterion) {
     group.finish();
 }
 
+fn app_backspace_sequence(c: &mut Criterion) {
+    let candidates = helpers::generate_candidates(1_000);
+    let mut group = c.benchmark_group("app_backspace_sequence");
+
+    group.bench_function("full_rescan_roundtrip_git", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| {
+            let _ = matcher.filter_matches(&candidates, "g", None);
+            let _ = matcher.filter_matches(&candidates, "gi", None);
+            let _ = matcher.filter_matches(&candidates, "git", None);
+            let _ = matcher.filter_matches(&candidates, "gi", None);
+            let _ = matcher.filter_matches(&candidates, "g", None);
+            let _ = matcher.filter_matches(&candidates, "", None);
+        });
+    });
+
+    group.bench_function("app_cache_roundtrip_git", |b| {
+        let mut app = App::new_with_term_size(candidates.clone(), "".to_string(), 5, 2, 80, 24);
+        b.iter(|| {
+            app.type_char('g');
+            app.type_char('i');
+            app.type_char('t');
+            let _ = app.backspace();
+            let _ = app.backspace();
+            let _ = app.backspace();
+        });
+    });
+
+    group.finish();
+}
+
 fn bench_damerau_levenshtein(c: &mut Criterion) {
     let pairs = [
         ("identical", "cargo", "cargo"),
@@ -96,6 +128,7 @@ criterion_group!(
     filter_scaling,
     filter_query_variants,
     filter_sequence,
+    app_backspace_sequence,
     bench_damerau_levenshtein
 );
 criterion_main!(benches);

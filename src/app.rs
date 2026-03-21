@@ -1,11 +1,13 @@
 use crate::candidate::Candidate;
 use crate::fuzzy::FuzzyMatcher;
+use std::collections::HashMap;
 
 const DEFAULT_MAX_VISIBLE: usize = 10;
 
 pub struct App {
     pub all_candidates: Vec<Candidate>,
     pub filtered_indices: Vec<usize>,
+    cached_filters: HashMap<String, Vec<usize>>,
     pub filter_text: String,
     pub selected: usize,
     pub scroll_offset: usize,
@@ -68,6 +70,7 @@ impl App {
         let mut app = App {
             all_candidates: candidates,
             filtered_indices: Vec::new(),
+            cached_filters: HashMap::new(),
             filter_text: lcp,
             selected: 0,
             scroll_offset: 0,
@@ -95,6 +98,22 @@ impl App {
         self.filtered_indices = scored.into_iter().map(|s| s.candidate_idx).collect();
         self.selected = 0;
         self.scroll_offset = 0;
+        self.cache_current_filter();
+    }
+
+    fn cache_current_filter(&mut self) {
+        self.cached_filters
+            .insert(self.filter_text.clone(), self.filtered_indices.clone());
+    }
+
+    fn restore_cached_filter(&mut self) -> bool {
+        let Some(filtered_indices) = self.cached_filters.get(&self.filter_text).cloned() else {
+            return false;
+        };
+        self.filtered_indices = filtered_indices;
+        self.selected = 0;
+        self.scroll_offset = 0;
+        true
     }
 
     pub fn move_down(&mut self) {
@@ -149,6 +168,9 @@ impl App {
 
     pub fn type_char(&mut self, c: char) {
         self.filter_text.push(c);
+        if self.restore_cached_filter() {
+            return;
+        }
         let previous = std::mem::take(&mut self.filtered_indices);
         self.update_filter_with_scope(Some(&previous));
     }
@@ -158,6 +180,9 @@ impl App {
             return false;
         }
         self.filter_text.pop();
+        if self.restore_cached_filter() {
+            return true;
+        }
         self.update_filter();
         true
     }
@@ -440,6 +465,75 @@ mod tests {
         let narrow = app.filtered_indices.len();
         app.backspace();
         assert!(app.filtered_indices.len() > narrow);
+    }
+
+    #[test]
+    fn backspace_restores_cached_query_results() {
+        let candidates = make_candidates(&["alpha", "alpine", "beta", "zzz"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        app.type_char('a');
+        let a_results: Vec<String> = filtered_texts(&app)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        app.type_char('l');
+        assert!(app.cached_filters.contains_key("a"));
+
+        app.selected = 1;
+        app.scroll_offset = 1;
+        assert!(app.backspace());
+
+        let restored: Vec<String> = filtered_texts(&app)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(restored, a_results);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn backspace_cache_miss_falls_back_to_full_rescan() {
+        let candidates = make_candidates(&["foobar", "foobaz"]);
+        let mut app = App::new(candidates, "fo".to_string(), 5, 10);
+        assert_eq!(app.filter_text, "fooba");
+        assert!(!app.cached_filters.contains_key("foob"));
+
+        assert!(app.backspace());
+        assert_eq!(app.filter_text, "foob");
+        assert!(app.cached_filters.contains_key("foob"));
+
+        let mut matcher = FuzzyMatcher::new();
+        let expected = matcher.filter(&app.all_candidates, &app.filter_text);
+        let expected_texts: Vec<&str> =
+            expected.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert_eq!(filtered_texts(&app), expected_texts);
+    }
+
+    #[test]
+    fn backspace_restores_empty_query_from_cache() {
+        let candidates = make_candidates(&["add", "bisect", "clone"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        let initial: Vec<String> = filtered_texts(&app)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert!(app.cached_filters.contains_key(""));
+
+        app.type_char('a');
+        app.selected = 1;
+        app.scroll_offset = 1;
+        assert!(app.backspace());
+
+        assert_eq!(app.filter_text, "");
+        let restored: Vec<String> = filtered_texts(&app)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(restored, initial);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.scroll_offset, 0);
     }
 
     #[test]
