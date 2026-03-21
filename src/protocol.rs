@@ -167,9 +167,9 @@ impl Response {
                 metadata,
             } => {
                 payload.push(STATUS_SUCCESS);
+                write_u32(&mut payload, tty_bytes.len() as u32);
                 payload.extend_from_slice(tty_bytes);
                 if let Some(meta) = metadata {
-                    payload.push(0x00); // separator
                     payload.extend_from_slice(meta.as_bytes());
                 }
             }
@@ -201,20 +201,28 @@ impl Response {
 
         match status {
             STATUS_SUCCESS => {
-                if let Some(sep_pos) = data.iter().rposition(|&b| b == 0x00) {
-                    let tty_bytes = data[..sep_pos].to_vec();
-                    let metadata = String::from_utf8(data[sep_pos + 1..].to_vec())
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    Ok(Response::Success {
-                        tty_bytes,
-                        metadata: Some(metadata),
-                    })
-                } else {
-                    Ok(Response::Success {
-                        tty_bytes: data.to_vec(),
-                        metadata: None,
-                    })
+                let mut cursor = data;
+                let tty_len = read_u32(&mut cursor)? as usize;
+                if cursor.len() < tty_len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "tty_bytes length exceeds payload",
+                    ));
                 }
+                let tty_bytes = cursor[..tty_len].to_vec();
+                let rest = &cursor[tty_len..];
+                let metadata = if rest.is_empty() {
+                    None
+                } else {
+                    Some(
+                        String::from_utf8(rest.to_vec())
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                    )
+                };
+                Ok(Response::Success {
+                    tty_bytes,
+                    metadata,
+                })
             }
             STATUS_EMPTY => Ok(Response::Empty),
             STATUS_ERROR => {
@@ -353,6 +361,46 @@ mod tests {
                 metadata,
             } => {
                 assert_eq!(tty_bytes, vec![0x1b, 0x5b, 0x48]);
+                assert!(metadata.is_none());
+            }
+            _ => panic!("expected Success"),
+        }
+    }
+
+    #[test]
+    fn success_response_with_null_in_tty_bytes() {
+        let resp = Response::Success {
+            tty_bytes: vec![0x1b, 0x00, 0x5b, 0x00, 0x48],
+            metadata: Some("popup_row=6".to_string()),
+        };
+        let bytes = resp.serialize();
+        let parsed = Response::deserialize(&mut &bytes[..]).unwrap();
+        match parsed {
+            Response::Success {
+                tty_bytes,
+                metadata,
+            } => {
+                assert_eq!(tty_bytes, vec![0x1b, 0x00, 0x5b, 0x00, 0x48]);
+                assert_eq!(metadata.unwrap(), "popup_row=6");
+            }
+            _ => panic!("expected Success"),
+        }
+    }
+
+    #[test]
+    fn success_response_null_bytes_no_metadata() {
+        let resp = Response::Success {
+            tty_bytes: vec![0x00, 0x00, 0x00],
+            metadata: None,
+        };
+        let bytes = resp.serialize();
+        let parsed = Response::deserialize(&mut &bytes[..]).unwrap();
+        match parsed {
+            Response::Success {
+                tty_bytes,
+                metadata,
+            } => {
+                assert_eq!(tty_bytes, vec![0x00, 0x00, 0x00]);
                 assert!(metadata.is_none());
             }
             _ => panic!("expected Success"),
