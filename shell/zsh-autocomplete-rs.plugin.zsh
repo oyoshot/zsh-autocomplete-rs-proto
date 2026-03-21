@@ -539,7 +539,7 @@ _zacrs_line_pre_redraw() {
         fi
     fi
     _zacrs_chain_retry=0
-    if [[ -z "$candidates_str" && -n "$naive_prefix" ]]; then
+    if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
         if [[ -n "$candidates_str" ]]; then
             prefix="$naive_prefix"
