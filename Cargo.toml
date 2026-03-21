@@ -20,6 +20,8 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1.0"
 dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -31,3 +33,15 @@ harness = false
 [[bench]]
 name = "text_processing_bench"
 harness = false
+
+[[bench]]
+name = "startup_bench"
+harness = false
+
+[[bench]]
+name = "daemon_bench"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1

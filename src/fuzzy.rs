@@ -50,19 +50,18 @@ impl FuzzyMatcher {
             AtomKind::Fuzzy,
         );
 
-        let mut results: Vec<ScoredCandidate> = candidates
-            .iter()
-            .filter_map(|candidate| {
-                let mut buf = Vec::new();
-                let haystack = Utf32Str::new(&candidate.text, &mut buf);
-                pattern
-                    .score(haystack, &mut self.matcher)
-                    .map(|score| ScoredCandidate {
-                        candidate: candidate.clone(),
-                        score,
-                    })
-            })
-            .collect();
+        let mut buf = Vec::new();
+        let mut results: Vec<ScoredCandidate> = Vec::new();
+        for candidate in candidates {
+            buf.clear();
+            let haystack = Utf32Str::new(&candidate.text, &mut buf);
+            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
+                results.push(ScoredCandidate {
+                    candidate: candidate.clone(),
+                    score,
+                });
+            }
+        }
 
         results.sort_by(|a, b| {
             b.score

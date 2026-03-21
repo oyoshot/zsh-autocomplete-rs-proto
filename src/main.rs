@@ -1,10 +1,10 @@
 use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
-use zsh_autocomplete_rs::cli::{Cli, Command};
-use zsh_autocomplete_rs::{config, input, tty, ui};
+use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
+use zsh_autocomplete_rs::{client, config, daemon, input, tty, ui};
 
 use clap::Parser;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Read, Write};
 use std::process;
 use tty::TtyGuard;
 
@@ -58,6 +58,12 @@ fn run_complete(
                 app.page_up();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
+            input::Action::Resize(cols, rows) => {
+                ui::render::clear(&mut guard.tty, &app)?;
+                app.set_term_size(cols, rows);
+                ui::render::ensure_space(&mut guard.tty, &mut app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
+            }
             input::Action::Confirm => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 break match app.selected_candidate() {
@@ -104,18 +110,12 @@ fn run_complete(
 
     match result {
         AppResult::Selected(text, kind) => {
-            let suffix = match kind.as_str() {
-                "directory" => {
-                    if text.ends_with('/') {
-                        ""
-                    } else {
-                        "/"
-                    }
-                }
-                "command" | "alias" | "builtin" | "function" | "file" => " ",
-                _ => "",
+            let c = Candidate {
+                text,
+                description: String::new(),
+                kind,
             };
-            print!("{}{}", text, suffix);
+            print!("{}", c.text_with_suffix());
             Ok(0)
         }
         AppResult::DismissedWithSpace(text) => {
@@ -136,12 +136,30 @@ fn run_render(
     cursor_col: u16,
     theme: &config::Theme,
 ) -> io::Result<i32> {
-    let candidates: Vec<Candidate> = io::stdin()
-        .lock()
+    // Read raw stdin before trying daemon (we need it for both paths)
+    let raw_stdin: Vec<u8> = {
+        let mut buf = Vec::new();
+        io::stdin().lock().read_to_end(&mut buf)?;
+        buf
+    };
+
+    // Try daemon first
+    if let Ok(resp) = client::try_daemon_render(&prefix, cursor_row, cursor_col, &raw_stdin) {
+        let mut tty = tty::open_tty_write()?;
+        tty.write_all(&resp.tty_bytes)?;
+        tty.flush()?;
+        if let Some(meta) = resp.metadata {
+            println!("{}", meta);
+        }
+        return Ok(0);
+    }
+
+    // Fallback: direct execution
+    let candidates: Vec<Candidate> = std::str::from_utf8(&raw_stdin)
+        .unwrap_or("")
         .lines()
-        .map_while(Result::ok)
         .filter(|line| !line.is_empty())
-        .map(|line| Candidate::parse_line(&line))
+        .map(Candidate::parse_line)
         .collect();
 
     if candidates.is_empty() {
@@ -168,6 +186,17 @@ fn run_render(
 }
 
 fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i32> {
+    // Try daemon first
+    if let Ok(tty_bytes) = client::try_daemon_clear(popup_row, popup_height, cursor_row) {
+        if !tty_bytes.is_empty() {
+            let mut tty = tty::open_tty_write()?;
+            tty.write_all(&tty_bytes)?;
+            tty.flush()?;
+        }
+        return Ok(0);
+    }
+
+    // Fallback: direct execution
     let mut tty = tty::open_tty_write()?;
     ui::render::clear_rect(&mut tty, popup_row, popup_height, cursor_row)?;
     Ok(0)
@@ -211,6 +240,31 @@ fn main() {
             Err(e) => {
                 eprintln!("error: {}", e);
                 process::exit(1);
+            }
+        },
+        Command::Daemon { action } => match action {
+            DaemonAction::Start => match daemon::start() {
+                Ok(()) => process::exit(0),
+                Err(e) => {
+                    eprintln!("daemon error: {}", e);
+                    process::exit(1);
+                }
+            },
+            DaemonAction::Stop => match daemon::stop() {
+                Ok(()) => process::exit(0),
+                Err(e) => {
+                    eprintln!("daemon stop error: {}", e);
+                    process::exit(1);
+                }
+            },
+            DaemonAction::Status => {
+                if daemon::status() {
+                    println!("running");
+                    process::exit(0);
+                } else {
+                    println!("stopped");
+                    process::exit(1);
+                }
             }
         },
     }
