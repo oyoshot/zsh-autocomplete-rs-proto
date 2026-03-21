@@ -118,8 +118,6 @@ impl FuzzyMatcher {
             }
         }
 
-        sort_scored_matches(&mut results, candidates);
-
         if query.len() >= 2 {
             let dl_results = self.damerau_levenshtein_fallback_matches(candidates, query);
             if !dl_results.is_empty() {
@@ -132,6 +130,7 @@ impl FuzzyMatcher {
             }
         }
 
+        sort_scored_matches(&mut results, candidates);
         results
     }
 
@@ -165,8 +164,6 @@ impl FuzzyMatcher {
             }
         }
 
-        sort_scored_results(&mut results);
-
         if query.len() >= 2 {
             let dl_results = self.damerau_levenshtein_fallback_candidates(candidates, query);
             if !dl_results.is_empty() {
@@ -182,6 +179,7 @@ impl FuzzyMatcher {
             }
         }
 
+        sort_scored_results(&mut results);
         results
     }
 
@@ -203,7 +201,7 @@ impl FuzzyMatcher {
             self.dl_scratch.set_candidate(&candidate.text);
             let dist = self.dl_scratch.distance(case_insensitive, Some(max_dist));
             if dist <= max_dist {
-                let score = (100u32).saturating_sub(dist as u32 * 30);
+                let score = dl_match_score(query.len(), candidate.text.len(), dist);
                 results.push(ScoredMatch {
                     candidate_idx,
                     score,
@@ -211,7 +209,6 @@ impl FuzzyMatcher {
             }
         }
 
-        sort_scored_matches(&mut results, candidates);
         results
     }
 
@@ -233,7 +230,7 @@ impl FuzzyMatcher {
             self.dl_scratch.set_candidate(&candidate.text);
             let dist = self.dl_scratch.distance(case_insensitive, Some(max_dist));
             if dist <= max_dist {
-                let score = (100u32).saturating_sub(dist as u32 * 30);
+                let score = dl_match_score(query.len(), candidate.text.len(), dist);
                 results.push(ScoredCandidate {
                     candidate: candidate.clone(),
                     score,
@@ -241,9 +238,13 @@ impl FuzzyMatcher {
             }
         }
 
-        sort_scored_results(&mut results);
         results
     }
+}
+
+fn dl_match_score(query_len: usize, candidate_len: usize, dist: usize) -> u32 {
+    let len_gap = query_len.abs_diff(candidate_len) as u32;
+    200u32.saturating_sub(dist as u32 * 30 + len_gap * 10)
 }
 
 impl Default for DamerauScratch {
@@ -580,6 +581,20 @@ mod tests {
                 "nucleo match should precede DL match: {texts:?}"
             );
         }
+    }
+
+    #[test]
+    fn dl_results_are_globally_resorted_with_nucleo() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["ca-l-u-d-e-helper", "claude"]);
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(
+            texts.first().copied(),
+            Some("claude"),
+            "DL typo candidate should be re-ranked ahead of weaker fuzzy matches: {texts:?}"
+        );
     }
 
     #[test]
