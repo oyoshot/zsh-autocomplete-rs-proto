@@ -233,7 +233,8 @@ impl DaemonServer {
                 let term_cols: u16 = parts[4].parse().unwrap_or(80);
                 let term_rows: u16 = parts[5].parse().unwrap_or(24);
 
-                // Read candidates until END line
+                // Read candidates until END line (max 1MB)
+                const MAX_TSV_BYTES: usize = 1_048_576;
                 let mut tsv = String::new();
                 loop {
                     let mut line = String::new();
@@ -242,6 +243,21 @@ impl DaemonServer {
                     }
                     if line.trim_end() == "END" {
                         break;
+                    }
+                    if tsv.len() + line.len() > MAX_TSV_BYTES {
+                        // Drain remaining lines until END
+                        loop {
+                            let mut drain = String::new();
+                            if reader.read_line(&mut drain).is_err()
+                                || drain.is_empty()
+                                || drain.trim_end() == "END"
+                            {
+                                break;
+                            }
+                        }
+                        let _ = writeln!(writer, "ERROR payload too large");
+                        let _ = writer.flush();
+                        return false;
                     }
                     tsv.push_str(&line);
                 }
