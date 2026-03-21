@@ -450,6 +450,7 @@ _zacrs_tab_complete() {
         # 末尾がスペース/スラッシュなら prev_lbuffer を更新せず
         # line-pre-redraw にチェーンさせる
         if [[ "$LBUFFER" == *[\ /] ]]; then
+            _zacrs_prev_lbuffer="$base"
             _zacrs_chain_retry=1
         else
             _zacrs_prev_lbuffer="$LBUFFER"
