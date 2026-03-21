@@ -6,11 +6,23 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
+    pattern: Pattern,
+    last_query: String,
+    utf32_buf: Vec<char>,
+    dl_scratch: DamerauScratch,
 }
 
 pub struct ScoredCandidate {
     pub candidate: Candidate,
     pub score: u32,
+}
+
+struct DamerauScratch {
+    query_chars: Vec<char>,
+    candidate_chars: Vec<char>,
+    prev_prev: Vec<usize>,
+    prev: Vec<usize>,
+    curr: Vec<usize>,
 }
 
 impl Default for FuzzyMatcher {
@@ -23,6 +35,15 @@ impl FuzzyMatcher {
     pub fn new() -> Self {
         Self {
             matcher: Matcher::new(Config::DEFAULT),
+            pattern: Pattern::new(
+                "",
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+            ),
+            last_query: String::new(),
+            utf32_buf: Vec::new(),
+            dl_scratch: DamerauScratch::default(),
         }
     }
 
@@ -35,29 +56,29 @@ impl FuzzyMatcher {
                     score: 0,
                 })
                 .collect();
-            results.sort_by(|a, b| {
-                a.candidate
-                    .kind_priority()
-                    .cmp(&b.candidate.kind_priority())
-                    .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                    .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-            });
+            sort_empty_query_results(&mut results);
             return results;
         }
 
-        let pattern = Pattern::new(
-            query,
-            CaseMatching::Smart,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-        );
+        if self.last_query != query {
+            self.pattern = Pattern::new(
+                query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+            );
+            self.last_query.clear();
+            self.last_query.push_str(query);
+        }
 
-        let mut buf = Vec::new();
-        let mut results: Vec<ScoredCandidate> = Vec::new();
+        let pattern = &self.pattern;
+        let matcher = &mut self.matcher;
+        let utf32_buf = &mut self.utf32_buf;
+        let mut results: Vec<ScoredCandidate> = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            buf.clear();
-            let haystack = Utf32Str::new(&candidate.text, &mut buf);
-            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
+            utf32_buf.clear();
+            let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+            if let Some(score) = pattern.score(haystack, matcher) {
                 results.push(ScoredCandidate {
                     candidate: candidate.clone(),
                     score,
@@ -65,61 +86,108 @@ impl FuzzyMatcher {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                .then_with(|| {
-                    a.candidate
-                        .kind_priority()
-                        .cmp(&b.candidate.kind_priority())
-                })
-                .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-        });
+        sort_scored_results(&mut results);
 
         if query.len() >= 2 {
-            let seen: HashSet<&str> =
-                results.iter().map(|r| r.candidate.text.as_str()).collect();
-            let dl_results = damerau_levenshtein_fallback(candidates, query);
-            let novel: Vec<ScoredCandidate> = dl_results
-                .into_iter()
-                .filter(|r| !seen.contains(r.candidate.text.as_str()))
-                .collect();
-            results.extend(novel);
+            let dl_results = self.damerau_levenshtein_fallback(candidates, query);
+            if !dl_results.is_empty() {
+                let seen: HashSet<&str> =
+                    results.iter().map(|r| r.candidate.text.as_str()).collect();
+                let novel: Vec<ScoredCandidate> = dl_results
+                    .into_iter()
+                    .filter(|r| !seen.contains(r.candidate.text.as_str()))
+                    .collect();
+                results.extend(novel);
+            }
         }
 
         results
     }
-}
 
-fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
-    let max_dist = if query.len() <= 4 { 1 } else { 2 };
-    let case_insensitive = !query.chars().any(|c| c.is_uppercase());
-    let query_chars: Vec<char> = query.chars().collect();
-    let mut cand_buf: Vec<char> = Vec::new();
+    fn damerau_levenshtein_fallback(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+    ) -> Vec<ScoredCandidate> {
+        let max_dist = if query.len() <= 4 { 1 } else { 2 };
+        let case_insensitive = !query.chars().any(|c| c.is_uppercase());
+        self.dl_scratch.set_query(query);
 
-    let mut results: Vec<ScoredCandidate> = candidates
-        .iter()
-        .filter_map(|candidate| {
+        let mut results = Vec::new();
+        for candidate in candidates {
             if query.len().abs_diff(candidate.text.len()) > max_dist {
-                return None;
+                continue;
             }
-            cand_buf.clear();
-            cand_buf.extend(candidate.text.chars());
-            let dist = damerau_levenshtein_chars(&query_chars, &cand_buf, case_insensitive);
+
+            self.dl_scratch.set_candidate(&candidate.text);
+            let dist = self.dl_scratch.distance(case_insensitive, Some(max_dist));
             if dist <= max_dist {
                 let score = (100u32).saturating_sub(dist as u32 * 30);
-                Some(ScoredCandidate {
+                results.push(ScoredCandidate {
                     candidate: candidate.clone(),
                     score,
-                })
-            } else {
-                None
+                });
             }
-        })
-        .collect();
+        }
 
-    results.sort_by(|a, b| {
+        sort_scored_results(&mut results);
+        results
+    }
+}
+
+impl Default for DamerauScratch {
+    fn default() -> Self {
+        Self {
+            query_chars: Vec::new(),
+            candidate_chars: Vec::new(),
+            prev_prev: Vec::new(),
+            prev: Vec::new(),
+            curr: Vec::new(),
+        }
+    }
+}
+
+impl DamerauScratch {
+    fn set_query(&mut self, query: &str) {
+        self.query_chars.clear();
+        self.query_chars.extend(query.chars());
+    }
+
+    fn set_candidate(&mut self, candidate: &str) {
+        self.candidate_chars.clear();
+        self.candidate_chars.extend(candidate.chars());
+    }
+
+    fn distance(&mut self, case_insensitive: bool, max_dist: Option<usize>) -> usize {
+        let query_chars = &self.query_chars;
+        let candidate_chars = &self.candidate_chars;
+        let prev_prev = &mut self.prev_prev;
+        let prev = &mut self.prev;
+        let curr = &mut self.curr;
+        damerau_levenshtein_chars(
+            query_chars,
+            candidate_chars,
+            case_insensitive,
+            max_dist,
+            prev_prev,
+            prev,
+            curr,
+        )
+    }
+}
+
+fn sort_empty_query_results(results: &mut [ScoredCandidate]) {
+    results.sort_unstable_by(|a, b| {
+        a.candidate
+            .kind_priority()
+            .cmp(&b.candidate.kind_priority())
+            .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
+            .then_with(|| a.candidate.text.cmp(&b.candidate.text))
+    });
+}
+
+fn sort_scored_results(results: &mut [ScoredCandidate]) {
+    results.sort_unstable_by(|a, b| {
         b.score
             .cmp(&a.score)
             .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
@@ -130,20 +198,34 @@ fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<Sc
             })
             .then_with(|| a.candidate.text.cmp(&b.candidate.text))
     });
-    results
 }
 
-fn damerau_levenshtein_chars(a: &[char], b: &[char], case_insensitive: bool) -> usize {
+fn damerau_levenshtein_chars(
+    a: &[char],
+    b: &[char],
+    case_insensitive: bool,
+    max_dist: Option<usize>,
+    prev_prev: &mut Vec<usize>,
+    prev: &mut Vec<usize>,
+    curr: &mut Vec<usize>,
+) -> usize {
     let len_a = a.len();
     let len_b = b.len();
+    let row_len = len_b + 1;
+    let unreachable = max_dist.unwrap_or(len_a + len_b).saturating_add(1);
 
-    let mut d = vec![vec![0usize; len_b + 1]; len_a + 1];
+    ensure_row_capacity(prev_prev, row_len);
+    ensure_row_capacity(prev, row_len);
+    ensure_row_capacity(curr, row_len);
 
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, val) in d[0].iter_mut().enumerate() {
-        *val = j;
+    prev_prev[..row_len].fill(unreachable);
+    prev[..row_len].fill(unreachable);
+    curr[..row_len].fill(unreachable);
+
+    prev[0] = 0;
+    let initial_end = max_dist.map_or(len_b, |dist| len_b.min(dist));
+    for j in 1..=initial_end {
+        prev[j] = j;
     }
 
     let eq = |x: char, y: char| -> bool {
@@ -155,24 +237,60 @@ fn damerau_levenshtein_chars(a: &[char], b: &[char], case_insensitive: bool) -> 
     };
 
     for i in 1..=len_a {
-        for j in 1..=len_b {
-            let cost = if eq(a[i - 1], b[j - 1]) { 0 } else { 1 };
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && eq(a[i - 1], b[j - 2]) && eq(a[i - 2], b[j - 1]) {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + cost);
-            }
+        curr[..row_len].fill(unreachable);
+        if max_dist.is_none_or(|dist| i <= dist) {
+            curr[0] = i;
         }
+
+        let start = max_dist.map_or(1, |dist| i.saturating_sub(dist).max(1));
+        let end = max_dist.map_or(len_b, |dist| len_b.min(i + dist));
+        if start > end {
+            return unreachable;
+        }
+
+        let mut row_min = unreachable;
+        for j in start..=end {
+            let cost = if eq(a[i - 1], b[j - 1]) { 0 } else { 1 };
+            let mut value = prev[j]
+                .saturating_add(1)
+                .min(curr[j - 1].saturating_add(1))
+                .min(prev[j - 1].saturating_add(cost));
+            if i > 1 && j > 1 && eq(a[i - 1], b[j - 2]) && eq(a[i - 2], b[j - 1]) {
+                value = value.min(prev_prev[j - 2].saturating_add(cost));
+            }
+            curr[j] = value;
+            row_min = row_min.min(value);
+        }
+
+        if max_dist.is_some_and(|dist| row_min > dist) {
+            return unreachable;
+        }
+
+        std::mem::swap(prev_prev, prev);
+        std::mem::swap(prev, curr);
     }
 
-    d[len_a][len_b]
+    let dist = prev[len_b];
+    if max_dist.is_some_and(|limit| dist > limit) {
+        unreachable
+    } else {
+        dist
+    }
+}
+
+fn ensure_row_capacity(row: &mut Vec<usize>, len: usize) {
+    if row.len() < len {
+        row.resize(len, 0);
+    }
 }
 
 pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    damerau_levenshtein_chars(&a, &b, false)
+    let mut prev_prev = Vec::new();
+    let mut prev = Vec::new();
+    let mut curr = Vec::new();
+    damerau_levenshtein_chars(&a, &b, false, None, &mut prev_prev, &mut prev, &mut curr)
 }
 
 #[cfg(test)]
@@ -370,10 +488,7 @@ mod tests {
         // "git" is matched by both nucleo (subsequence) and DL (distance 1 from "gti")
         let candidates = make_candidates(&["git", "grep", "gzip"]);
         let results = m.filter(&candidates, "gti");
-        let git_count = results
-            .iter()
-            .filter(|r| r.candidate.text == "git")
-            .count();
+        let git_count = results.iter().filter(|r| r.candidate.text == "git").count();
         assert_eq!(git_count, 1, "git should appear exactly once");
     }
 }
