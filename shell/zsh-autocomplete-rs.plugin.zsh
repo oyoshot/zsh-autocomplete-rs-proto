@@ -120,9 +120,11 @@ _zacrs_render() {
                 fi
                 exec {fd}<&-
                 return
-            elif [[ "$header" == EMPTY || "$header" == ERROR* ]]; then
+            elif [[ "$header" == EMPTY ]]; then
                 exec {fd}<&-
                 return
+            elif [[ "$header" == ERROR* ]]; then
+                _zacrs_daemon_available=0
             fi
             exec {fd}<&-
         fi
