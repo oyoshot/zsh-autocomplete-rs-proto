@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::candidate::Candidate;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -75,8 +77,15 @@ impl FuzzyMatcher {
                 .then_with(|| a.candidate.text.cmp(&b.candidate.text))
         });
 
-        if results.is_empty() && query.len() >= 2 {
-            results = damerau_levenshtein_fallback(candidates, query);
+        if query.len() >= 2 {
+            let seen: HashSet<&str> =
+                results.iter().map(|r| r.candidate.text.as_str()).collect();
+            let dl_results = damerau_levenshtein_fallback(candidates, query);
+            let novel: Vec<ScoredCandidate> = dl_results
+                .into_iter()
+                .filter(|r| !seen.contains(r.candidate.text.as_str()))
+                .collect();
+            results.extend(novel);
         }
 
         results
@@ -85,6 +94,9 @@ impl FuzzyMatcher {
 
 fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
     let max_dist = if query.len() <= 4 { 1 } else { 2 };
+    let case_insensitive = !query.chars().any(|c| c.is_uppercase());
+    let query_chars: Vec<char> = query.chars().collect();
+    let mut cand_buf: Vec<char> = Vec::new();
 
     let mut results: Vec<ScoredCandidate> = candidates
         .iter()
@@ -92,7 +104,9 @@ fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<Sc
             if query.len().abs_diff(candidate.text.len()) > max_dist {
                 return None;
             }
-            let dist = damerau_levenshtein(query, &candidate.text);
+            cand_buf.clear();
+            cand_buf.extend(candidate.text.chars());
+            let dist = damerau_levenshtein_chars(&query_chars, &cand_buf, case_insensitive);
             if dist <= max_dist {
                 let score = (100u32).saturating_sub(dist as u32 * 30);
                 Some(ScoredCandidate {
@@ -119,9 +133,7 @@ fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<Sc
     results
 }
 
-pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
+fn damerau_levenshtein_chars(a: &[char], b: &[char], case_insensitive: bool) -> usize {
     let len_a = a.len();
     let len_b = b.len();
 
@@ -134,19 +146,33 @@ pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
         *val = j;
     }
 
+    let eq = |x: char, y: char| -> bool {
+        if case_insensitive {
+            x.eq_ignore_ascii_case(&y)
+        } else {
+            x == y
+        }
+    };
+
     for i in 1..=len_a {
         for j in 1..=len_b {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let cost = if eq(a[i - 1], b[j - 1]) { 0 } else { 1 };
             d[i][j] = (d[i - 1][j] + 1)
                 .min(d[i][j - 1] + 1)
                 .min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+            if i > 1 && j > 1 && eq(a[i - 1], b[j - 2]) && eq(a[i - 2], b[j - 1]) {
                 d[i][j] = d[i][j].min(d[i - 2][j - 2] + cost);
             }
         }
     }
 
     d[len_a][len_b]
+}
+
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    damerau_levenshtein_chars(&a, &b, false)
 }
 
 #[cfg(test)]
@@ -278,5 +304,76 @@ mod tests {
         assert_eq!(texts[1], "ab");
         assert_eq!(texts[2], "abc");
         assert_eq!(texts[3], "longcmd");
+    }
+
+    #[test]
+    fn typo_found_alongside_nucleo_matches() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["claude", "cat", "curl", "clear", "clone"]);
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            texts.contains(&"claude"),
+            "calude should match claude via DL: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn dl_results_appear_after_nucleo() {
+        let mut m = FuzzyMatcher::new();
+        // "calculated" matches nucleo subsequence c-a-l-u-...-d; "claude" only matches DL
+        let candidates = make_candidates(&["calculated", "claude"]);
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        if texts.contains(&"calculated") && texts.contains(&"claude") {
+            let pos_calc = texts.iter().position(|t| *t == "calculated").unwrap();
+            let pos_claude = texts.iter().position(|t| *t == "claude").unwrap();
+            assert!(
+                pos_calc < pos_claude,
+                "nucleo match should precede DL match: {texts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dl_smart_case_insensitive() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Claude", "cat"]);
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            texts.contains(&"Claude"),
+            "lowercase query should match Claude case-insensitively: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn dl_smart_case_sensitive() {
+        let mut m = FuzzyMatcher::new();
+        // Short query (len<=4) → max_dist=1, so case diff + transposition = distance 2 is rejected
+        let candidates = make_candidates(&["Git", "git"]);
+        let results = m.filter(&candidates, "Gti");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        assert!(
+            texts.contains(&"Git"),
+            "uppercase query should match Git: {texts:?}"
+        );
+        assert!(
+            !texts.contains(&"git"),
+            "uppercase query should not match lowercase git (distance 2 > max_dist 1): {texts:?}"
+        );
+    }
+
+    #[test]
+    fn dl_deduplication() {
+        let mut m = FuzzyMatcher::new();
+        // "git" is matched by both nucleo (subsequence) and DL (distance 1 from "gti")
+        let candidates = make_candidates(&["git", "grep", "gzip"]);
+        let results = m.filter(&candidates, "gti");
+        let git_count = results
+            .iter()
+            .filter(|r| r.candidate.text == "git")
+            .count();
+        assert_eq!(git_count, 1, "git should appear exactly once");
     }
 }

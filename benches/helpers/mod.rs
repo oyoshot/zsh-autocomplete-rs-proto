@@ -88,6 +88,7 @@ const COMMAND_NAMES: &[&str] = &[
     "gcc",
     "g++",
     "clang",
+    "claude",
     "curl",
     "wget",
     "ssh",

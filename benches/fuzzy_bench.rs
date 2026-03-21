@@ -27,6 +27,7 @@ fn filter_query_variants(c: &mut Criterion) {
         ("3char", "git"),
         ("exact", "cargo-build"),
         ("typo", "gti"),
+        ("typo_no_subseq", "calude"),
         ("no_match", "zzzzz"),
         ("long", "git-checkout-branch"),
     ];
