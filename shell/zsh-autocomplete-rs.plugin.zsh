@@ -107,10 +107,17 @@ _zacrs_render() {
                     [[ "$token" != *=* ]] && tty_len=$token
                 done
                 # Read tty_bytes and pipe directly to /dev/tty
+                local tty_ok=1
                 if (( tty_len > 0 )); then
-                    dd bs=$tty_len count=1 <&$fd 2>/dev/null > /dev/tty
+                    if ! head -c "$tty_len" <&$fd > /dev/tty; then
+                        tty_ok=0
+                    fi
                 fi
-                _zacrs_popup_visible=1
+                if (( tty_ok )); then
+                    _zacrs_popup_visible=1
+                else
+                    _zacrs_daemon_available=0
+                fi
                 exec {fd}<&-
                 return
             elif [[ "$header" == EMPTY || "$header" == ERROR* ]]; then
