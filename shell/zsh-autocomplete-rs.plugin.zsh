@@ -428,15 +428,22 @@ _zacrs_tab_complete() {
         local text="${cands[1]%%	*}"
         local kind="${${cands[1]##*	}}"
         local base
+        local is_cmd_pos=0
         if (( prefix_len > 0 )); then
             base="${LBUFFER[1,-(prefix_len+1)]}"
         else
             base="$LBUFFER"
         fi
+        _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
         LBUFFER="${base}${text}"
         case "$kind" in
             directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
             command|alias|builtin|function|file) LBUFFER+=" " ;;
+            "")
+                if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
+                    LBUFFER+=" "
+                fi
+                ;;
         esac
         unset POSTDISPLAY
         # 末尾がスペース/スラッシュなら prev_lbuffer を更新せず
