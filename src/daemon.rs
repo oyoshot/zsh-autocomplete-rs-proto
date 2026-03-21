@@ -54,8 +54,6 @@ pub fn start() -> io::Result<()> {
         fuzzy: Some(FuzzyMatcher::new()),
     };
 
-    eprintln!("daemon: listening on {}", server.socket_path.display());
-
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -71,7 +69,6 @@ pub fn start() -> io::Result<()> {
     }
 
     let _ = fs::remove_file(&server.socket_path);
-    eprintln!("daemon: stopped");
     Ok(())
 }
 
