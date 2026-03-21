@@ -23,6 +23,7 @@ typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
 typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
+typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
 
 # === Daemon lifecycle ===
@@ -31,6 +32,11 @@ typeset -g _zacrs_socket_path=""
 if zmodload zsh/net/unix 2>/dev/null; then
     _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
     [[ -z "$XDG_RUNTIME_DIR" ]] && _zacrs_socket_path="/tmp/zacrs-${USER:-unknown}.sock"
+
+    _zacrs_mark_daemon_unavailable() {
+        _zacrs_daemon_available=0
+        _zacrs_daemon_next_retry=$(( SECONDS + 1 ))
+    }
 
     _zacrs_ensure_daemon() {
         # Already confirmed available this session
@@ -46,6 +52,7 @@ if zmodload zsh/net/unix 2>/dev/null; then
             if [[ "$resp" == OK* ]]; then
                 _zacrs_daemon_available=1
                 _zacrs_daemon_started=0
+                _zacrs_daemon_next_retry=0
                 return 0
             fi
         fi
@@ -60,7 +67,18 @@ if zmodload zsh/net/unix 2>/dev/null; then
         if [[ -S "$_zacrs_socket_path" ]]; then
             _zacrs_daemon_available=1
             _zacrs_daemon_started=1
+            _zacrs_daemon_next_retry=0
+            return 0
         fi
+
+        _zacrs_mark_daemon_unavailable
+        return 1
+    }
+
+    _zacrs_maybe_retry_daemon() {
+        (( _zacrs_daemon_available )) && return 0
+        (( SECONDS < _zacrs_daemon_next_retry )) && return 1
+        _zacrs_ensure_daemon
     }
     _zacrs_ensure_daemon
 fi
@@ -71,6 +89,10 @@ _zacrs_render() {
     local prefix="$1" candidates_str="$2"
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
+
+    if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
+        _zacrs_maybe_retry_daemon
+    fi
 
     # Try zsocket daemon path (no subprocess spawn)
     if (( _zacrs_daemon_available )); then
@@ -110,7 +132,7 @@ _zacrs_render() {
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
                 else
-                    _zacrs_daemon_available=0
+                    _zacrs_mark_daemon_unavailable
                 fi
                 exec {fd}<&-
                 return
@@ -118,12 +140,12 @@ _zacrs_render() {
                 exec {fd}<&-
                 return
             elif [[ "$header" == ERROR* ]]; then
-                _zacrs_daemon_available=0
+                _zacrs_mark_daemon_unavailable
             fi
             exec {fd}<&-
         fi
         # Socket connect failed, daemon may have died
-        _zacrs_daemon_available=0
+        _zacrs_mark_daemon_unavailable
     fi
 
     # Fallback: subprocess
