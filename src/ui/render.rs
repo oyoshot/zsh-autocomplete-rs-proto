@@ -78,7 +78,7 @@ fn print_colored(
 
 fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
     let popup = Popup::compute(app);
-    let inner = (popup.width - 2) as usize;
+    let inner = popup.width.saturating_sub(2) as usize;
 
     // Pre-compute padding strings (reused via slicing, avoids per-row allocations)
     let spaces = " ".repeat(inner);
@@ -386,5 +386,22 @@ mod tests {
         let text_w = UnicodeWidthStr::width(layout.text.as_str());
         let desc_w = UnicodeWidthStr::width(layout.description.as_str());
         assert_eq!(text_w + layout.gap + desc_w, 20);
+    }
+
+    #[test]
+    fn render_popup_to_bytes_handles_zero_sized_terminal_input() {
+        let candidates = vec![Candidate {
+            text: "git".to_string(),
+            description: String::new(),
+            kind: String::new(),
+        }];
+        let app = App::new_with_term_size(candidates, "".to_string(), 4, 8, 0, 0);
+
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+
+        assert!(!bytes.is_empty());
+        assert_eq!(popup.width, 1);
+        assert_eq!(popup.row, 0);
+        assert_eq!(popup.col, 0);
     }
 }

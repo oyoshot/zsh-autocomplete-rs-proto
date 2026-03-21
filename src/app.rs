@@ -59,6 +59,8 @@ impl App {
         term_rows: u16,
         fuzzy: FuzzyMatcher,
     ) -> Self {
+        let term_cols = term_cols.max(1);
+        let term_rows = term_rows.max(1);
         let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
         let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
 
@@ -533,5 +535,23 @@ mod tests {
         assert!(app.visible_selected_index().is_some());
         assert!(app.selected >= app.scroll_offset);
         assert!(app.selected < app.scroll_offset + app.max_visible);
+    }
+
+    #[test]
+    fn new_with_term_size_clamps_zero_dimensions() {
+        let app = App::new_with_term_size(
+            make_candidates(&["alpha", "beta"]),
+            "".to_string(),
+            7,
+            9,
+            0,
+            0,
+        );
+
+        assert_eq!(app.term_cols, 1);
+        assert_eq!(app.term_rows, 1);
+        assert_eq!(app.cursor_col, 0);
+        assert_eq!(app.cursor_row, 0);
+        assert_eq!(app.max_visible, 1);
     }
 }
