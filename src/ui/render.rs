@@ -16,6 +16,7 @@ struct CandidateLayout {
     description: String,
 }
 
+#[inline]
 fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
     let text = truncate_to_width(&candidate.text, inner);
     let text_w = UnicodeWidthStr::width(text.as_str());
@@ -67,6 +68,7 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
     Ok(())
 }
 
+#[inline]
 fn print_colored(
     buf: &mut impl Write,
     text: impl std::fmt::Display,
@@ -83,6 +85,11 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
 
+    // Pre-compute padding strings (reused via slicing, avoids per-row allocations)
+    let spaces = " ".repeat(inner);
+    let dashes = "─".repeat(inner);
+    let dash_byte_len = '─'.len_utf8(); // 3
+
     crossterm::queue!(buf, cursor::Hide)?;
 
     // Top border with filter text
@@ -93,7 +100,11 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row))?;
     print_colored(buf, "┌", theme.border)?;
     print_colored(buf, &filter_label, theme.filter)?;
-    print_colored(buf, format!("{}┐", "─".repeat(remaining)), theme.border)?;
+    print_colored(
+        buf,
+        format_args!("{}┐", &dashes[..remaining * dash_byte_len]),
+        theme.border,
+    )?;
     crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     // Candidate rows
@@ -121,7 +132,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             crossterm::queue!(
                 buf,
                 Print(&layout.text),
-                Print(" ".repeat(layout.gap)),
+                Print(&spaces[..layout.gap]),
                 Print(&layout.description),
             )?;
             if use_explicit {
@@ -137,13 +148,13 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             if !layout.description.is_empty() {
                 crossterm::queue!(
                     buf,
-                    Print(" ".repeat(layout.gap)),
+                    Print(&spaces[..layout.gap]),
                     SetForegroundColor(theme.description),
                     Print(&layout.description),
                     ResetColor,
                 )?;
             } else {
-                crossterm::queue!(buf, Print(" ".repeat(layout.gap)))?;
+                crossterm::queue!(buf, Print(&spaces[..layout.gap]))?;
             }
 
             print_colored(buf, "│", theme.border)?;
@@ -156,7 +167,11 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         buf,
         cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
     )?;
-    print_colored(buf, format!("└{}┘", "─".repeat(inner)), theme.border)?;
+    print_colored(
+        buf,
+        format_args!("└{}┘", &dashes[..inner * dash_byte_len]),
+        theme.border,
+    )?;
     crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     Ok(popup)
@@ -263,7 +278,7 @@ pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
 }
 
 pub fn render_popup_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(2048);
     let popup = render_popup(&mut buf, app, theme)?;
     crossterm::queue!(
         &mut buf,
@@ -278,7 +293,7 @@ pub fn clear_rect_to_bytes(
     popup_height: u16,
     cursor_row: u16,
 ) -> std::io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(256);
     for i in 0..popup_height {
         crossterm::queue!(
             &mut buf,
@@ -290,9 +305,14 @@ pub fn clear_rect_to_bytes(
     Ok(buf)
 }
 
+#[inline]
 pub fn truncate_to_width(s: &str, max_width: usize) -> String {
+    // Fast path: most candidates fit without truncation
+    if UnicodeWidthStr::width(s) <= max_width {
+        return s.to_string();
+    }
     let mut width = 0;
-    let mut result = String::new();
+    let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
         if width + cw > max_width {

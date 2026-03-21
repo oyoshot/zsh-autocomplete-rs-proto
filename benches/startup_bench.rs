@@ -55,7 +55,7 @@ fn app_new(c: &mut Criterion) {
             BenchmarkId::from_parameter(size),
             &candidates,
             |b, cands| {
-                b.iter(|| App::new(cands.clone(), "gi".to_string(), 5, 2));
+                b.iter(|| App::new_with_term_size(cands.clone(), "gi".to_string(), 5, 2, 80, 24));
             },
         );
     }
@@ -86,7 +86,7 @@ fn full_pipeline_no_tty(c: &mut Criterion) {
                     .iter()
                     .map(|line| Candidate::parse_line(line))
                     .collect();
-                App::new(candidates, "gi".to_string(), 5, 2)
+                App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24)
             });
         });
     }
