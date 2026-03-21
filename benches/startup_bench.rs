@@ -8,7 +8,7 @@ use zsh_autocomplete_rs::config::Config;
 
 fn config_load(c: &mut Criterion) {
     c.bench_function("config_load", |b| {
-        b.iter(|| Config::load());
+        b.iter(Config::load);
     });
 }
 
@@ -24,7 +24,7 @@ fn clap_parse(c: &mut Criterion) {
         "2",
     ];
     c.bench_function("clap_parse", |b| {
-        b.iter(|| <Cli as clap::Parser>::try_parse_from(&args));
+        b.iter(|| <Cli as clap::Parser>::try_parse_from(args));
     });
 }
 
@@ -72,7 +72,7 @@ fn full_pipeline_no_tty(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &lines, |b, lines| {
             b.iter(|| {
                 let _cfg = Config::load();
-                let _cli = <Cli as clap::Parser>::try_parse_from(&[
+                let _cli = <Cli as clap::Parser>::try_parse_from([
                     "zsh-autocomplete-rs",
                     "render",
                     "--prefix",
@@ -107,7 +107,7 @@ fn full_pipeline_with_render(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &lines, |b, lines| {
             b.iter(|| {
                 let cfg = Config::load();
-                let _cli = <Cli as clap::Parser>::try_parse_from(&[
+                let _cli = <Cli as clap::Parser>::try_parse_from([
                     "zsh-autocomplete-rs",
                     "render",
                     "--prefix",
