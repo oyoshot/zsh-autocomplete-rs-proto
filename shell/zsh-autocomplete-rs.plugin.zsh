@@ -63,12 +63,6 @@ if zmodload zsh/net/unix 2>/dev/null; then
         fi
     }
     _zacrs_ensure_daemon
-
-    _zacrs_zshexit() {
-        (( _zacrs_daemon_started )) && "$ZACRS_BIN" daemon stop 2>/dev/null
-    }
-    autoload -Uz add-zsh-hook
-    add-zsh-hook zshexit _zacrs_zshexit
 fi
 
 # === Non-blocking render (auto-trigger) ===
