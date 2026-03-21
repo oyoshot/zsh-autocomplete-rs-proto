@@ -187,6 +187,33 @@ _zacrs_clear_popup() {
     _zacrs_popup_visible=0
 }
 
+# === Apply completion result to LBUFFER ===
+
+_zacrs_apply_result() {
+    local prefix_len="$1" result_code="$2" result_text="$3"
+    local base
+    if (( prefix_len > 0 )); then
+        base="${LBUFFER[1,-(prefix_len+1)]}"
+    else
+        base="$LBUFFER"
+    fi
+
+    if [[ $result_code -eq 0 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=0
+    elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=1
+    elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
+        LBUFFER="${base}${result_text}"
+        _zacrs_suppressed=0
+    elif [[ $result_code -eq 1 ]]; then
+        _zacrs_suppressed=0
+    fi
+
+    _zacrs_prev_lbuffer="$LBUFFER"
+}
+
 # === Daemon-based interactive complete (blocking, for Tab) ===
 
 # Parse FRAME header into _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len
@@ -299,27 +326,7 @@ _zacrs_invoke_daemon() {
 
     exec {fd}<&-
     _zacrs_clear_popup
-
-    # Apply result to LBUFFER (same logic as _zacrs_invoke)
-    local base
-    if (( prefix_len > 0 )); then
-        base="${LBUFFER[1,-(prefix_len+1)]}"
-    else
-        base="$LBUFFER"
-    fi
-
-    if [[ $result_code -eq 0 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
-        _zacrs_suppressed=0
-    elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
-        _zacrs_suppressed=1
-    elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
-        _zacrs_suppressed=0
-    fi
-
-    _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
     zle reset-prompt
     return 0
 }
@@ -343,33 +350,7 @@ _zacrs_invoke() {
     local exit_code=$?
 
     unset POSTDISPLAY
-
-    local base
-    if (( prefix_len > 0 )); then
-        base="${LBUFFER[1,-(prefix_len+1)]}"
-    else
-        base="$LBUFFER"
-    fi
-
-    if [[ $exit_code -eq 0 && -n "$output" ]]; then
-        # Confirm: replace prefix with selected candidate
-        LBUFFER="${base}${output}"
-        _zacrs_suppressed=0
-    elif [[ $exit_code -eq 2 && -n "$output" ]]; then
-        # DismissWithSpace: text+space, suppress until next word
-        LBUFFER="${base}${output}"
-        _zacrs_suppressed=1
-    elif [[ $exit_code -eq 1 && -n "$output" ]]; then
-        # Cancel with text change
-        LBUFFER="${base}${output}"
-        _zacrs_suppressed=0
-    elif [[ $exit_code -eq 1 ]]; then
-        # Cancel with no change
-        _zacrs_suppressed=0
-    fi
-
-    # Prevent immediate re-trigger from line-pre-redraw
-    _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_apply_result "$prefix_len" "$exit_code" "$output"
     zle reset-prompt
 }
 

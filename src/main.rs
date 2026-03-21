@@ -110,18 +110,12 @@ fn run_complete(
 
     match result {
         AppResult::Selected(text, kind) => {
-            let suffix = match kind.as_str() {
-                "directory" => {
-                    if text.ends_with('/') {
-                        ""
-                    } else {
-                        "/"
-                    }
-                }
-                "command" | "alias" | "builtin" | "function" | "file" => " ",
-                _ => "",
+            let c = Candidate {
+                text,
+                description: String::new(),
+                kind,
             };
-            print!("{}{}", text, suffix);
+            print!("{}", c.text_with_suffix());
             Ok(0)
         }
         AppResult::DismissedWithSpace(text) => {

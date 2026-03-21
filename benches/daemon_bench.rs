@@ -42,8 +42,11 @@ fn text_render(sock: &str, request: &[u8]) -> Option<usize> {
     Some(tty_len)
 }
 
-fn build_render_request(candidates: &[zsh_autocomplete_rs::candidate::Candidate]) -> Vec<u8> {
-    let mut req = String::from("render 5 2 80 24\n");
+fn build_request(
+    command: &str,
+    candidates: &[zsh_autocomplete_rs::candidate::Candidate],
+) -> Vec<u8> {
+    let mut req = format!("{} 5 2 80 24\n", command);
     req.push_str("gi\n");
     for c in candidates {
         req.push_str(&format!("{}\t{}\t{}\n", c.text, c.description, c.kind));
@@ -74,22 +77,12 @@ fn daemon_render(c: &mut Criterion) {
     let mut group = c.benchmark_group("daemon_render");
     for size in [50, 200, 1_000] {
         let candidates = helpers::generate_candidates(size);
-        let request = build_render_request(&candidates);
+        let request = build_request("render", &candidates);
         group.bench_with_input(BenchmarkId::from_parameter(size), &request, |b, req| {
             b.iter(|| text_render(&sock, req));
         });
     }
     group.finish();
-}
-
-fn build_complete_request(candidates: &[zsh_autocomplete_rs::candidate::Candidate]) -> Vec<u8> {
-    let mut req = String::from("complete 5 2 80 24\n");
-    req.push_str("gi\n");
-    for c in candidates {
-        req.push_str(&format!("{}\t{}\t{}\n", c.text, c.description, c.kind));
-    }
-    req.push_str("END\n");
-    req.into_bytes()
 }
 
 fn read_frame(reader: &mut BufReader<&UnixStream>) -> Option<usize> {
@@ -118,7 +111,7 @@ fn daemon_complete_session(c: &mut Criterion) {
     }
 
     let candidates = helpers::generate_candidates(50);
-    let request = build_complete_request(&candidates);
+    let request = build_request("complete", &candidates);
 
     let arrow_down = b"KEY 3\n\x1b[B";
     let enter_key = b"KEY 1\n\r";

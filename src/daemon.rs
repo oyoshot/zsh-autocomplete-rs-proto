@@ -598,20 +598,16 @@ impl DaemonServer {
                           theme: &Theme,
                           extra_prefix: &[u8]|
          -> io::Result<()> {
-            let (mut tty_bytes, popup) = ui::render::draw_to_bytes(app, theme)?;
-            if !extra_prefix.is_empty() {
-                let mut combined = extra_prefix.to_vec();
-                combined.append(&mut tty_bytes);
-                tty_bytes = combined;
-            }
+            let (tty_bytes, popup) = ui::render::draw_to_bytes(app, theme)?;
+            let total_len = extra_prefix.len() + tty_bytes.len();
             writeln!(
                 writer,
                 "FRAME popup_row={} popup_height={} cursor_row={} {}",
-                popup.row,
-                popup.height,
-                app.cursor_row,
-                tty_bytes.len()
+                popup.row, popup.height, app.cursor_row, total_len
             )?;
+            if !extra_prefix.is_empty() {
+                writer.write_all(extra_prefix)?;
+            }
             writer.write_all(&tty_bytes)?;
             writer.flush()
         };
@@ -647,26 +643,14 @@ impl DaemonServer {
                 let action = input::parse_raw_bytes(&key_buf, bindings);
 
                 match action {
-                    Action::MoveDown => {
-                        app.move_down();
-                        if send_frame(writer, &app, theme, &[]).is_err() {
-                            break;
+                    Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+                        match action {
+                            Action::MoveDown => app.move_down(),
+                            Action::MoveUp => app.move_up(),
+                            Action::PageDown => app.page_down(),
+                            Action::PageUp => app.page_up(),
+                            _ => unreachable!(),
                         }
-                    }
-                    Action::MoveUp => {
-                        app.move_up();
-                        if send_frame(writer, &app, theme, &[]).is_err() {
-                            break;
-                        }
-                    }
-                    Action::PageDown => {
-                        app.page_down();
-                        if send_frame(writer, &app, theme, &[]).is_err() {
-                            break;
-                        }
-                    }
-                    Action::PageUp => {
-                        app.page_up();
                         if send_frame(writer, &app, theme, &[]).is_err() {
                             break;
                         }
@@ -700,23 +684,10 @@ impl DaemonServer {
                         }
                     }
                     Action::Confirm => {
-                        let result = match app.selected_candidate() {
-                            Some(c) => {
-                                let suffix = match c.kind.as_str() {
-                                    "directory" => {
-                                        if c.text.ends_with('/') {
-                                            ""
-                                        } else {
-                                            "/"
-                                        }
-                                    }
-                                    "command" | "alias" | "builtin" | "function" | "file" => " ",
-                                    _ => "",
-                                };
-                                format!("{}{}", c.text, suffix)
-                            }
-                            None => String::new(),
-                        };
+                        let result = app
+                            .selected_candidate()
+                            .map(|c| c.text_with_suffix())
+                            .unwrap_or_default();
                         let _ = writeln!(writer, "DONE 0 {}", result);
                         let _ = writer.flush();
                         break;
