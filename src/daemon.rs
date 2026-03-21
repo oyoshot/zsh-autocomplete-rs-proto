@@ -11,6 +11,8 @@ use crate::config::{Config, Theme};
 use crate::fuzzy::FuzzyMatcher;
 use crate::protocol::{self, Request, Response};
 use crate::ui;
+use tracing::{debug, error, info, info_span, warn};
+use tracing_subscriber::EnvFilter;
 
 struct DaemonServer {
     config: Config,
@@ -21,11 +23,15 @@ struct DaemonServer {
 }
 
 pub fn start() -> io::Result<()> {
+    init_tracing();
+
     let socket_path = protocol::socket_path();
+    info!(socket_path = %socket_path.display(), "starting daemon");
 
     // Clean up stale socket
     if socket_path.exists() {
         if UnixStream::connect(&socket_path).is_ok() {
+            warn!(socket_path = %socket_path.display(), "daemon already running");
             return Err(io::Error::new(
                 io::ErrorKind::AddrInUse,
                 "daemon already running",
@@ -59,16 +65,19 @@ pub fn start() -> io::Result<()> {
             Ok(stream) => {
                 server.maybe_reload_config();
                 if server.handle_connection(stream) {
+                    info!("shutdown requested");
                     break; // shutdown requested
                 }
             }
             Err(e) => {
+                warn!(error = %e, "accept error");
                 eprintln!("daemon: accept error: {}", e);
             }
         }
     }
 
     let _ = fs::remove_file(&server.socket_path);
+    info!(socket_path = %server.socket_path.display(), "daemon stopped");
     Ok(())
 }
 
@@ -99,10 +108,13 @@ pub fn status() -> bool {
 impl DaemonServer {
     fn maybe_reload_config(&mut self) {
         let current_mtime = config_file_mtime();
-        if current_mtime != self.config_mtime {
+        let reloaded = current_mtime != self.config_mtime;
+        debug!(reloaded, "checked config reload");
+        if reloaded {
             self.config = Config::load();
             self.theme = self.config.theme();
             self.config_mtime = current_mtime;
+            info!(reloaded = true, "reloaded config");
         }
     }
 
@@ -116,19 +128,26 @@ impl DaemonServer {
         // Peek at first byte to determine protocol
         let buf = match reader.fill_buf() {
             Ok(b) if !b.is_empty() => b[0],
-            _ => return false,
+            _ => {
+                warn!("failed to peek request byte");
+                return false;
+            }
         };
 
         // Text protocol: first byte is ASCII letter
         // Binary protocol: first byte is part of u32 length (typically 0x00)
         if buf.is_ascii_alphabetic() {
+            let _span = info_span!("request", protocol = "text").entered();
             return self.handle_text_connection(&mut reader, &stream);
         }
 
         // Binary protocol
         let request = match Request::deserialize(&mut reader) {
             Ok(req) => req,
-            Err(_) => return false,
+            Err(e) => {
+                warn!(error = %e, "failed to deserialize binary request");
+                return false;
+            }
         };
 
         match request {
@@ -140,6 +159,17 @@ impl DaemonServer {
                 term_rows,
                 candidates_tsv,
             } => {
+                let _span = info_span!(
+                    "render",
+                    protocol = "binary",
+                    prefix_len = prefix.len(),
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    payload_bytes = candidates_tsv.len()
+                )
+                .entered();
                 let response = self.handle_render(
                     prefix,
                     cursor_row,
@@ -149,7 +179,9 @@ impl DaemonServer {
                     &candidates_tsv,
                 );
                 let mut writer = &stream;
-                let _ = response.write_to(&mut writer);
+                if let Err(e) = response.write_to(&mut writer) {
+                    warn!(error = %e, "failed to write render response");
+                }
                 false
             }
             Request::Clear {
@@ -157,27 +189,45 @@ impl DaemonServer {
                 popup_height,
                 cursor_row,
             } => {
+                let _span = info_span!(
+                    "clear",
+                    protocol = "binary",
+                    popup_row,
+                    popup_height,
+                    cursor_row
+                )
+                .entered();
                 let response = self.handle_clear(popup_row, popup_height, cursor_row);
                 let mut writer = &stream;
-                let _ = response.write_to(&mut writer);
+                if let Err(e) = response.write_to(&mut writer) {
+                    warn!(error = %e, "failed to write clear response");
+                }
                 false
             }
             Request::Ping => {
+                let _span = info_span!("ping", protocol = "binary").entered();
                 let mut writer = &stream;
-                let _ = Response::Success {
+                if let Err(e) = (Response::Success {
                     tty_bytes: Vec::new(),
                     metadata: None,
+                })
+                .write_to(&mut writer)
+                {
+                    warn!(error = %e, "failed to write ping response");
                 }
-                .write_to(&mut writer);
                 false
             }
             Request::Shutdown => {
+                let _span = info_span!("shutdown", protocol = "binary").entered();
                 let mut writer = &stream;
-                let _ = Response::Success {
+                if let Err(e) = (Response::Success {
                     tty_bytes: Vec::new(),
                     metadata: None,
+                })
+                .write_to(&mut writer)
+                {
+                    warn!(error = %e, "failed to write shutdown response");
                 }
-                .write_to(&mut writer);
                 true
             }
         }
@@ -209,12 +259,14 @@ impl DaemonServer {
     ) -> bool {
         let mut header = String::new();
         if reader.read_line(&mut header).is_err() {
+            warn!("failed to read text request header");
             return false;
         }
         let header = header.trim_end();
         let parts: Vec<&str> = header.split(' ').collect();
 
         if parts.is_empty() {
+            warn!("received empty text request");
             return false;
         }
 
@@ -229,6 +281,7 @@ impl DaemonServer {
                 let prefix = match read_text_line(reader) {
                     Ok(prefix) => prefix,
                     Err(_) => {
+                        warn!("invalid text render prefix");
                         let _ = writeln!(writer, "ERROR invalid prefix");
                         let _ = writer.flush();
                         return false;
@@ -264,6 +317,17 @@ impl DaemonServer {
                     tsv.push_str(&line);
                 }
 
+                let _span = info_span!(
+                    "render",
+                    protocol = "text",
+                    prefix_len = prefix.len(),
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    payload_bytes = tsv.len()
+                )
+                .entered();
                 let response = self.handle_render(
                     prefix,
                     cursor_row,
@@ -297,6 +361,14 @@ impl DaemonServer {
                 let popup_height: u16 = parts[2].parse().unwrap_or(0);
                 let cursor_row: u16 = parts[3].parse().unwrap_or(0);
 
+                let _span = info_span!(
+                    "clear",
+                    protocol = "text",
+                    popup_row,
+                    popup_height,
+                    cursor_row
+                )
+                .entered();
                 let response = self.handle_clear(popup_row, popup_height, cursor_row);
                 match response {
                     Response::Success { tty_bytes, .. } => {
@@ -311,16 +383,21 @@ impl DaemonServer {
                 false
             }
             "ping" => {
+                let _span = info_span!("ping", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 false
             }
             "shutdown" => {
+                let _span = info_span!("shutdown", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 true
             }
-            _ => false,
+            _ => {
+                warn!(header = header, "unknown text request");
+                false
+            }
         }
     }
 
@@ -335,7 +412,10 @@ impl DaemonServer {
     ) -> Response {
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
-            Err(e) => return Response::Error(format!("invalid UTF-8: {}", e)),
+            Err(e) => {
+                error!(error = %e, "invalid UTF-8 render payload");
+                return Response::Error(format!("invalid UTF-8: {}", e));
+            }
         };
 
         let candidates: Vec<Candidate> = tsv_str
@@ -345,6 +425,7 @@ impl DaemonServer {
             .collect();
 
         if candidates.is_empty() {
+            debug!("render request had no candidates");
             return Response::Empty;
         }
 
@@ -361,6 +442,7 @@ impl DaemonServer {
         }
 
         if app.max_visible == 0 {
+            debug!("render request had zero visible rows");
             return Response::Empty;
         }
 
@@ -393,6 +475,13 @@ impl DaemonServer {
                     combined.append(&mut tty_bytes);
                     tty_bytes = combined;
                 }
+                debug!(
+                    popup_row = popup.row,
+                    popup_height = popup.height,
+                    cursor_row = cursor_row_final,
+                    tty_bytes = tty_bytes.len(),
+                    "render complete"
+                );
                 let metadata = format!(
                     "popup_row={} popup_height={} cursor_row={}",
                     popup.row, popup.height, cursor_row_final
@@ -402,19 +491,47 @@ impl DaemonServer {
                     metadata: Some(metadata),
                 }
             }
-            Err(e) => Response::Error(format!("render failed: {}", e)),
+            Err(e) => {
+                error!(error = %e, "render failed");
+                Response::Error(format!("render failed: {}", e))
+            }
         }
     }
 
     fn handle_clear(&self, popup_row: u16, popup_height: u16, cursor_row: u16) -> Response {
         match ui::render::clear_rect_to_bytes(popup_row, popup_height, cursor_row) {
-            Ok(tty_bytes) => Response::Success {
-                tty_bytes,
-                metadata: None,
-            },
-            Err(e) => Response::Error(format!("clear failed: {}", e)),
+            Ok(tty_bytes) => {
+                debug!(tty_bytes = tty_bytes.len(), "clear complete");
+                Response::Success {
+                    tty_bytes,
+                    metadata: None,
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "clear failed");
+                Response::Error(format!("clear failed: {}", e))
+            }
         }
     }
+}
+
+fn init_tracing() {
+    if std::env::var_os("RUST_LOG").is_none() {
+        return;
+    }
+
+    let filter = match EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("daemon: invalid RUST_LOG: {}", e);
+            return;
+        }
+    };
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
 }
 
 fn config_file_mtime() -> Option<SystemTime> {
