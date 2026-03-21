@@ -22,6 +22,7 @@ typeset -g _zacrs_popup_cursor_row=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
 typeset -g _zacrs_daemon_available=0
+typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_socket_path=""
 
 # === Daemon lifecycle ===
@@ -44,6 +45,7 @@ if zmodload zsh/net/unix 2>/dev/null; then
             exec {fd}<&-
             if [[ "$resp" == OK* ]]; then
                 _zacrs_daemon_available=1
+                _zacrs_daemon_started=0
                 return 0
             fi
         fi
@@ -57,12 +59,13 @@ if zmodload zsh/net/unix 2>/dev/null; then
         done
         if [[ -S "$_zacrs_socket_path" ]]; then
             _zacrs_daemon_available=1
+            _zacrs_daemon_started=1
         fi
     }
     _zacrs_ensure_daemon
 
     _zacrs_zshexit() {
-        "$ZACRS_BIN" daemon stop 2>/dev/null
+        (( _zacrs_daemon_started )) && "$ZACRS_BIN" daemon stop 2>/dev/null
     }
     autoload -Uz add-zsh-hook
     add-zsh-hook zshexit _zacrs_zshexit
