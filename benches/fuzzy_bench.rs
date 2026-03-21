@@ -130,7 +130,7 @@ fn app_backspace_sequence(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("app_cache_roundtrip_git", |b| {
+    group.bench_function("app_roundtrip_git", |b| {
         let mut app = App::new_with_term_size(candidates.clone(), "".to_string(), 5, 2, 80, 24);
         b.iter(|| {
             app.type_char('g');
