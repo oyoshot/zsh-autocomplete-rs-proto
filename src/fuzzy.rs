@@ -8,6 +8,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 pub struct FuzzyMatcher {
     matcher: Matcher,
     pattern: Pattern,
+    exact_pattern: Pattern,
     last_query: String,
     utf32_buf: Vec<char>,
     dl_scratch: DamerauScratch,
@@ -48,6 +49,12 @@ impl FuzzyMatcher {
                 Normalization::Smart,
                 AtomKind::Fuzzy,
             ),
+            exact_pattern: Pattern::new(
+                "",
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Exact,
+            ),
             last_query: String::new(),
             utf32_buf: Vec::new(),
             dl_scratch: DamerauScratch::default(),
@@ -61,6 +68,12 @@ impl FuzzyMatcher {
                 CaseMatching::Smart,
                 Normalization::Smart,
                 AtomKind::Fuzzy,
+            );
+            self.exact_pattern = Pattern::new(
+                query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Exact,
             );
             self.last_query.clear();
             self.last_query.push_str(query);
@@ -89,6 +102,7 @@ impl FuzzyMatcher {
         self.ensure_pattern(query);
 
         let pattern = &self.pattern;
+        let exact_pattern = &self.exact_pattern;
         let matcher = &mut self.matcher;
         let utf32_buf = &mut self.utf32_buf;
         let mut results: Vec<ScoredMatch> =
@@ -98,9 +112,9 @@ impl FuzzyMatcher {
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
-                has_exact_match |= candidate.text == query;
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+                has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
                 if let Some(score) = pattern.score(haystack, matcher) {
                     results.push(ScoredMatch {
                         candidate_idx,
@@ -110,9 +124,9 @@ impl FuzzyMatcher {
             }
         } else {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                has_exact_match |= candidate.text == query;
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+                has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
                 if let Some(score) = pattern.score(haystack, matcher) {
                     results.push(ScoredMatch {
                         candidate_idx,
@@ -154,14 +168,15 @@ impl FuzzyMatcher {
         self.ensure_pattern(query);
 
         let pattern = &self.pattern;
+        let exact_pattern = &self.exact_pattern;
         let matcher = &mut self.matcher;
         let utf32_buf = &mut self.utf32_buf;
         let mut results = Vec::with_capacity(candidates.len());
         let mut has_exact_match = false;
         for candidate in candidates {
-            has_exact_match |= candidate.text == query;
             utf32_buf.clear();
             let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+            has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
             if let Some(score) = pattern.score(haystack, matcher) {
                 results.push(ScoredCandidate {
                     candidate: candidate.clone(),
@@ -641,6 +656,51 @@ mod tests {
             texts,
             vec!["cargo-build"],
             "exact match should not pull in DL near-miss candidates: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn smart_case_exact_match_skips_dl_near_miss_candidates() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Git", "gat", "gib"]);
+        let results = m.filter(&candidates, "git");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(
+            texts,
+            vec!["Git"],
+            "smart-case exact match should not pull in DL near-miss candidates: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn normalized_exact_match_skips_dl_near_miss_candidates() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["café", "cafg"]);
+        let results = m.filter(&candidates, "cafe");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(
+            texts,
+            vec!["café"],
+            "normalization-equivalent exact match should not pull in DL near-miss candidates: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn filter_matches_smart_case_exact_match_skips_dl_near_miss_candidates() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Git", "gat", "gib"]);
+        let results = m.filter_matches(&candidates, "git", None);
+        let texts: Vec<&str> = results
+            .iter()
+            .map(|r| candidates[r.candidate_idx].text.as_str())
+            .collect();
+
+        assert_eq!(
+            texts,
+            vec!["Git"],
+            "filter_matches should also skip DL near-miss candidates when smart-case exact exists: {texts:?}"
         );
     }
 
