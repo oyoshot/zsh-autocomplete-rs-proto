@@ -129,6 +129,12 @@ impl Request {
         match cmd {
             CMD_RENDER => {
                 let prefix_len = read_u16(&mut cursor)? as usize;
+                if cursor.len() < prefix_len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "prefix length exceeds payload",
+                    ));
+                }
                 let (prefix_bytes, rest) = cursor.split_at(prefix_len);
                 cursor = rest;
                 let prefix = String::from_utf8(prefix_bytes.to_vec())
@@ -446,6 +452,20 @@ mod tests {
         let err = Request::deserialize(&mut &fake_len[..]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("payload too large"));
+    }
+
+    #[test]
+    fn render_request_rejects_truncated_prefix_payload() {
+        let mut bytes = Vec::new();
+        write_u32(&mut bytes, 5);
+        bytes.push(CMD_RENDER);
+        write_u16(&mut bytes, 4);
+        bytes.extend_from_slice(b"ab");
+
+        let err = Request::deserialize(&mut &bytes[..]).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("prefix length exceeds payload"));
     }
 
     #[test]
