@@ -21,6 +21,7 @@ typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
+typeset -gi _zacrs_chain_retry=0
 typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
@@ -211,7 +212,14 @@ _zacrs_apply_result() {
         _zacrs_suppressed=0
     fi
 
-    _zacrs_prev_lbuffer="$LBUFFER"
+    # Confirm (code 0) で末尾がスペース/スラッシュなら
+    # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
+    if [[ $result_code -eq 0 && "$LBUFFER" == *[\ /] ]]; then
+        _zacrs_prev_lbuffer="$base"
+        _zacrs_chain_retry=1
+    else
+        _zacrs_prev_lbuffer="$LBUFFER"
+    fi
 }
 
 # === Daemon-based interactive complete (blocking, for Tab) ===
@@ -421,15 +429,32 @@ _zacrs_tab_complete() {
         local text="${cands[1]%%	*}"
         local kind="${${cands[1]##*	}}"
         local base
+        local is_cmd_pos=0
         if (( prefix_len > 0 )); then
             base="${LBUFFER[1,-(prefix_len+1)]}"
         else
             base="$LBUFFER"
         fi
+        _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
         LBUFFER="${base}${text}"
-        [[ "$kind" == "directory" && "$text" != */ ]] && LBUFFER+="/"
-        _zacrs_prev_lbuffer="$LBUFFER"
+        case "$kind" in
+            directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
+            command|alias|builtin|function|file) LBUFFER+=" " ;;
+            "")
+                if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
+                    LBUFFER+=" "
+                fi
+                ;;
+        esac
         unset POSTDISPLAY
+        # 末尾がスペース/スラッシュなら prev_lbuffer を更新せず
+        # line-pre-redraw にチェーンさせる
+        if [[ "$LBUFFER" == *[\ /] ]]; then
+            _zacrs_prev_lbuffer="$base"
+            _zacrs_chain_retry=1
+        else
+            _zacrs_prev_lbuffer="$LBUFFER"
+        fi
         zle reset-prompt
         return
     fi
@@ -500,6 +525,22 @@ _zacrs_line_pre_redraw() {
     if (( ${#_zacrs_captured} > 0 )); then
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
+    # compsys 0 件 → 遅延ロード補完のためリトライ1回
+    # チェーン時 or サブコマンド位置 (naive_prefix 空) で発動
+    if (( ${#_zacrs_captured} == 0 )) && { (( _zacrs_chain_retry )) || [[ -z "$naive_prefix" ]]; }; then
+        _zacrs_chain_retry=0
+        _zacrs_captured=()
+        exec {_zacrs_fd2}>&2
+        zle _zacrs_compsys 2>/dev/null
+        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+        if (( _zacrs_ctx_valid )); then
+            prefix="$_zacrs_ctx_prefix"
+        fi
+        if (( ${#_zacrs_captured} > 0 )); then
+            candidates_str="${(pj:\n:)_zacrs_captured}"
+        fi
+    fi
+    _zacrs_chain_retry=0
     if [[ -z "$candidates_str" ]]; then
         candidates_str="$(_zacrs_gather "$LBUFFER")"
         if [[ -n "$candidates_str" ]]; then
