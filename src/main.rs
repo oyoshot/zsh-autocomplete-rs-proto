@@ -58,6 +58,12 @@ fn run_complete(
                 app.page_up();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
+            input::Action::Resize(cols, rows) => {
+                ui::render::clear(&mut guard.tty, &app)?;
+                app.set_term_size(cols, rows);
+                ui::render::ensure_space(&mut guard.tty, &mut app)?;
+                ui::render::draw(&mut guard.tty, &app, theme)?;
+            }
             input::Action::Confirm => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 break match app.selected_candidate() {

@@ -9,6 +9,7 @@ pub enum Action {
     MoveUp,
     PageDown,
     PageUp,
+    Resize(u16, u16),
     Confirm,
     DismissWithSpace,
     Cancel,
@@ -40,6 +41,7 @@ pub fn read_action(bindings: &KeyBindings) -> std::io::Result<Action> {
             KeyCode::Char(c) => Action::TypeChar(c),
             _ => Action::None,
         }),
+        Event::Resize(cols, rows) => Ok(Action::Resize(cols, rows)),
         _ => Ok(Action::None),
     }
 }

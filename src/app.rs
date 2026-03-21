@@ -1,6 +1,8 @@
 use crate::candidate::Candidate;
 use crate::fuzzy::FuzzyMatcher;
 
+const DEFAULT_MAX_VISIBLE: usize = 10;
+
 pub struct App {
     pub all_candidates: Vec<Candidate>,
     pub filtered: Vec<Candidate>,
@@ -67,7 +69,7 @@ impl App {
             filter_text: lcp,
             selected: 0,
             scroll_offset: 0,
-            max_visible: 10,
+            max_visible: DEFAULT_MAX_VISIBLE,
             cursor_row,
             cursor_col,
             term_cols,
@@ -75,6 +77,7 @@ impl App {
             prefix,
             fuzzy,
         };
+        app.sync_max_visible();
         app.update_filter();
         app
     }
@@ -168,6 +171,41 @@ impl App {
 
     pub fn take_fuzzy(self) -> FuzzyMatcher {
         self.fuzzy
+    }
+
+    pub fn set_term_size(&mut self, term_cols: u16, term_rows: u16) {
+        self.term_cols = term_cols.max(1);
+        self.term_rows = term_rows.max(1);
+        self.cursor_row = self.cursor_row.min(self.term_rows.saturating_sub(1));
+        self.cursor_col = self.cursor_col.min(self.term_cols.saturating_sub(1));
+        self.sync_max_visible();
+    }
+
+    pub fn sync_max_visible(&mut self) {
+        let max_popup_height = self.term_rows.saturating_sub(1);
+        let max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+        self.max_visible = DEFAULT_MAX_VISIBLE.min(max_visible);
+        self.clamp_viewport();
+    }
+
+    fn clamp_viewport(&mut self) {
+        if self.filtered.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.selected = self.selected.min(self.filtered.len() - 1);
+        let max_scroll = self.filtered.len().saturating_sub(self.max_visible);
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+
+        if self.selected >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = self.selected + 1 - self.max_visible;
+        }
     }
 }
 
@@ -461,5 +499,39 @@ mod tests {
         assert!(app.backspace());
         assert_eq!(app.filter_text, "");
         assert!(app.filter_text.len() < app.prefix.len());
+    }
+
+    #[test]
+    fn set_term_size_clamps_cursor_to_new_bounds() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let mut app = App::new_with_term_size(candidates, "".to_string(), 20, 40, 80, 24);
+
+        app.set_term_size(12, 6);
+
+        assert_eq!(app.term_cols, 12);
+        assert_eq!(app.term_rows, 6);
+        assert_eq!(app.cursor_col, 11);
+        assert_eq!(app.cursor_row, 5);
+    }
+
+    #[test]
+    fn set_term_size_keeps_selection_visible_after_shrink() {
+        let mut app = App::new_with_term_size(
+            make_candidates(FIFTEEN_ITEMS),
+            "".to_string(),
+            5,
+            10,
+            80,
+            24,
+        );
+        app.selected = 9;
+        app.scroll_offset = 0;
+
+        app.set_term_size(80, 6);
+
+        assert_eq!(app.max_visible, 3);
+        assert!(app.visible_selected_index().is_some());
+        assert!(app.selected >= app.scroll_offset);
+        assert!(app.selected < app.scroll_offset + app.max_visible);
     }
 }

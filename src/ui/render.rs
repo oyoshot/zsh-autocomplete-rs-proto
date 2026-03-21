@@ -45,12 +45,7 @@ fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
 /// Updates `app.cursor_row` and `app.max_visible` to reflect the new state.
 pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<()> {
     let term_rows = app.term_rows;
-
-    // Cap max_visible if terminal is too short
-    let max_popup_height = term_rows.saturating_sub(1); // 1 row for prompt
-    if app.max_visible as u16 + 2 > max_popup_height {
-        app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-    }
+    app.sync_max_visible();
 
     let popup_height = app.max_visible as u16 + 2;
     let space_below = term_rows.saturating_sub(app.cursor_row + 1);
