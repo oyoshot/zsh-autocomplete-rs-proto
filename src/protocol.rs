@@ -11,6 +11,9 @@ const STATUS_SUCCESS: u8 = 0x00;
 const STATUS_EMPTY: u8 = 0x01;
 const STATUS_ERROR: u8 = 0xFF;
 
+/// Maximum binary protocol payload size (2MB).
+const MAX_PAYLOAD_SIZE: usize = 2 * 1024 * 1024;
+
 #[derive(Debug)]
 pub enum Request {
     Render {
@@ -107,6 +110,12 @@ impl Request {
 
     pub fn deserialize(stream: &mut impl Read) -> io::Result<Self> {
         let len = read_u32(stream)? as usize;
+        if len > MAX_PAYLOAD_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("payload too large: {} bytes", len),
+            ));
+        }
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf)?;
 
@@ -189,6 +198,12 @@ impl Response {
 
     pub fn deserialize(stream: &mut impl Read) -> io::Result<Self> {
         let len = read_u32(stream)? as usize;
+        if len > MAX_PAYLOAD_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("payload too large: {} bytes", len),
+            ));
+        }
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf)?;
 
@@ -423,5 +438,21 @@ mod tests {
             Response::Error(msg) => assert_eq!(msg, "something went wrong"),
             _ => panic!("expected Error"),
         }
+    }
+
+    #[test]
+    fn request_deserialize_rejects_oversized_payload() {
+        let fake_len = (MAX_PAYLOAD_SIZE as u32 + 1).to_be_bytes();
+        let err = Request::deserialize(&mut &fake_len[..]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("payload too large"));
+    }
+
+    #[test]
+    fn response_deserialize_rejects_oversized_payload() {
+        let fake_len = (MAX_PAYLOAD_SIZE as u32 + 1).to_be_bytes();
+        let err = Response::deserialize(&mut &fake_len[..]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("payload too large"));
     }
 }
