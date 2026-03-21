@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 use crate::candidate::Candidate;
 use nucleo_matcher::chars::{graphemes, is_upper_case, normalize, to_lower_case};
@@ -9,7 +8,6 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 pub struct FuzzyMatcher {
     matcher: Matcher,
     pattern: Pattern,
-    exact_pattern: Pattern,
     last_query: String,
     utf32_buf: Vec<char>,
     dl_scratch: DamerauScratch,
@@ -50,12 +48,6 @@ impl FuzzyMatcher {
                 Normalization::Smart,
                 AtomKind::Fuzzy,
             ),
-            exact_pattern: Pattern::new(
-                "",
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Exact,
-            ),
             last_query: String::new(),
             utf32_buf: Vec::new(),
             dl_scratch: DamerauScratch::default(),
@@ -69,12 +61,6 @@ impl FuzzyMatcher {
                 CaseMatching::Smart,
                 Normalization::Smart,
                 AtomKind::Fuzzy,
-            );
-            self.exact_pattern = Pattern::new(
-                query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Exact,
             );
             self.last_query.clear();
             self.last_query.push_str(query);
@@ -103,19 +89,16 @@ impl FuzzyMatcher {
         self.ensure_pattern(query);
 
         let pattern = &self.pattern;
-        let exact_pattern = &self.exact_pattern;
         let matcher = &mut self.matcher;
         let utf32_buf = &mut self.utf32_buf;
         let mut results: Vec<ScoredMatch> =
             Vec::with_capacity(fuzzy_scope.map_or(candidates.len(), <[usize]>::len));
-        let mut has_exact_match = false;
 
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
                 if let Some(score) = pattern.score(haystack, matcher) {
                     results.push(ScoredMatch {
                         candidate_idx,
@@ -127,7 +110,6 @@ impl FuzzyMatcher {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
                 utf32_buf.clear();
                 let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
                 if let Some(score) = pattern.score(haystack, matcher) {
                     results.push(ScoredMatch {
                         candidate_idx,
@@ -137,16 +119,8 @@ impl FuzzyMatcher {
             }
         }
 
-        if matcher_len(query) >= 2 && !has_exact_match {
-            let dl_results = self.damerau_levenshtein_fallback_matches(candidates, query);
-            if !dl_results.is_empty() {
-                let seen: HashSet<usize> = results.iter().map(|r| r.candidate_idx).collect();
-                let novel: Vec<ScoredMatch> = dl_results
-                    .into_iter()
-                    .filter(|r| !seen.contains(&r.candidate_idx))
-                    .collect();
-                results.extend(novel);
-            }
+        if results.is_empty() && matcher_len(query) >= 3 {
+            results = self.damerau_levenshtein_fallback_matches(candidates, query);
         }
 
         sort_scored_matches(&mut results, candidates);
@@ -169,15 +143,12 @@ impl FuzzyMatcher {
         self.ensure_pattern(query);
 
         let pattern = &self.pattern;
-        let exact_pattern = &self.exact_pattern;
         let matcher = &mut self.matcher;
         let utf32_buf = &mut self.utf32_buf;
         let mut results = Vec::with_capacity(candidates.len());
-        let mut has_exact_match = false;
         for candidate in candidates {
             utf32_buf.clear();
             let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-            has_exact_match |= exact_pattern.score(haystack, matcher).is_some();
             if let Some(score) = pattern.score(haystack, matcher) {
                 results.push(ScoredCandidate {
                     candidate: candidate.clone(),
@@ -186,19 +157,8 @@ impl FuzzyMatcher {
             }
         }
 
-        if matcher_len(query) >= 2 && !has_exact_match {
-            let dl_results = self.damerau_levenshtein_fallback_candidates(candidates, query);
-            if !dl_results.is_empty() {
-                let seen: HashSet<&str> = results
-                    .iter()
-                    .map(|result| result.candidate.text.as_str())
-                    .collect();
-                let novel: Vec<ScoredCandidate> = dl_results
-                    .into_iter()
-                    .filter(|result| !seen.contains(result.candidate.text.as_str()))
-                    .collect();
-                results.extend(novel);
-            }
+        if results.is_empty() && matcher_len(query) >= 3 {
+            results = self.damerau_levenshtein_fallback_candidates(candidates, query);
         }
 
         sort_scored_results(&mut results);
@@ -632,18 +592,15 @@ mod tests {
     #[test]
     fn dl_results_appear_after_nucleo() {
         let mut m = FuzzyMatcher::new();
-        // "calculated" matches nucleo subsequence c-a-l-u-...-d; "claude" only matches DL
-        let candidates = make_candidates(&["calculated", "claude"]);
+        // "calude-helper" is a primary fuzzy hit; "claude" is only reachable via DL.
+        let candidates = make_candidates(&["calude-helper", "claude"]);
         let results = m.filter(&candidates, "calude");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        if texts.contains(&"calculated") && texts.contains(&"claude") {
-            let pos_calc = texts.iter().position(|t| *t == "calculated").unwrap();
-            let pos_claude = texts.iter().position(|t| *t == "claude").unwrap();
-            assert!(
-                pos_calc < pos_claude,
-                "nucleo match should precede DL match: {texts:?}"
-            );
-        }
+        assert_eq!(
+            texts,
+            vec!["calude-helper"],
+            "primary nucleo matches should suppress DL fallback: {texts:?}"
+        );
     }
 
     #[test]
@@ -654,9 +611,9 @@ mod tests {
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
 
         assert_eq!(
-            texts.first().copied(),
-            Some("claude"),
-            "DL typo candidate should be re-ranked ahead of weaker fuzzy matches: {texts:?}"
+            texts,
+            vec!["ca-l-u-d-e-helper"],
+            "DL fallback should not be merged into the primary result set: {texts:?}"
         );
     }
 
@@ -692,31 +649,42 @@ mod tests {
     #[test]
     fn dl_smart_case_insensitive_for_unicode() {
         let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["Äa", "cat"]);
-        let results = m.filter(&candidates, "äb");
+        let candidates = make_candidates(&["Äac", "cat"]);
+        let results = m.filter(&candidates, "äbc");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
         assert!(
-            texts.contains(&"Äa"),
-            "lowercase unicode query should match Äa case-insensitively via DL: {texts:?}"
+            texts.contains(&"Äac"),
+            "lowercase unicode query should match Äac case-insensitively via DL: {texts:?}"
         );
     }
 
     #[test]
     fn dl_smart_case_sensitive_for_unicode() {
         let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["äa", "cat"]);
-        let results = m.filter(&candidates, "Äb");
+        let candidates = make_candidates(&["äac", "cat"]);
+        let results = m.filter(&candidates, "Äbc");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
         assert!(
-            !texts.contains(&"äa"),
+            !texts.contains(&"äac"),
             "uppercase unicode query should not match lowercase candidate via DL: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn short_queries_skip_dl_fallback() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["go"]);
+        let results = m.filter(&candidates, "gi");
+        assert!(
+            results.is_empty(),
+            "short queries should not invoke DL fallback"
         );
     }
 
     #[test]
     fn dl_deduplication() {
         let mut m = FuzzyMatcher::new();
-        // "git" is matched by both nucleo (subsequence) and DL (distance 1 from "gti")
+        // Fallback-only mode should still return a DL candidate at most once.
         let candidates = make_candidates(&["git", "grep", "gzip"]);
         let results = m.filter(&candidates, "gti");
         let git_count = results.iter().filter(|r| r.candidate.text == "git").count();
@@ -806,19 +774,19 @@ mod tests {
     #[test]
     fn filter_matches_scope_keeps_dl_result_from_full_candidate_set() {
         let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["claude", "calculated", "cat"]);
+        let candidates = make_candidates(&["git", "grep", "gzip"]);
 
-        let prior = m.filter_matches(&candidates, "calud", None);
+        let prior = m.filter_matches(&candidates, "gt", None);
         let prior_idx: Vec<usize> = prior.iter().map(|r| r.candidate_idx).collect();
-        let results = m.filter_matches(&candidates, "calude", Some(&prior_idx));
+        let results = m.filter_matches(&candidates, "gti", Some(&prior_idx));
         let texts: Vec<&str> = results
             .iter()
             .map(|r| candidates[r.candidate_idx].text.as_str())
             .collect();
 
         assert!(
-            texts.contains(&"claude"),
-            "calude should still include claude via DL: {texts:?}"
+            texts.contains(&"git"),
+            "gti should still include git via DL even when scoped primary results are empty: {texts:?}"
         );
     }
 }
