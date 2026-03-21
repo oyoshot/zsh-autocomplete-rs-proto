@@ -21,6 +21,52 @@ typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
+typeset -g _zacrs_daemon_available=0
+typeset -g _zacrs_socket_path=""
+
+# === Daemon lifecycle ===
+
+# Try to load zsh/net/unix for zsocket support
+if zmodload zsh/net/unix 2>/dev/null; then
+    _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
+    [[ -z "$XDG_RUNTIME_DIR" ]] && _zacrs_socket_path="/tmp/zacrs-${USER:-unknown}.sock"
+
+    _zacrs_ensure_daemon() {
+        # Already confirmed available this session
+        (( _zacrs_daemon_available )) && return 0
+        # Check if daemon is running via zsocket ping
+        local fd
+        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
+            fd=$REPLY
+            print -u $fd "ping"
+            local resp
+            read -r -u $fd resp 2>/dev/null
+            exec {fd}<&-
+            if [[ "$resp" == OK* ]]; then
+                _zacrs_daemon_available=1
+                return 0
+            fi
+        fi
+        # Start daemon
+        "$ZACRS_BIN" daemon start &!
+        # Wait briefly for socket to appear
+        local i
+        for (( i = 0; i < 10; i++ )); do
+            [[ -S "$_zacrs_socket_path" ]] && break
+            sleep 0.02
+        done
+        if [[ -S "$_zacrs_socket_path" ]]; then
+            _zacrs_daemon_available=1
+        fi
+    }
+    _zacrs_ensure_daemon
+
+    _zacrs_zshexit() {
+        "$ZACRS_BIN" daemon stop 2>/dev/null
+    }
+    autoload -Uz add-zsh-hook
+    add-zsh-hook zshexit _zacrs_zshexit
+fi
 
 # === Non-blocking render (auto-trigger) ===
 
@@ -29,6 +75,47 @@ _zacrs_render() {
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
 
+    # Try zsocket daemon path (no subprocess spawn)
+    if (( _zacrs_daemon_available )); then
+        local fd
+        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
+            fd=$REPLY
+            local cols rows
+            cols=$COLUMNS rows=$LINES
+            # Send request: header + candidates + END marker
+            print -u $fd "render $prefix $cursor_row $cursor_col $cols $rows"
+            printf '%s\n' "$candidates_str" >&$fd
+            print -u $fd "END"
+            # Read response header
+            local header
+            IFS= read -r -u $fd header
+            if [[ "$header" == OK* ]]; then
+                # Parse: OK popup_row=N popup_height=N cursor_row=N <tty_len>
+                local token tty_len=0
+                for token in ${(s: :)header}; do
+                    local key="${token%%=*}" val="${token#*=}"
+                    case "$key" in
+                        popup_row)    _zacrs_popup_row=$val ;;
+                        popup_height) _zacrs_popup_height=$val ;;
+                        cursor_row)   _zacrs_popup_cursor_row=$val ;;
+                    esac
+                    # Last token is tty_len (no = sign)
+                    [[ "$token" != *=* ]] && tty_len=$token
+                done
+                # Read tty_bytes and pipe directly to /dev/tty
+                if (( tty_len > 0 )); then
+                    dd bs=$tty_len count=1 <&$fd 2>/dev/null > /dev/tty
+                fi
+                _zacrs_popup_visible=1
+            fi
+            exec {fd}<&-
+            return
+        fi
+        # Socket connect failed, daemon may have died
+        _zacrs_daemon_available=0
+    fi
+
+    # Fallback: subprocess
     local output
     output=$(printf '%s' "$candidates_str" | \
         "$ZACRS_BIN" render \

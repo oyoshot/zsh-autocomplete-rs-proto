@@ -42,4 +42,19 @@ pub enum Command {
         #[arg(long)]
         cursor_row: u16,
     },
+    /// Daemon management
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DaemonAction {
+    /// Start daemon in foreground
+    Start,
+    /// Stop running daemon
+    Stop,
+    /// Check if daemon is running (exit 0 = running, 1 = not)
+    Status,
 }

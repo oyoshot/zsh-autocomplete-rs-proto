@@ -31,3 +31,11 @@ harness = false
 [[bench]]
 name = "text_processing_bench"
 harness = false
+
+[[bench]]
+name = "startup_bench"
+harness = false
+
+[[bench]]
+name = "daemon_bench"
+harness = false

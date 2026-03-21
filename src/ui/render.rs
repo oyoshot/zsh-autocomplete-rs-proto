@@ -79,11 +79,7 @@ fn print_colored(
     }
 }
 
-fn render_popup(
-    buf: &mut std::io::BufWriter<&mut std::fs::File>,
-    app: &App,
-    theme: &Theme,
-) -> std::io::Result<()> {
+fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
     let popup = Popup::compute(app);
     let inner = (popup.width - 2) as usize;
 
@@ -163,12 +159,12 @@ fn render_popup(
     print_colored(buf, format!("└{}┘", "─".repeat(inner)), theme.border)?;
     crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
-    Ok(())
+    Ok(popup)
 }
 
 pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
     let mut buf = std::io::BufWriter::new(&mut *tty);
-    render_popup(&mut buf, app, theme)?;
+    let _ = render_popup(&mut buf, app, theme)?;
 
     // Update filter_text on the prompt line
     let prefix_w = UnicodeWidthStr::width(app.prefix.as_str()) as u16;
@@ -200,7 +196,7 @@ pub fn draw(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Resul
 
 pub fn draw_popup_only(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std::io::Result<()> {
     let mut buf = std::io::BufWriter::new(&mut *tty);
-    render_popup(&mut buf, app, theme)?;
+    let _ = render_popup(&mut buf, app, theme)?;
 
     // Restore cursor to original position (zsh manages cursor)
     crossterm::queue!(
@@ -264,6 +260,34 @@ pub fn clear(tty: &mut std::fs::File, app: &App) -> std::io::Result<()> {
     buf.flush()?;
 
     Ok(())
+}
+
+pub fn render_popup_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
+    let mut buf = Vec::new();
+    let popup = render_popup(&mut buf, app, theme)?;
+    crossterm::queue!(
+        &mut buf,
+        cursor::MoveTo(app.cursor_col, app.cursor_row),
+        cursor::Show,
+    )?;
+    Ok((buf, popup))
+}
+
+pub fn clear_rect_to_bytes(
+    popup_row: u16,
+    popup_height: u16,
+    cursor_row: u16,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    for i in 0..popup_height {
+        crossterm::queue!(
+            &mut buf,
+            cursor::MoveTo(0, popup_row + i),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+        )?;
+    }
+    crossterm::queue!(&mut buf, cursor::MoveTo(0, cursor_row))?;
+    Ok(buf)
 }
 
 pub fn truncate_to_width(s: &str, max_width: usize) -> String {

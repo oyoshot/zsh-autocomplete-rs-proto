@@ -21,8 +21,40 @@ impl App {
         cursor_row: u16,
         cursor_col: u16,
     ) -> Self {
-        // Clamp cursor position to terminal bounds (safety net)
         let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        Self::new_with_term_size(
+            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows,
+        )
+    }
+
+    pub fn new_with_term_size(
+        candidates: Vec<Candidate>,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+    ) -> Self {
+        Self::new_with_matcher(
+            candidates,
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            FuzzyMatcher::new(),
+        )
+    }
+
+    pub fn new_with_matcher(
+        candidates: Vec<Candidate>,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        fuzzy: FuzzyMatcher,
+    ) -> Self {
         let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
         let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
 
@@ -37,7 +69,7 @@ impl App {
             cursor_row,
             cursor_col,
             prefix,
-            fuzzy: FuzzyMatcher::new(),
+            fuzzy,
         };
         app.update_filter();
         app
@@ -128,6 +160,10 @@ impl App {
             return None;
         }
         Some(self.selected - self.scroll_offset)
+    }
+
+    pub fn take_fuzzy(self) -> FuzzyMatcher {
+        self.fuzzy
     }
 }
 
