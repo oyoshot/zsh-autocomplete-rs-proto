@@ -298,13 +298,7 @@ _zacrs_invoke_daemon() {
 
     # Send complete request
     local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
-    if (( reuse_visible )); then
-        if [[ -n "$reuse_token" ]]; then
-            req+=" reuse_token=$reuse_token"
-        else
-            req+=" reuse=1"
-        fi
-    fi
+    (( reuse_visible )) && [[ -n "$reuse_token" ]] && req+=" reuse_token=$reuse_token"
     print -u $fd -- "$req"
     printf '%s\n' "$prefix" >&$fd
     printf '%s\n' "$candidates_str" >&$fd
@@ -317,7 +311,7 @@ _zacrs_invoke_daemon() {
     case "$header" in
         FRAME*) have_initial_frame=1 ;;
         NONE)
-            if (( ! reuse_visible )); then
+            if (( ! reuse_visible )) || [[ -z "$reuse_token" ]]; then
                 (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
                 exec {fd}<&-
                 return 1
