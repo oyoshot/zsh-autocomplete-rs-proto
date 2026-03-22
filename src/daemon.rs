@@ -629,6 +629,23 @@ impl DaemonServer {
             writer.flush()
         };
 
+        let send_prompt_patch = |writer: &mut io::BufWriter<&UnixStream>,
+                                 app: &App,
+                                 popup: &ui::popup::Popup|
+         -> io::Result<()> {
+            let tty_bytes = ui::render::filter_line_to_bytes(app)?;
+            writeln!(
+                writer,
+                "FRAME popup_row={} popup_height={} cursor_row={} {}",
+                popup.row,
+                popup.height,
+                app.cursor_row,
+                tty_bytes.len()
+            )?;
+            writer.write_all(&tty_bytes)?;
+            writer.flush()
+        };
+
         let popup = ui::popup::Popup::compute(&app);
         let expected_reuse_token = compute_reuse_token(&app.prefix, tsv, &app, &popup);
         let can_reuse_initial_frame = scroll_bytes.is_empty()
@@ -636,8 +653,10 @@ impl DaemonServer {
                 Some(token) => token == expected_reuse_token,
                 None => reuse.legacy_visible,
             };
-        let initial_frame_result = if can_reuse_initial_frame {
+        let initial_frame_result = if can_reuse_initial_frame && app.filter_text == app.prefix {
             writeln!(writer, "NONE").and_then(|_| writer.flush())
+        } else if can_reuse_initial_frame {
+            send_prompt_patch(writer, &app, &popup)
         } else {
             send_frame(writer, &app, &self.theme, &scroll_bytes)
         };
@@ -870,7 +889,7 @@ mod tests {
     use super::{CompleteReuse, DaemonServer, parse_complete_reuse, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
-    use std::io::{BufRead, BufReader, Cursor};
+    use std::io::{BufRead, BufReader, Cursor, Read};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::thread;
@@ -1001,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_keeps_popup_when_common_prefix_expands() {
+    fn handle_complete_reuse_redraws_prompt_when_common_prefix_expands() {
         let mut server = test_server();
         let response =
             server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
@@ -1037,7 +1056,18 @@ mod tests {
         let mut reader = BufReader::new(&client_stream);
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert_eq!(header.trim_end(), "NONE");
+        assert!(header.starts_with("FRAME "));
+
+        let tty_len = header
+            .split_whitespace()
+            .last()
+            .and_then(|token| token.parse::<usize>().ok())
+            .expect("tty_len in frame header");
+        let mut tty_bytes = vec![0; tty_len];
+        reader.read_exact(&mut tty_bytes).unwrap();
+        let tty = String::from_utf8_lossy(&tty_bytes);
+        assert!(tty.contains("git"));
+        assert!(!tty.contains("┌"));
 
         drop(reader);
         drop(client_stream);
@@ -1103,7 +1133,7 @@ mod tests {
         let mut reader = BufReader::new(&client_stream);
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert_eq!(header.trim_end(), "NONE");
+        assert!(header.starts_with("FRAME "));
 
         drop(reader);
         drop(client_stream);

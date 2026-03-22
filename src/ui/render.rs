@@ -200,6 +200,12 @@ fn queue_filter_line(buf: &mut impl Write, app: &App) -> std::io::Result<()> {
     Ok(())
 }
 
+pub fn filter_line_to_bytes(app: &App) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(128);
+    queue_filter_line(&mut buf, app)?;
+    Ok(buf)
+}
+
 pub fn draw_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
     let mut buf = Vec::with_capacity(2048);
     let popup = render_popup(&mut buf, app, theme)?;
