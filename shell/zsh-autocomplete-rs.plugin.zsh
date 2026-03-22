@@ -437,55 +437,53 @@ _zacrs_tab_complete() {
     local cursor_row="" cursor_col=""
     local reuse_visible=0
 
-    if (( _zacrs_popup_visible )) \
-        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" ]] \
-        && [[ -n "$_zacrs_popup_snapshot_candidates" ]]; then
-        reuse_visible=1
-        prefix="$_zacrs_popup_snapshot_prefix"
-        prefix_len=$_zacrs_popup_snapshot_prefix_len
-        candidates_str="$_zacrs_popup_snapshot_candidates"
+    # 候補収集: compsys → gather fallback
+    _zacrs_captured=()
+    local _zacrs_fd2
+    exec {_zacrs_fd2}>&2
+    zle _zacrs_compsys 2>/dev/null
+    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+
+    # compsys コンテキストから prefix 取得
+    if (( _zacrs_ctx_valid )); then
+        prefix="$_zacrs_ctx_prefix"
+        prefix_len=$_zacrs_ctx_prefix_len
+    else
+        prefix="${LBUFFER##* }"
+        prefix_len=${#prefix}
     fi
 
-    if (( ! reuse_visible )); then
-        # 候補収集: compsys → gather fallback
-        _zacrs_captured=()
-        local _zacrs_fd2
-        exec {_zacrs_fd2}>&2
-        zle _zacrs_compsys 2>/dev/null
-        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
-        # compsys コンテキストから prefix 取得
-        if (( _zacrs_ctx_valid )); then
-            prefix="$_zacrs_ctx_prefix"
-            prefix_len=$_zacrs_ctx_prefix_len
-        else
+    if (( ${#_zacrs_captured} > 0 )); then
+        candidates_str="${(pj:\n:)_zacrs_captured}"
+    fi
+    if [[ -z "$candidates_str" ]]; then
+        candidates_str="$(_zacrs_gather "$LBUFFER")"
+        if [[ -n "$candidates_str" ]]; then
             prefix="${LBUFFER##* }"
             prefix_len=${#prefix}
         fi
+    fi
 
-        if (( ${#_zacrs_captured} > 0 )); then
-            candidates_str="${(pj:\n:)_zacrs_captured}"
+    # Fuzzy fallback: auto-trigger キャッシュを再利用
+    if [[ -z "$candidates_str" && -n "$prefix" ]]; then
+        local lbase
+        if [[ "$LBUFFER" == *" "* ]]; then
+            lbase="${LBUFFER% *} "
+        else
+            lbase=""
         fi
-        if [[ -z "$candidates_str" ]]; then
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-            if [[ -n "$candidates_str" ]]; then
-                prefix="${LBUFFER##* }"
-                prefix_len=${#prefix}
-            fi
+        if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
+            candidates_str="$_zacrs_cached_candidates"
         fi
+    fi
 
-        # Fuzzy fallback: auto-trigger キャッシュを再利用
-        if [[ -z "$candidates_str" && -n "$prefix" ]]; then
-            local lbase
-            if [[ "$LBUFFER" == *" "* ]]; then
-                lbase="${LBUFFER% *} "
-            else
-                lbase=""
-            fi
-            if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
-                candidates_str="$_zacrs_cached_candidates"
-            fi
-        fi
+    if (( _zacrs_popup_visible )) \
+        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" ]] \
+        && [[ "$_zacrs_popup_snapshot_prefix" == "$prefix" ]] \
+        && (( _zacrs_popup_snapshot_prefix_len == prefix_len )) \
+        && [[ -n "$candidates_str" ]] \
+        && [[ "$_zacrs_popup_snapshot_candidates" == "$candidates_str" ]]; then
+        reuse_visible=1
     fi
 
     # 候補なし → default zsh 補完にフォールバック
