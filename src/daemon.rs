@@ -653,6 +653,11 @@ impl DaemonServer {
                 Some(token) => token == expected_reuse_token,
                 None => reuse.legacy_visible,
             };
+        // Initial frame decision:
+        //   NONE         → popup layout and filter unchanged, skip redraw entirely
+        //   prompt patch → popup layout unchanged but filter_text advanced past prefix,
+        //                  redraw only the prompt line (no border repaint)
+        //   full frame   → layout changed or no prior popup, send complete frame
         let initial_frame_result = if can_reuse_initial_frame && app.filter_text == app.prefix {
             writeln!(writer, "NONE").and_then(|_| writer.flush())
         } else if can_reuse_initial_frame {
