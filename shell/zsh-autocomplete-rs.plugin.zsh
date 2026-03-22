@@ -30,26 +30,20 @@ typeset -g _zacrs_popup_snapshot_buffer=""
 typeset -g _zacrs_popup_snapshot_prefix=""
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -g _zacrs_popup_snapshot_candidates=""
-typeset -gi _zacrs_popup_snapshot_cursor_row=0
-typeset -gi _zacrs_popup_snapshot_cursor_col=0
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_buffer=""
     _zacrs_popup_snapshot_prefix=""
     _zacrs_popup_snapshot_prefix_len=0
     _zacrs_popup_snapshot_candidates=""
-    _zacrs_popup_snapshot_cursor_row=0
-    _zacrs_popup_snapshot_cursor_col=0
 }
 
 _zacrs_record_popup_snapshot() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4"
+    local prefix="$1" prefix_len="$2" candidates_str="$3"
     _zacrs_popup_snapshot_buffer="$BUFFER"
     _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_candidates="$candidates_str"
-    _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
-    _zacrs_popup_snapshot_cursor_col=$cursor_col
 }
 
 # === Daemon lifecycle ===
@@ -160,7 +154,7 @@ _zacrs_render() {
                 fi
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
-                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col"
+                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str"
                 else
                     _zacrs_reset_popup_snapshot
                     _zacrs_mark_daemon_unavailable
@@ -202,7 +196,7 @@ _zacrs_render() {
                 cursor_row)   _zacrs_popup_cursor_row=$val ;;
             esac
         done
-        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col"
+        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str"
     else
         _zacrs_reset_popup_snapshot
     fi
@@ -448,8 +442,6 @@ _zacrs_tab_complete() {
         prefix="$_zacrs_popup_snapshot_prefix"
         prefix_len=$_zacrs_popup_snapshot_prefix_len
         candidates_str="$_zacrs_popup_snapshot_candidates"
-        cursor_row=$_zacrs_popup_snapshot_cursor_row
-        cursor_col=$_zacrs_popup_snapshot_cursor_col
     fi
 
     if (( ! reuse_visible )); then
