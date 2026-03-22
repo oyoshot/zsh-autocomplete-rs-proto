@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774104801629,
+  "lastUpdate": 1774158491622,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -1583,6 +1583,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 749,
             "range": "± 14",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1d87aa1ce647a99a6955798cf8c3bbaf630504e",
+          "message": "perf(fuzzy): incremental filtering and cached query results (#10)\n\n* feat(fuzzy): always run Damerau-Levenshtein alongside nucleo matching\n\nThe DL fallback previously only fired when nucleo returned zero results.\nIn practice, nucleo almost always matched something via subsequence,\nso typos like `calude` → `claude` were never corrected.\n\nNow DL runs unconditionally (for queries >= 2 chars) and its novel\nresults are appended after nucleo matches with HashSet deduplication.\nSmart case (case-insensitive when query is all lowercase) is applied\nto DL via eq_ignore_ascii_case, avoiding per-candidate to_lowercase()\nheap allocations by reusing char buffers.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* perf(fuzzy): reuse scratch buffers\n\n* perf(app): incrementally narrow fuzzy results\n\n* perf(app): cache query results for backspace\n\n* fix(fuzzy): rerank typo fallback matches\n\n* fix(fuzzy): resolve clippy derivable_impls and needless_range_loop warnings\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(fuzzy): skip typo fallback for exact matches\n\n* fix(fuzzy): skip dl fallback after smart exact hits\n\n* fix(fuzzy): make dl smart-case unicode-aware\n\n* refactor(fuzzy): make typo matching fallback-only\n\n* test(bench): add unicode fuzzy benchmarks\n\n* fix: resolve clippy warnings\n\n* fix(app): preserve filtering after public state changes\n\n* Revert \"fix(app): preserve filtering after public state changes\"\n\nThis reverts commit 21906eff00b11104a03c7a0256c09a552d27069b.\n\n* refactor(fuzzy): delegate filter() to filter_matches()\n\nEliminate ~70 lines of duplicated logic. filter() now delegates to\nfilter_matches() and maps ScoredMatch → ScoredCandidate, removing\nthe separate damerau_levenshtein_fallback_candidates(),\nsort_empty_query_results(), and sort_scored_results() functions.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* docs(app): note unbounded cached_filters growth\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(fuzzy): remove typo correction fallback\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-22T14:38:48+09:00",
+          "tree_id": "24301ba7772ab3aa6793671c7e40e14571af6b9b",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/a1d87aa1ce647a99a6955798cf8c3bbaf630504e"
+        },
+        "date": 1774158491043,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7445,
+            "range": "± 653",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 69195,
+            "range": "± 475",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 907225,
+            "range": "± 48058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 191570,
+            "range": "± 5866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100788,
+            "range": "± 2991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75017,
+            "range": "± 838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20063,
+            "range": "± 1763",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 18844,
+            "range": "± 97",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12055,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 310877,
+            "range": "± 2425",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 305434,
+            "range": "± 1831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 266642,
+            "range": "± 1701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 294638,
+            "range": "± 3205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26671,
+            "range": "± 470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 305525,
+            "range": "± 6927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3335948,
+            "range": "± 28520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 150883,
+            "range": "± 2941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 111862,
+            "range": "± 832",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 361365,
+            "range": "± 3465",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 729,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 114,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 50,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 71,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 856,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7576,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 747,
+            "range": "± 4",
             "unit": "ns/iter"
           }
         ]
