@@ -103,10 +103,11 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     // Candidate rows
-    let visible = app.visible_candidates();
+    let visible = app.visible_candidate_indices();
     let highlight_idx = app.visible_selected_index();
 
-    for (i, candidate) in visible.iter().enumerate() {
+    for (i, &candidate_idx) in visible.iter().enumerate() {
+        let candidate = &app.all_candidates[candidate_idx];
         let layout = layout_candidate(candidate, inner);
 
         crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;

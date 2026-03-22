@@ -87,7 +87,7 @@ fn run_complete(
             input::Action::TypeChar(c) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 app.type_char(c);
-                if app.filtered.is_empty() {
+                if app.filtered_indices.is_empty() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
                 ui::render::draw(&mut guard.tty, &app, theme)?;
@@ -97,7 +97,7 @@ fn run_complete(
                 if !app.backspace() {
                     break AppResult::Cancelled(None);
                 }
-                if app.filtered.is_empty() || app.filter_text.len() < app.prefix.len() {
+                if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
                 ui::render::draw(&mut guard.tty, &app, theme)?;

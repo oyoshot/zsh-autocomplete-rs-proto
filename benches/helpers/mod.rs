@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use zsh_autocomplete_rs::candidate::Candidate;
 
 const COMMAND_NAMES: &[&str] = &[
@@ -88,11 +90,35 @@ const COMMAND_NAMES: &[&str] = &[
     "gcc",
     "g++",
     "clang",
+    "claude",
     "curl",
     "wget",
     "ssh",
     "scp",
     "rsync",
+];
+
+const UNICODE_COMMAND_NAMES: &[&str] = &[
+    "café",
+    "résumé",
+    "naïve",
+    "jalapeño",
+    "São-Paulo",
+    "Äac",
+    "ångström",
+    "élan",
+    "über",
+    "niño",
+    "façade",
+    "coöperate",
+    "smörgåsbord",
+    "crème-brûlée",
+    "Łódź",
+    "İstanbul",
+    "mañana",
+    "doppelgänger",
+    "fiancée",
+    "protégé",
 ];
 
 pub fn generate_candidates(count: usize) -> Vec<Candidate> {
@@ -107,6 +133,33 @@ pub fn generate_candidates(count: usize) -> Vec<Candidate> {
             )
         } else {
             let suffix = i / COMMAND_NAMES.len();
+            (
+                format!("{}-{}", base, suffix),
+                format!("{} variant {}", base, suffix),
+                "command".to_string(),
+            )
+        };
+        candidates.push(Candidate {
+            text,
+            description,
+            kind,
+        });
+    }
+    candidates
+}
+
+pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
+    let mut candidates = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = UNICODE_COMMAND_NAMES[i % UNICODE_COMMAND_NAMES.len()];
+        let (text, description, kind) = if i < UNICODE_COMMAND_NAMES.len() {
+            (
+                base.to_string(),
+                format!("{} command", base),
+                "command".to_string(),
+            )
+        } else {
+            let suffix = i / UNICODE_COMMAND_NAMES.len();
             (
                 format!("{}-{}", base, suffix),
                 format!("{} variant {}", base, suffix),

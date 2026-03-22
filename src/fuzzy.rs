@@ -1,13 +1,23 @@
+use std::cmp::Ordering;
+
 use crate::candidate::Candidate;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
+    pattern: Pattern,
+    last_query: String,
+    utf32_buf: Vec<char>,
 }
 
 pub struct ScoredCandidate {
     pub candidate: Candidate,
+    pub score: u32,
+}
+
+pub struct ScoredMatch {
+    pub candidate_idx: usize,
     pub score: u32,
 }
 
@@ -21,132 +31,127 @@ impl FuzzyMatcher {
     pub fn new() -> Self {
         Self {
             matcher: Matcher::new(Config::DEFAULT),
+            pattern: Pattern::new(
+                "",
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+            ),
+            last_query: String::new(),
+            utf32_buf: Vec::new(),
         }
     }
 
-    pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
+    fn ensure_pattern(&mut self, query: &str) {
+        if self.last_query != query {
+            self.pattern = Pattern::new(
+                query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+            );
+            self.last_query.clear();
+            self.last_query.push_str(query);
+        }
+    }
+
+    pub fn filter_matches(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+    ) -> Vec<ScoredMatch> {
         if query.is_empty() {
-            let mut results: Vec<ScoredCandidate> = candidates
+            let mut results: Vec<ScoredMatch> = candidates
                 .iter()
-                .map(|c| ScoredCandidate {
-                    candidate: c.clone(),
+                .enumerate()
+                .map(|(candidate_idx, _)| ScoredMatch {
+                    candidate_idx,
                     score: 0,
                 })
                 .collect();
-            results.sort_by(|a, b| {
-                a.candidate
-                    .kind_priority()
-                    .cmp(&b.candidate.kind_priority())
-                    .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                    .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-            });
+            sort_empty_query_matches(&mut results, candidates);
             return results;
         }
 
-        let pattern = Pattern::new(
-            query,
-            CaseMatching::Smart,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-        );
+        self.ensure_pattern(query);
 
-        let mut buf = Vec::new();
-        let mut results: Vec<ScoredCandidate> = Vec::new();
-        for candidate in candidates {
-            buf.clear();
-            let haystack = Utf32Str::new(&candidate.text, &mut buf);
-            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
-                results.push(ScoredCandidate {
-                    candidate: candidate.clone(),
-                    score,
-                });
+        let pattern = &self.pattern;
+        let matcher = &mut self.matcher;
+        let utf32_buf = &mut self.utf32_buf;
+        let mut results: Vec<ScoredMatch> =
+            Vec::with_capacity(fuzzy_scope.map_or(candidates.len(), <[usize]>::len));
+
+        if let Some(scope) = fuzzy_scope {
+            for &candidate_idx in scope {
+                let candidate = &candidates[candidate_idx];
+                utf32_buf.clear();
+                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+                if let Some(score) = pattern.score(haystack, matcher) {
+                    results.push(ScoredMatch {
+                        candidate_idx,
+                        score,
+                    });
+                }
+            }
+        } else {
+            for (candidate_idx, candidate) in candidates.iter().enumerate() {
+                utf32_buf.clear();
+                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
+                if let Some(score) = pattern.score(haystack, matcher) {
+                    results.push(ScoredMatch {
+                        candidate_idx,
+                        score,
+                    });
+                }
             }
         }
 
-        results.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-                .then_with(|| {
-                    a.candidate
-                        .kind_priority()
-                        .cmp(&b.candidate.kind_priority())
-                })
-                .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-        });
-
-        if results.is_empty() && query.len() >= 2 {
-            results = damerau_levenshtein_fallback(candidates, query);
-        }
-
+        sort_scored_matches(&mut results, candidates);
         results
     }
-}
 
-fn damerau_levenshtein_fallback(candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
-    let max_dist = if query.len() <= 4 { 1 } else { 2 };
-
-    let mut results: Vec<ScoredCandidate> = candidates
-        .iter()
-        .filter_map(|candidate| {
-            if query.len().abs_diff(candidate.text.len()) > max_dist {
-                return None;
-            }
-            let dist = damerau_levenshtein(query, &candidate.text);
-            if dist <= max_dist {
-                let score = (100u32).saturating_sub(dist as u32 * 30);
-                Some(ScoredCandidate {
-                    candidate: candidate.clone(),
-                    score,
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    results.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then_with(|| a.candidate.text.len().cmp(&b.candidate.text.len()))
-            .then_with(|| {
-                a.candidate
-                    .kind_priority()
-                    .cmp(&b.candidate.kind_priority())
+    pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
+        self.filter_matches(candidates, query, None)
+            .into_iter()
+            .map(|m| ScoredCandidate {
+                candidate: candidates[m.candidate_idx].clone(),
+                score: m.score,
             })
-            .then_with(|| a.candidate.text.cmp(&b.candidate.text))
-    });
-    results
+            .collect()
+    }
 }
 
-pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let len_a = a.len();
-    let len_b = b.len();
+fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
+    a.kind_priority()
+        .cmp(&b.kind_priority())
+        .then_with(|| a.text.len().cmp(&b.text.len()))
+        .then_with(|| a.text.cmp(&b.text))
+}
 
-    let mut d = vec![vec![0usize; len_b + 1]; len_a + 1];
+fn compare_scored_candidates(a: &Candidate, a_score: u32, b: &Candidate, b_score: u32) -> Ordering {
+    b_score
+        .cmp(&a_score)
+        .then_with(|| a.text.len().cmp(&b.text.len()))
+        .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
+        .then_with(|| a.text.cmp(&b.text))
+}
 
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, val) in d[0].iter_mut().enumerate() {
-        *val = j;
-    }
+fn sort_empty_query_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
+    results.sort_unstable_by(|a, b| {
+        compare_empty_candidates(&candidates[a.candidate_idx], &candidates[b.candidate_idx])
+    });
+}
 
-    for i in 1..=len_a {
-        for j in 1..=len_b {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + cost);
-            }
-        }
-    }
-
-    d[len_a][len_b]
+fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
+    results.sort_unstable_by(|a, b| {
+        compare_scored_candidates(
+            &candidates[a.candidate_idx],
+            a.score,
+            &candidates[b.candidate_idx],
+            b.score,
+        )
+    });
 }
 
 #[cfg(test)]
@@ -187,44 +192,6 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn damerau_levenshtein_transposition() {
-        let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["git", "grep", "gzip"]);
-        let results = m.filter(&candidates, "gti");
-        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        assert!(texts.contains(&"git"), "gti should match git: {texts:?}");
-    }
-
-    #[test]
-    fn damerau_levenshtein_substitution() {
-        let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["cargo", "cat", "curl"]);
-        let results = m.filter(&candidates, "carog");
-        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        assert!(
-            texts.contains(&"cargo"),
-            "carog should match cargo: {texts:?}"
-        );
-    }
-
-    #[test]
-    fn damerau_levenshtein_respects_threshold() {
-        let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["git", "grep", "gzip"]);
-        // "xyz" is too far from any candidate
-        let results = m.filter(&candidates, "xyz");
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn damerau_levenshtein_distance_basic() {
-        assert_eq!(damerau_levenshtein("git", "gti"), 1);
-        assert_eq!(damerau_levenshtein("cargo", "carog"), 1);
-        assert_eq!(damerau_levenshtein("cargo", "garco"), 2);
-        assert_eq!(damerau_levenshtein("git", "git"), 0);
     }
 
     fn make_candidates_with_kind(items: &[(&str, &str)]) -> Vec<Candidate> {
@@ -278,5 +245,26 @@ mod tests {
         assert_eq!(texts[1], "ab");
         assert_eq!(texts[2], "abc");
         assert_eq!(texts[3], "longcmd");
+    }
+
+    #[test]
+    fn filter_matches_scope_matches_full_rescan_for_append_query() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["alpha", "alpine", "beta", "zzz"]);
+
+        let scoped_a = m.filter_matches(&candidates, "a", None);
+        let scoped_a_idx: Vec<usize> = scoped_a.iter().map(|r| r.candidate_idx).collect();
+        let scoped = m.filter_matches(&candidates, "alp", Some(&scoped_a_idx));
+        let full = m.filter_matches(&candidates, "alp", None);
+
+        let scoped_texts: Vec<&str> = scoped
+            .iter()
+            .map(|r| candidates[r.candidate_idx].text.as_str())
+            .collect();
+        let full_texts: Vec<&str> = full
+            .iter()
+            .map(|r| candidates[r.candidate_idx].text.as_str())
+            .collect();
+        assert_eq!(scoped_texts, full_texts);
     }
 }
