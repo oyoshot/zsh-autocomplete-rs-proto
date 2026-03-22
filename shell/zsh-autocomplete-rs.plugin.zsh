@@ -302,6 +302,7 @@ _zacrs_invoke_daemon() {
         FRAME*) have_initial_frame=1 ;;
         NONE)
             if (( ! reuse_visible )); then
+                (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
                 exec {fd}<&-
                 return 1
             fi
@@ -316,6 +317,7 @@ _zacrs_invoke_daemon() {
             initial_done=1
             ;;
         *)
+            (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
             exec {fd}<&-
             return 1
             ;;
