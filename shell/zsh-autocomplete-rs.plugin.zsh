@@ -32,6 +32,7 @@ typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -g _zacrs_popup_snapshot_candidates=""
 typeset -gi _zacrs_popup_snapshot_cursor_row=0
 typeset -gi _zacrs_popup_snapshot_cursor_col=0
+typeset -g _zacrs_popup_snapshot_reuse_token=""
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_lbuffer=""
@@ -40,16 +41,18 @@ _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_candidates=""
     _zacrs_popup_snapshot_cursor_row=0
     _zacrs_popup_snapshot_cursor_col=0
+    _zacrs_popup_snapshot_reuse_token=""
 }
 
 _zacrs_record_popup_snapshot() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4"
+    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4" reuse_token="$5"
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
     _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_candidates="$candidates_str"
     _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
     _zacrs_popup_snapshot_cursor_col=$cursor_col
+    _zacrs_popup_snapshot_reuse_token="$reuse_token"
 }
 
 # === Daemon lifecycle ===
@@ -139,14 +142,15 @@ _zacrs_render() {
             local header
             IFS= read -r -u $fd header
             if [[ "$header" == OK* ]]; then
-                # Parse: OK popup_row=N popup_height=N cursor_row=N <tty_len>
-                local token tty_len=0
+                # Parse: OK popup_row=N popup_height=N cursor_row=N reuse_token=N <tty_len>
+                local token tty_len=0 reuse_token=""
                 for token in ${(s: :)header}; do
                     local key="${token%%=*}" val="${token#*=}"
                     case "$key" in
                         popup_row)    _zacrs_popup_row=$val ;;
                         popup_height) _zacrs_popup_height=$val ;;
                         cursor_row)   _zacrs_popup_cursor_row=$val ;;
+                        reuse_token)  reuse_token=$val ;;
                     esac
                     # Last token is tty_len (no = sign)
                     [[ "$token" != *=* ]] && tty_len=$token
@@ -160,7 +164,7 @@ _zacrs_render() {
                 fi
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
-                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col"
+                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token"
                 else
                     _zacrs_reset_popup_snapshot
                     _zacrs_mark_daemon_unavailable
@@ -202,7 +206,7 @@ _zacrs_render() {
                 cursor_row)   _zacrs_popup_cursor_row=$val ;;
             esac
         done
-        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col"
+        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" ""
     else
         _zacrs_reset_popup_snapshot
     fi
@@ -282,7 +286,7 @@ _zacrs_complete_parse_frame() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}"
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -294,7 +298,13 @@ _zacrs_invoke_daemon() {
 
     # Send complete request
     local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
-    (( reuse_visible )) && req+=" reuse=1"
+    if (( reuse_visible )); then
+        if [[ -n "$reuse_token" ]]; then
+            req+=" reuse_token=$reuse_token"
+        else
+            req+=" reuse=1"
+        fi
+    fi
     print -u $fd -- "$req"
     printf '%s\n' "$prefix" >&$fd
     printf '%s\n' "$candidates_str" >&$fd
@@ -442,6 +452,7 @@ _zacrs_tab_complete() {
     local prefix="" prefix_len=0 candidates_str=""
     local cursor_row="" cursor_col=""
     local reuse_visible=0
+    local reuse_token=""
 
     if (( _zacrs_popup_visible )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
@@ -452,6 +463,7 @@ _zacrs_tab_complete() {
         candidates_str="$_zacrs_popup_snapshot_candidates"
         cursor_row=$_zacrs_popup_snapshot_cursor_row
         cursor_col=$_zacrs_popup_snapshot_cursor_col
+        reuse_token="$_zacrs_popup_snapshot_reuse_token"
     fi
 
     if (( ! reuse_visible )); then
@@ -548,7 +560,7 @@ _zacrs_tab_complete() {
     # Try daemon path first, fall back to subprocess
     if (( _zacrs_daemon_available )); then
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-            "$cursor_row" "$cursor_col" "$reuse_visible" && return
+            "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" && return
     fi
     if (( ! reuse_visible )); then
         _zacrs_clear_popup

@@ -1,6 +1,7 @@
 use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
+use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::{client, config, daemon, input, tty, ui};
 
 use clap::Parser;
@@ -177,9 +178,11 @@ fn run_render(
     ui::render::draw_popup_only(&mut tty, &app, theme)?;
 
     let popup = ui::popup::Popup::compute(&app);
+    let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
+    let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
     println!(
-        "popup_row={} popup_height={} cursor_row={}",
-        popup.row, popup.height, app.cursor_row
+        "popup_row={} popup_height={} cursor_row={} reuse_token={}",
+        popup.row, popup.height, app.cursor_row, reuse_token
     );
 
     Ok(0)

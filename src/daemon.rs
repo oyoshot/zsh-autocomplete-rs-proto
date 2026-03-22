@@ -9,6 +9,7 @@ use crate::app::App;
 use crate::candidate::Candidate;
 use crate::config::{Config, KeyBindings, Theme};
 use crate::fuzzy::FuzzyMatcher;
+use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
 use crate::protocol::{self, Request, Response};
 use crate::ui;
@@ -246,7 +247,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse=1]\n
+    ///   complete <row> <col> <cols> <rows> [reuse=1|reuse_token=N]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -256,7 +257,7 @@ impl DaemonServer {
     ///   shutdown\n
     ///
     /// Response format (render success):
-    ///   OK <popup_row> <popup_height> <cursor_row> <tty_len>\n
+    ///   OK <popup_row> <popup_height> <cursor_row> reuse_token=<id> <tty_len>\n
     ///   <tty_bytes, exactly tty_len bytes>
     ///
     /// Response format (empty/error):
@@ -347,7 +348,7 @@ impl DaemonServer {
                 false
             }
             "complete" => {
-                let Some(reuse_initial_frame) = parse_complete_reuse(&parts) else {
+                let Some(reuse) = parse_complete_reuse(&parts) else {
                     warn!(header = header, "invalid text complete request");
                     let _ = writeln!(writer, "ERROR invalid complete request");
                     let _ = writer.flush();
@@ -384,7 +385,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_initial_frame,
+                    reuse_visible = reuse.legacy_visible || reuse.token.is_some(),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -402,7 +403,7 @@ impl DaemonServer {
                     term_cols,
                     term_rows,
                     &tsv,
-                    reuse_initial_frame,
+                    reuse,
                 );
                 false
             }
@@ -493,6 +494,7 @@ impl DaemonServer {
 
         if app.max_visible == 0 {
             debug!("render request had zero visible rows");
+            self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
         }
 
@@ -515,11 +517,10 @@ impl DaemonServer {
         let cursor_row_final = app.cursor_row;
         let result = ui::render::render_popup_to_bytes(&app, &self.theme);
 
-        // Reclaim the FuzzyMatcher for reuse
-        self.fuzzy = Some(app.take_fuzzy());
-
         match result {
             Ok((mut tty_bytes, popup)) => {
+                let reuse_token = compute_reuse_token(&app.prefix, tsv_str, &app, &popup);
+                self.fuzzy = Some(app.take_fuzzy());
                 if !scroll_bytes.is_empty() {
                     let mut combined = scroll_bytes;
                     combined.append(&mut tty_bytes);
@@ -529,12 +530,13 @@ impl DaemonServer {
                     popup_row = popup.row,
                     popup_height = popup.height,
                     cursor_row = cursor_row_final,
+                    reuse_token,
                     tty_bytes = tty_bytes.len(),
                     "render complete"
                 );
                 let metadata = format!(
-                    "popup_row={} popup_height={} cursor_row={}",
-                    popup.row, popup.height, cursor_row_final
+                    "popup_row={} popup_height={} cursor_row={} reuse_token={}",
+                    popup.row, popup.height, cursor_row_final, reuse_token
                 );
                 Response::Success {
                     tty_bytes,
@@ -542,6 +544,7 @@ impl DaemonServer {
                 }
             }
             Err(e) => {
+                self.fuzzy = Some(app.take_fuzzy());
                 error!(error = %e, "render failed");
                 Response::Error(format!("render failed: {}", e))
             }
@@ -559,7 +562,7 @@ impl DaemonServer {
         term_cols: u16,
         term_rows: u16,
         tsv: &str,
-        reuse_initial_frame: bool,
+        reuse: CompleteReuse,
     ) {
         let candidates: Vec<Candidate> = tsv
             .lines()
@@ -626,7 +629,13 @@ impl DaemonServer {
             writer.flush()
         };
 
-        let can_reuse_initial_frame = reuse_initial_frame && scroll_bytes.is_empty();
+        let popup = ui::popup::Popup::compute(&app);
+        let expected_reuse_token = compute_reuse_token(&app.prefix, tsv, &app, &popup);
+        let can_reuse_initial_frame = scroll_bytes.is_empty()
+            && match reuse.token {
+                Some(token) => token == expected_reuse_token,
+                None => reuse.legacy_visible,
+            };
         let initial_frame_result = if can_reuse_initial_frame {
             writeln!(writer, "NONE").and_then(|_| writer.flush())
         } else {
@@ -827,18 +836,38 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
     Ok(line)
 }
 
-fn parse_complete_reuse(parts: &[&str]) -> Option<bool> {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CompleteReuse {
+    legacy_visible: bool,
+    token: Option<u64>,
+}
+
+fn parse_complete_reuse(parts: &[&str]) -> Option<CompleteReuse> {
     match parts {
-        ["complete", _, _, _, _] => Some(false),
-        ["complete", _, _, _, _, "reuse=1"] => Some(true),
-        ["complete", _, _, _, _, "reuse=0"] => Some(false),
+        ["complete", _, _, _, _] => Some(CompleteReuse::default()),
+        ["complete", _, _, _, _, flag] => {
+            if *flag == "reuse=0" {
+                return Some(CompleteReuse::default());
+            }
+            if *flag == "reuse=1" {
+                return Some(CompleteReuse {
+                    legacy_visible: true,
+                    token: None,
+                });
+            }
+            let token = flag.strip_prefix("reuse_token=")?.parse().ok()?;
+            Some(CompleteReuse {
+                legacy_visible: false,
+                token: Some(token),
+            })
+        }
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonServer, parse_complete_reuse, read_text_line};
+    use super::{CompleteReuse, DaemonServer, parse_complete_reuse, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor};
@@ -881,18 +910,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_complete_reuse_accepts_optional_flag() {
+    fn parse_complete_reuse_accepts_optional_token() {
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24"]),
-            Some(false)
+            Some(CompleteReuse::default())
+        );
+        assert_eq!(
+            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse_token=42"]),
+            Some(CompleteReuse {
+                legacy_visible: false,
+                token: Some(42),
+            })
         );
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=1"]),
-            Some(true)
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=0"]),
-            Some(false)
+            Some(CompleteReuse {
+                legacy_visible: true,
+                token: None,
+            })
         );
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
@@ -901,10 +936,42 @@ mod tests {
     }
 
     #[test]
+    fn handle_render_includes_reuse_token_metadata() {
+        let mut server = test_server();
+        let response =
+            server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
+
+        match response {
+            crate::protocol::Response::Success { metadata, .. } => {
+                let metadata = metadata.unwrap();
+                assert!(metadata.contains("reuse_token="));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
     fn handle_complete_reuse_sends_none_before_interaction() {
+        let mut server = test_server();
+        let response = server.handle_render(
+            "gi".to_string(),
+            5,
+            2,
+            80,
+            24,
+            b"git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+        );
+        let crate::protocol::Response::Success { metadata, .. } = response else {
+            panic!("expected successful render response");
+        };
+        let metadata = metadata.expect("render metadata");
+        let reuse_token = metadata
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("reuse_token="))
+            .and_then(|token| token.parse::<u64>().ok())
+            .expect("reuse token in metadata");
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
-            let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
             let mut writer = std::io::BufWriter::new(&server_stream);
             server.handle_complete(
@@ -916,7 +983,10 @@ mod tests {
                 80,
                 24,
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-                true,
+                CompleteReuse {
+                    legacy_visible: false,
+                    token: Some(reuse_token),
+                },
             );
         });
 
@@ -932,6 +1002,50 @@ mod tests {
 
     #[test]
     fn handle_complete_reuse_keeps_popup_when_common_prefix_expands() {
+        let mut server = test_server();
+        let response =
+            server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
+        let crate::protocol::Response::Success { metadata, .. } = response else {
+            panic!("expected successful render response");
+        };
+        let metadata = metadata.expect("render metadata");
+        let reuse_token = metadata
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("reuse_token="))
+            .and_then(|token| token.parse::<u64>().ok())
+            .expect("reuse token in metadata");
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "gi".to_string(),
+                5,
+                2,
+                80,
+                24,
+                "git\tcommand\tcommand\n",
+                CompleteReuse {
+                    legacy_visible: false,
+                    token: Some(reuse_token),
+                },
+            );
+        });
+
+        let mut reader = BufReader::new(&client_stream);
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert_eq!(header.trim_end(), "NONE");
+
+        drop(reader);
+        drop(client_stream);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_reuse_falls_back_to_frame_when_token_mismatches() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut server = test_server();
@@ -946,7 +1060,43 @@ mod tests {
                 80,
                 24,
                 "git\tcommand\tcommand\n",
-                true,
+                CompleteReuse {
+                    legacy_visible: false,
+                    token: Some(999),
+                },
+            );
+        });
+
+        let mut reader = BufReader::new(&client_stream);
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(header.starts_with("FRAME "));
+
+        drop(reader);
+        drop(client_stream);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_reuse_accepts_legacy_visible_flag() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "gi".to_string(),
+                5,
+                2,
+                80,
+                24,
+                "git\tcommand\tcommand\n",
+                CompleteReuse {
+                    legacy_visible: true,
+                    token: None,
+                },
             );
         });
 
