@@ -555,18 +555,6 @@ mod tests {
     }
 
     #[test]
-    fn type_char_keeps_dl_only_match_after_incremental_narrowing() {
-        let candidates = make_candidates(&["claude", "calculated", "cat"]);
-        let mut app = App::new(candidates, "".to_string(), 5, 10);
-
-        for c in "calude".chars() {
-            app.type_char(c);
-        }
-
-        assert!(filtered_texts(&app).contains(&"claude"));
-    }
-
-    #[test]
     fn type_char_resets_selection() {
         let candidates = make_candidates(&["alpha", "alpine", "zzz"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);

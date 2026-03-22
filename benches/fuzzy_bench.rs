@@ -2,7 +2,7 @@ mod helpers;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zsh_autocomplete_rs::app::App;
-use zsh_autocomplete_rs::fuzzy::{FuzzyMatcher, damerau_levenshtein};
+use zsh_autocomplete_rs::fuzzy::FuzzyMatcher;
 
 fn filter_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("filter_scaling");
@@ -27,8 +27,6 @@ fn filter_query_variants(c: &mut Criterion) {
         ("1char", "g"),
         ("3char", "git"),
         ("exact", "cargo-build"),
-        ("typo", "gti"),
-        ("typo_no_subseq", "calude"),
         ("no_match", "zzzzz"),
         ("long", "git-checkout-branch"),
     ];
@@ -48,7 +46,6 @@ fn filter_unicode_query_variants(c: &mut Criterion) {
     let queries = [
         ("3char", "res"),
         ("normalized_exact", "cafe"),
-        ("unicode_typo", "äbc"),
         ("long_normalized", "sao-paulo"),
         ("no_match", "ωωω"),
     ];
@@ -73,14 +70,6 @@ fn filter_unicode_scaling(c: &mut Criterion) {
             |b, cands| {
                 let mut matcher = FuzzyMatcher::new();
                 b.iter(|| matcher.filter(cands, "cafe"));
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("typo_fallback", size),
-            &candidates,
-            |b, cands| {
-                let mut matcher = FuzzyMatcher::new();
-                b.iter(|| matcher.filter(cands, "äbc"));
             },
         );
     }
@@ -144,29 +133,6 @@ fn app_backspace_sequence(c: &mut Criterion) {
 
     group.finish();
 }
-
-fn bench_damerau_levenshtein(c: &mut Criterion) {
-    let pairs = [
-        ("identical", "cargo", "cargo"),
-        ("transposition", "git", "gti"),
-        ("substitution", "cargo", "carog"),
-        ("long_strings", "git-checkout-branch", "git-chekoctu-branch"),
-        ("different_len", "git", "github"),
-    ];
-
-    let mut group = c.benchmark_group("damerau_levenshtein");
-    for (name, a, b) in pairs {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(name),
-            &(a, b),
-            |bench, &(a, b)| {
-                bench.iter(|| damerau_levenshtein(a, b));
-            },
-        );
-    }
-    group.finish();
-}
-
 criterion_group!(
     benches,
     filter_scaling,
@@ -174,7 +140,6 @@ criterion_group!(
     filter_unicode_query_variants,
     filter_unicode_scaling,
     filter_sequence,
-    app_backspace_sequence,
-    bench_damerau_levenshtein
+    app_backspace_sequence
 );
 criterion_main!(benches);

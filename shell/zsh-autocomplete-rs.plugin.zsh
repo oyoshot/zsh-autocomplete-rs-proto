@@ -396,11 +396,6 @@ _zacrs_tab_complete() {
         fi
     fi
 
-    # タイポ補正: コマンド位置で候補なし → 全コマンドをfuzzyに渡す
-    if [[ -z "$candidates_str" && ${#prefix} -ge 2 ]] && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
-        candidates_str="$(_zacrs_gather --all-commands)"
-    fi
-
     # Fuzzy fallback: auto-trigger キャッシュを再利用
     if [[ -z "$candidates_str" && -n "$prefix" ]]; then
         local lbase
@@ -546,11 +541,6 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$candidates_str" ]]; then
             prefix="$naive_prefix"
         fi
-    fi
-
-    # タイポ補正: コマンド位置で候補なし → 全コマンドをfuzzyに渡す
-    if [[ -z "$candidates_str" && ${#naive_prefix} -ge 2 ]] && _zacrs_is_cmd_pos "$LBUFFER" "$naive_prefix"; then
-        candidates_str="$(_zacrs_gather --all-commands)"
     fi
 
     # キャッシュ更新: 同じ lbase で初めて候補が見つかった場合
