@@ -33,6 +33,8 @@ typeset -g _zacrs_popup_snapshot_candidates=""
 typeset -gi _zacrs_popup_snapshot_cursor_row=0
 typeset -gi _zacrs_popup_snapshot_cursor_col=0
 typeset -g _zacrs_popup_snapshot_reuse_token=""
+typeset -gi _zacrs_popup_snapshot_columns=0
+typeset -gi _zacrs_popup_snapshot_lines=0
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_lbuffer=""
@@ -42,6 +44,8 @@ _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_cursor_row=0
     _zacrs_popup_snapshot_cursor_col=0
     _zacrs_popup_snapshot_reuse_token=""
+    _zacrs_popup_snapshot_columns=0
+    _zacrs_popup_snapshot_lines=0
 }
 
 _zacrs_record_popup_snapshot() {
@@ -53,6 +57,8 @@ _zacrs_record_popup_snapshot() {
     _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
     _zacrs_popup_snapshot_cursor_col=$cursor_col
     _zacrs_popup_snapshot_reuse_token="$reuse_token"
+    _zacrs_popup_snapshot_columns=$COLUMNS
+    _zacrs_popup_snapshot_lines=$LINES
 }
 
 # === Daemon lifecycle ===
@@ -450,7 +456,9 @@ _zacrs_tab_complete() {
 
     if (( _zacrs_popup_visible )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
-        && [[ -n "$_zacrs_popup_snapshot_candidates" ]]; then
+        && [[ -n "$_zacrs_popup_snapshot_candidates" ]] \
+        && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
+        && (( _zacrs_popup_snapshot_lines == LINES )); then
         reuse_visible=1
         prefix="$_zacrs_popup_snapshot_prefix"
         prefix_len=$_zacrs_popup_snapshot_prefix_len
