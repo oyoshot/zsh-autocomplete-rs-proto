@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774158491622,
+  "lastUpdate": 1774180027772,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -1811,6 +1811,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 747,
             "range": "± 4",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "72bd222a68dfc78a31d2cd0bc8284a5d07691fbc",
+          "message": "fix: stabilize popup handoff reuse (#17)\n\n* fix(shell): smooth tab popup handoff\n\n* fix(shell): align cached fallback prefix length\n\n* fix(daemon): gate popup frame reuse\n\n* fix(shell): invalidate popup snapshot on full buffer changes\n\n* fix(shell): refresh cursor before popup reuse\n\n* fix(shell): clear popup state before subprocess fallback\n\n* fix(shell): degrade cleanly on reuse protocol mismatch\n\n* fix(shell): recompute candidates before popup reuse\n\n* fix(shell): validate geometry before popup reuse\n\n* fix(shell): restore flicker-free popup handoff\n\n* fix(daemon): make popup handoff deterministic\n\n* fix(daemon): redraw prompt before popup reuse\n\n* fix(shell): require handoff token for popup reuse\n\n* docs(handoff): explain why reuse token avoids zero\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* docs(daemon): explain three-way initial frame decision\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(daemon): remove legacy_visible reuse path\n\nThe shell plugin already sends reuse_token=N exclusively and never\nsends reuse=1, so the legacy_visible fallback was dead code.\n\nAlso renames tracing field reuse_visible to reuse_requested for clarity.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): invalidate popup snapshot on terminal resize\n\nTRAPWINCH already clears the popup, but there is a race where Tab\nmay be pressed before the signal is delivered.  Guard against this\nby recording COLUMNS/LINES in the snapshot and checking them before\nreuse.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-22T20:37:54+09:00",
+          "tree_id": "2f2c633801f153612d739f1fe42e9f924954894f",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/72bd222a68dfc78a31d2cd0bc8284a5d07691fbc"
+        },
+        "date": 1774180026730,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7242,
+            "range": "± 809",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 73826,
+            "range": "± 519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 902845,
+            "range": "± 14816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 190299,
+            "range": "± 1314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100605,
+            "range": "± 927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 74772,
+            "range": "± 2548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 19949,
+            "range": "± 202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 18823,
+            "range": "± 1001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12037,
+            "range": "± 107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 311097,
+            "range": "± 1546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 305127,
+            "range": "± 5113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 266920,
+            "range": "± 1071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 296384,
+            "range": "± 8482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26662,
+            "range": "± 350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 304952,
+            "range": "± 3761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3341550,
+            "range": "± 48593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 150360,
+            "range": "± 4661",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 111514,
+            "range": "± 2165",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 354857,
+            "range": "± 4647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 740,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 114,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 70,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 858,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7573,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 747,
+            "range": "± 7",
             "unit": "ns/iter"
           }
         ]
