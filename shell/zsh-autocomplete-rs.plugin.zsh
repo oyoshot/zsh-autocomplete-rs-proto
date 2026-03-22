@@ -540,9 +540,7 @@ _zacrs_tab_complete() {
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
             "$cursor_row" "$cursor_col" "$reuse_visible" && return
     fi
-    if (( ! reuse_visible )); then
-        _zacrs_clear_popup
-    fi
+    _zacrs_clear_popup
     _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col"
 }
 
