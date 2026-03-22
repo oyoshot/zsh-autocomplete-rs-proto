@@ -246,6 +246,11 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
+    ///   complete <row> <col> <cols> <rows> [reuse=1]\n
+    ///   <prefix>\n
+    ///   <candidates_tsv lines...>\n
+    ///   END\n
+    ///
     ///   clear <popup_row> <popup_height> <cursor_row>\n
     ///   ping\n
     ///   shutdown\n
@@ -341,7 +346,13 @@ impl DaemonServer {
                 }
                 false
             }
-            "complete" if parts.len() == 5 => {
+            "complete" => {
+                let Some(reuse_initial_frame) = parse_complete_reuse(&parts) else {
+                    warn!(header = header, "invalid text complete request");
+                    let _ = writeln!(writer, "ERROR invalid complete request");
+                    let _ = writer.flush();
+                    return false;
+                };
                 let cursor_row: u16 = parts[1].parse().unwrap_or(0);
                 let cursor_col: u16 = parts[2].parse().unwrap_or(0);
                 let term_cols: u16 = parts[3].parse().unwrap_or(80);
@@ -373,6 +384,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    reuse_initial_frame,
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -390,6 +402,7 @@ impl DaemonServer {
                     term_cols,
                     term_rows,
                     &tsv,
+                    reuse_initial_frame,
                 );
                 false
             }
@@ -546,6 +559,7 @@ impl DaemonServer {
         term_cols: u16,
         term_rows: u16,
         tsv: &str,
+        reuse_initial_frame: bool,
     ) {
         let candidates: Vec<Candidate> = tsv
             .lines()
@@ -612,7 +626,14 @@ impl DaemonServer {
             writer.flush()
         };
 
-        if send_frame(writer, &app, &self.theme, &scroll_bytes).is_err() {
+        let can_reuse_initial_frame = reuse_initial_frame && scroll_bytes.is_empty();
+        let initial_frame_result = if can_reuse_initial_frame {
+            writeln!(writer, "NONE").and_then(|_| writer.flush())
+        } else {
+            send_frame(writer, &app, &self.theme, &scroll_bytes)
+        };
+
+        if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
             return;
         }
@@ -806,10 +827,38 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
     Ok(line)
 }
 
+fn parse_complete_reuse(parts: &[&str]) -> Option<bool> {
+    match parts {
+        ["complete", _, _, _, _] => Some(false),
+        ["complete", _, _, _, _, "reuse=1"] => Some(true),
+        ["complete", _, _, _, _, "reuse=0"] => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::read_text_line;
-    use std::io::{BufReader, Cursor};
+    use super::{DaemonServer, parse_complete_reuse, read_text_line};
+    use crate::config::Config;
+    use crate::fuzzy::FuzzyMatcher;
+    use std::io::{BufRead, BufReader, Cursor};
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
+    use std::thread;
+
+    fn test_server() -> DaemonServer {
+        let config = Config::default();
+        let theme = config.theme();
+        let key_bindings = config.key_bindings();
+        DaemonServer {
+            config,
+            theme,
+            key_bindings,
+            config_mtime: None,
+            socket_path: PathBuf::from("/tmp/zacrs-test.sock"),
+            fuzzy: Some(FuzzyMatcher::new()),
+        }
+    }
 
     #[test]
     fn read_text_line_preserves_spaces() {
@@ -829,5 +878,55 @@ mod tests {
         let line = read_text_line(&mut reader).unwrap();
 
         assert_eq!(line, "");
+    }
+
+    #[test]
+    fn parse_complete_reuse_accepts_optional_flag() {
+        assert_eq!(
+            parse_complete_reuse(&["complete", "1", "2", "80", "24"]),
+            Some(false)
+        );
+        assert_eq!(
+            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=1"]),
+            Some(true)
+        );
+        assert_eq!(
+            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=0"]),
+            Some(false)
+        );
+        assert_eq!(
+            parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
+            None
+        );
+    }
+
+    #[test]
+    fn handle_complete_reuse_sends_none_before_interaction() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "gi".to_string(),
+                5,
+                2,
+                80,
+                24,
+                "git\tcommand\tcommand\n",
+                true,
+            );
+        });
+
+        let mut reader = BufReader::new(&client_stream);
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert_eq!(header.trim_end(), "NONE");
+
+        drop(reader);
+        drop(client_stream);
+        handle.join().unwrap();
     }
 }
