@@ -247,7 +247,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse=1|reuse_token=N]\n
+    ///   complete <row> <col> <cols> <rows> [reuse_token=N]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -385,7 +385,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_visible = reuse.legacy_visible || reuse.token.is_some(),
+                    reuse_requested = reuse.token.is_some(),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -648,11 +648,8 @@ impl DaemonServer {
 
         let popup = ui::popup::Popup::compute(&app);
         let expected_reuse_token = compute_reuse_token(&app.prefix, tsv, &app, &popup);
-        let can_reuse_initial_frame = scroll_bytes.is_empty()
-            && match reuse.token {
-                Some(token) => token == expected_reuse_token,
-                None => reuse.legacy_visible,
-            };
+        let can_reuse_initial_frame =
+            scroll_bytes.is_empty() && reuse.token == Some(expected_reuse_token);
         // Initial frame decision:
         //   NONE         → popup layout and filter unchanged, skip redraw entirely
         //   prompt patch → popup layout unchanged but filter_text advanced past prefix,
@@ -862,7 +859,6 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CompleteReuse {
-    legacy_visible: bool,
     token: Option<u64>,
 }
 
@@ -870,20 +866,8 @@ fn parse_complete_reuse(parts: &[&str]) -> Option<CompleteReuse> {
     match parts {
         ["complete", _, _, _, _] => Some(CompleteReuse::default()),
         ["complete", _, _, _, _, flag] => {
-            if *flag == "reuse=0" {
-                return Some(CompleteReuse::default());
-            }
-            if *flag == "reuse=1" {
-                return Some(CompleteReuse {
-                    legacy_visible: true,
-                    token: None,
-                });
-            }
             let token = flag.strip_prefix("reuse_token=")?.parse().ok()?;
-            Some(CompleteReuse {
-                legacy_visible: false,
-                token: Some(token),
-            })
+            Some(CompleteReuse { token: Some(token) })
         }
         _ => None,
     }
@@ -941,17 +925,11 @@ mod tests {
         );
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse_token=42"]),
-            Some(CompleteReuse {
-                legacy_visible: false,
-                token: Some(42),
-            })
+            Some(CompleteReuse { token: Some(42) })
         );
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=1"]),
-            Some(CompleteReuse {
-                legacy_visible: true,
-                token: None,
-            })
+            None
         );
         assert_eq!(
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
@@ -1008,7 +986,6 @@ mod tests {
                 24,
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
                 CompleteReuse {
-                    legacy_visible: false,
                     token: Some(reuse_token),
                 },
             );
@@ -1052,7 +1029,6 @@ mod tests {
                 24,
                 "git\tcommand\tcommand\n",
                 CompleteReuse {
-                    legacy_visible: false,
                     token: Some(reuse_token),
                 },
             );
@@ -1095,43 +1071,7 @@ mod tests {
                 80,
                 24,
                 "git\tcommand\tcommand\n",
-                CompleteReuse {
-                    legacy_visible: false,
-                    token: Some(999),
-                },
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
-        let mut header = String::new();
-        reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn handle_complete_reuse_accepts_legacy_visible_flag() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                "git\tcommand\tcommand\n",
-                CompleteReuse {
-                    legacy_visible: true,
-                    token: None,
-                },
+                CompleteReuse { token: Some(999) },
             );
         });
 
