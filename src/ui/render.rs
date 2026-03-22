@@ -173,33 +173,43 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     Ok(popup)
 }
 
-pub fn draw_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
-    let mut buf = Vec::with_capacity(2048);
-    let popup = render_popup(&mut buf, app, theme)?;
-
-    // Update filter_text on the prompt line
+fn queue_filter_line(buf: &mut impl Write, app: &App) -> std::io::Result<()> {
     let prefix_w = UnicodeWidthStr::width(app.prefix.as_str()) as u16;
     let prefix_start_col = app.cursor_col.saturating_sub(prefix_w);
     let filter_display = &app.filter_text;
     let filter_w = UnicodeWidthStr::width(filter_display.as_str()) as u16;
 
     crossterm::queue!(
-        &mut buf,
+        buf,
         cursor::MoveTo(prefix_start_col, app.cursor_row),
         Print(filter_display),
     )?;
 
     let clear_count = prefix_w.saturating_sub(filter_w);
     if clear_count > 0 {
-        crossterm::queue!(&mut buf, Print(" ".repeat(clear_count as usize)))?;
+        crossterm::queue!(buf, Print(" ".repeat(clear_count as usize)))?;
     }
 
     let cursor_end_col = prefix_start_col + filter_w;
     crossterm::queue!(
-        &mut buf,
+        buf,
         cursor::MoveTo(cursor_end_col, app.cursor_row),
-        cursor::Show,
+        cursor::Show
     )?;
+
+    Ok(())
+}
+
+pub fn filter_line_to_bytes(app: &App) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(128);
+    queue_filter_line(&mut buf, app)?;
+    Ok(buf)
+}
+
+pub fn draw_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u8>, Popup)> {
+    let mut buf = Vec::with_capacity(2048);
+    let popup = render_popup(&mut buf, app, theme)?;
+    queue_filter_line(&mut buf, app)?;
 
     Ok((buf, popup))
 }

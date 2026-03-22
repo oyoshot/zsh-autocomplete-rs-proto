@@ -5,6 +5,7 @@ pub mod client;
 pub mod config;
 pub mod daemon;
 pub mod fuzzy;
+pub mod handoff;
 pub mod input;
 pub mod protocol;
 pub mod tty;
