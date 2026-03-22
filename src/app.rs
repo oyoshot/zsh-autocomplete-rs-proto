@@ -7,6 +7,7 @@ const DEFAULT_MAX_VISIBLE: usize = 10;
 pub struct App {
     pub all_candidates: Vec<Candidate>,
     pub filtered_indices: Vec<usize>,
+    // Unbounded; typical session produces few unique queries so no eviction needed
     cached_filters: HashMap<String, Vec<usize>>,
     pub filter_text: String,
     pub selected: usize,
