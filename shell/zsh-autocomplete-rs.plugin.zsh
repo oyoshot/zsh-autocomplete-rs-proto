@@ -647,6 +647,7 @@ _zacrs_line_pre_redraw() {
     if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
         candidates_str="$_zacrs_cached_candidates"
         prefix="$naive_prefix"
+        prefix_len=${#naive_prefix}
     fi
 
     [[ -z "$candidates_str" ]] && return
