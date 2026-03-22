@@ -141,41 +141,13 @@ impl FuzzyMatcher {
     }
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
-        if query.is_empty() {
-            let mut results: Vec<ScoredCandidate> = candidates
-                .iter()
-                .map(|candidate| ScoredCandidate {
-                    candidate: candidate.clone(),
-                    score: 0,
-                })
-                .collect();
-            sort_empty_query_results(&mut results);
-            return results;
-        }
-
-        self.ensure_pattern(query);
-
-        let pattern = &self.pattern;
-        let matcher = &mut self.matcher;
-        let utf32_buf = &mut self.utf32_buf;
-        let mut results = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            utf32_buf.clear();
-            let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-            if let Some(score) = pattern.score(haystack, matcher) {
-                results.push(ScoredCandidate {
-                    candidate: candidate.clone(),
-                    score,
-                });
-            }
-        }
-
-        if results.is_empty() && matcher_len(query) >= 3 {
-            results = self.damerau_levenshtein_fallback_candidates(candidates, query);
-        }
-
-        sort_scored_results(&mut results);
-        results
+        self.filter_matches(candidates, query, None)
+            .into_iter()
+            .map(|m| ScoredCandidate {
+                candidate: candidates[m.candidate_idx].clone(),
+                score: m.score,
+            })
+            .collect()
     }
 
     fn damerau_levenshtein_fallback_matches(
@@ -205,41 +177,6 @@ impl FuzzyMatcher {
                 let score = dl_match_score(query_len, candidate_len, dist);
                 results.push(ScoredMatch {
                     candidate_idx,
-                    score,
-                });
-            }
-        }
-
-        results
-    }
-
-    fn damerau_levenshtein_fallback_candidates(
-        &mut self,
-        candidates: &[Candidate],
-        query: &str,
-    ) -> Vec<ScoredCandidate> {
-        self.dl_scratch.set_query(query);
-        let query_len = self.dl_scratch.query_len();
-        let options = DamerauOptions {
-            case_insensitive: !graphemes(query).any(is_upper_case),
-            normalize_chars: should_normalize_smart(query),
-            max_dist: Some(if query_len <= 4 { 1 } else { 2 }),
-        };
-        let max_dist = options.max_dist.unwrap_or(usize::MAX);
-
-        let mut results = Vec::new();
-        for candidate in candidates {
-            self.dl_scratch.set_candidate(&candidate.text);
-            let candidate_len = self.dl_scratch.candidate_len();
-            if query_len.abs_diff(candidate_len) > max_dist {
-                continue;
-            }
-
-            let dist = self.dl_scratch.distance(options);
-            if dist <= max_dist {
-                let score = dl_match_score(query_len, candidate_len, dist);
-                results.push(ScoredCandidate {
-                    candidate: candidate.clone(),
                     score,
                 });
             }
@@ -324,16 +261,6 @@ fn compare_scored_candidates(a: &Candidate, a_score: u32, b: &Candidate, b_score
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
         .then_with(|| a.text.cmp(&b.text))
-}
-
-fn sort_empty_query_results(results: &mut [ScoredCandidate]) {
-    results.sort_unstable_by(|a, b| compare_empty_candidates(&a.candidate, &b.candidate));
-}
-
-fn sort_scored_results(results: &mut [ScoredCandidate]) {
-    results.sort_unstable_by(|a, b| {
-        compare_scored_candidates(&a.candidate, a.score, &b.candidate, b.score)
-    });
 }
 
 fn sort_empty_query_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
