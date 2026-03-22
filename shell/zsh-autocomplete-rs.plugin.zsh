@@ -26,36 +26,30 @@ typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
-typeset -g _zacrs_popup_snapshot_buffer=""
+typeset -g _zacrs_popup_snapshot_lbuffer=""
 typeset -g _zacrs_popup_snapshot_prefix=""
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -g _zacrs_popup_snapshot_candidates=""
 typeset -gi _zacrs_popup_snapshot_cursor_row=0
 typeset -gi _zacrs_popup_snapshot_cursor_col=0
-typeset -gi _zacrs_popup_snapshot_row=0
-typeset -gi _zacrs_popup_snapshot_height=0
 
 _zacrs_reset_popup_snapshot() {
-    _zacrs_popup_snapshot_buffer=""
+    _zacrs_popup_snapshot_lbuffer=""
     _zacrs_popup_snapshot_prefix=""
     _zacrs_popup_snapshot_prefix_len=0
     _zacrs_popup_snapshot_candidates=""
     _zacrs_popup_snapshot_cursor_row=0
     _zacrs_popup_snapshot_cursor_col=0
-    _zacrs_popup_snapshot_row=0
-    _zacrs_popup_snapshot_height=0
 }
 
 _zacrs_record_popup_snapshot() {
     local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4"
-    _zacrs_popup_snapshot_buffer="$BUFFER"
+    _zacrs_popup_snapshot_lbuffer="$LBUFFER"
     _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_candidates="$candidates_str"
     _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
     _zacrs_popup_snapshot_cursor_col=$cursor_col
-    _zacrs_popup_snapshot_row=$_zacrs_popup_row
-    _zacrs_popup_snapshot_height=$_zacrs_popup_height
 }
 
 # === Daemon lifecycle ===
@@ -449,43 +443,56 @@ _zacrs_tab_complete() {
     local cursor_row="" cursor_col=""
     local reuse_visible=0
 
-    # 候補収集: compsys → gather fallback
-    _zacrs_captured=()
-    local _zacrs_fd2
-    exec {_zacrs_fd2}>&2
-    zle _zacrs_compsys 2>/dev/null
-    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
-    # compsys コンテキストから prefix 取得
-    if (( _zacrs_ctx_valid )); then
-        prefix="$_zacrs_ctx_prefix"
-        prefix_len=$_zacrs_ctx_prefix_len
-    else
-        prefix="${LBUFFER##* }"
-        prefix_len=${#prefix}
+    if (( _zacrs_popup_visible )) \
+        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && [[ -n "$_zacrs_popup_snapshot_candidates" ]]; then
+        reuse_visible=1
+        prefix="$_zacrs_popup_snapshot_prefix"
+        prefix_len=$_zacrs_popup_snapshot_prefix_len
+        candidates_str="$_zacrs_popup_snapshot_candidates"
+        cursor_row=$_zacrs_popup_snapshot_cursor_row
+        cursor_col=$_zacrs_popup_snapshot_cursor_col
     fi
 
-    if (( ${#_zacrs_captured} > 0 )); then
-        candidates_str="${(pj:\n:)_zacrs_captured}"
-    fi
-    if [[ -z "$candidates_str" ]]; then
-        candidates_str="$(_zacrs_gather "$LBUFFER")"
-        if [[ -n "$candidates_str" ]]; then
+    if (( ! reuse_visible )); then
+        # 候補収集: compsys → gather fallback
+        _zacrs_captured=()
+        local _zacrs_fd2
+        exec {_zacrs_fd2}>&2
+        zle _zacrs_compsys 2>/dev/null
+        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+
+        # compsys コンテキストから prefix 取得
+        if (( _zacrs_ctx_valid )); then
+            prefix="$_zacrs_ctx_prefix"
+            prefix_len=$_zacrs_ctx_prefix_len
+        else
             prefix="${LBUFFER##* }"
             prefix_len=${#prefix}
         fi
-    fi
 
-    # Fuzzy fallback: auto-trigger キャッシュを再利用
-    if [[ -z "$candidates_str" && -n "$prefix" ]]; then
-        local lbase
-        if [[ "$LBUFFER" == *" "* ]]; then
-            lbase="${LBUFFER% *} "
-        else
-            lbase=""
+        if (( ${#_zacrs_captured} > 0 )); then
+            candidates_str="${(pj:\n:)_zacrs_captured}"
         fi
-        if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
-            candidates_str="$_zacrs_cached_candidates"
+        if [[ -z "$candidates_str" ]]; then
+            candidates_str="$(_zacrs_gather "$LBUFFER")"
+            if [[ -n "$candidates_str" ]]; then
+                prefix="${LBUFFER##* }"
+                prefix_len=${#prefix}
+            fi
+        fi
+
+        # Fuzzy fallback: auto-trigger キャッシュを再利用
+        if [[ -z "$candidates_str" && -n "$prefix" ]]; then
+            local lbase
+            if [[ "$LBUFFER" == *" "* ]]; then
+                lbase="${LBUFFER% *} "
+            else
+                lbase=""
+            fi
+            if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
+                candidates_str="$_zacrs_cached_candidates"
+            fi
         fi
     fi
 
@@ -536,21 +543,6 @@ _zacrs_tab_complete() {
         return
     fi
 
-    cursor_row=0 cursor_col=0
-    _zacrs_get_cursor_pos
-
-    if (( _zacrs_popup_visible )) \
-        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" ]] \
-        && [[ "$_zacrs_popup_snapshot_prefix" == "$prefix" ]] \
-        && (( _zacrs_popup_snapshot_prefix_len == prefix_len )) \
-        && [[ "$_zacrs_popup_snapshot_candidates" == "$candidates_str" ]] \
-        && (( _zacrs_popup_snapshot_cursor_row == cursor_row )) \
-        && (( _zacrs_popup_snapshot_cursor_col == cursor_col )) \
-        && (( _zacrs_popup_snapshot_row == _zacrs_popup_row )) \
-        && (( _zacrs_popup_snapshot_height == _zacrs_popup_height )); then
-        reuse_visible=1
-    fi
-
     _zacrs_suppressed=0
 
     # Try daemon path first, fall back to subprocess
@@ -558,7 +550,9 @@ _zacrs_tab_complete() {
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
             "$cursor_row" "$cursor_col" "$reuse_visible" && return
     fi
-    _zacrs_clear_popup
+    if (( ! reuse_visible )); then
+        _zacrs_clear_popup
+    fi
     _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col"
 }
 

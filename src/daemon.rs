@@ -626,8 +626,7 @@ impl DaemonServer {
             writer.flush()
         };
 
-        let can_reuse_initial_frame =
-            reuse_initial_frame && scroll_bytes.is_empty() && app.filter_text == app.prefix;
+        let can_reuse_initial_frame = reuse_initial_frame && scroll_bytes.is_empty();
         let initial_frame_result = if can_reuse_initial_frame {
             writeln!(writer, "NONE").and_then(|_| writer.flush())
         } else {
@@ -932,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_sends_frame_when_common_prefix_expands() {
+    fn handle_complete_reuse_keeps_popup_when_common_prefix_expands() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut server = test_server();
@@ -954,7 +953,7 @@ mod tests {
         let mut reader = BufReader::new(&client_stream);
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
+        assert_eq!(header.trim_end(), "NONE");
 
         drop(reader);
         drop(client_stream);
