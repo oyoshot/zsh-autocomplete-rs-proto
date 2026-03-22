@@ -31,6 +31,8 @@ pub fn compute_reuse_token(prefix: &str, candidates_tsv: &str, app: &App, popup:
         popup.height,
         app.filter_text,
     );
+    // Avoid 0 so the shell can distinguish "has token" from "no token"
+    // via a simple non-empty string check on the variable.
     stable_hash_bytes(signature.as_bytes()).max(1)
 }
 
