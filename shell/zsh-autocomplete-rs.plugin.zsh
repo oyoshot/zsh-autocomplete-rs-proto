@@ -26,7 +26,7 @@ typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
-typeset -g _zacrs_popup_snapshot_lbuffer=""
+typeset -g _zacrs_popup_snapshot_buffer=""
 typeset -g _zacrs_popup_snapshot_prefix=""
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -g _zacrs_popup_snapshot_candidates=""
@@ -34,7 +34,7 @@ typeset -gi _zacrs_popup_snapshot_cursor_row=0
 typeset -gi _zacrs_popup_snapshot_cursor_col=0
 
 _zacrs_reset_popup_snapshot() {
-    _zacrs_popup_snapshot_lbuffer=""
+    _zacrs_popup_snapshot_buffer=""
     _zacrs_popup_snapshot_prefix=""
     _zacrs_popup_snapshot_prefix_len=0
     _zacrs_popup_snapshot_candidates=""
@@ -44,7 +44,7 @@ _zacrs_reset_popup_snapshot() {
 
 _zacrs_record_popup_snapshot() {
     local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4"
-    _zacrs_popup_snapshot_lbuffer="$LBUFFER"
+    _zacrs_popup_snapshot_buffer="$BUFFER"
     _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_candidates="$candidates_str"
@@ -442,7 +442,7 @@ _zacrs_tab_complete() {
     local reuse_visible=0
 
     if (( _zacrs_popup_visible )) \
-        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" ]] \
         && [[ -n "$_zacrs_popup_snapshot_candidates" ]]; then
         reuse_visible=1
         prefix="$_zacrs_popup_snapshot_prefix"
