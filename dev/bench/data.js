@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774247906453,
+  "lastUpdate": 1774260916702,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -2723,6 +2723,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 746,
             "range": "± 8",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "36491eb42245eab74563dafb091ee23b7b929f0c",
+          "message": "fix(ui): auto-select first candidate in interactive complete mode (#24)\n\n* fix(ui): auto-select first candidate in interactive complete mode (#23)\n\nAfter #22 changed `selected` to `None` by default, entering interactive\ncomplete mode via Tab no longer highlighted the first candidate until\na second keypress. Additionally, filtering (type_char / backspace)\nreset the selection back to None, losing the highlight.\n\nFix by calling `app.move_down()` at three points in the complete path:\n  - before the initial frame (both run_complete and handle_complete)\n  - after type_char filtering\n  - after backspace filtering\n\nThe daemon's initial-frame reuse optimisation (NONE / prompt-patch) and\nthe associated `CompleteReuse` type are removed because the highlight\nstate always differs from the prior render frame. The render path\nremains unchanged so #14's deferred highlight is preserved.\n\nCloses #23\nCloses #25\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(ui): reselect first complete candidate after filtering\n\n* fix(ui): confirm top complete candidate after filtering\n\n* fix(ui): keep complete selection visible after filtering\n\n* fix(ui): preserve typed text after complete filtering\n\n* fix(ui): preserve common-prefix confirm in complete mode\n\n* fix(daemon): preserve reused popup highlighting\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-23T19:05:21+09:00",
+          "tree_id": "97dd6a72d266c259ca593abf889583fd260336ae",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/36491eb42245eab74563dafb091ee23b7b929f0c"
+        },
+        "date": 1774260915439,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7424,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75369,
+            "range": "± 1001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 916364,
+            "range": "± 75830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 190112,
+            "range": "± 2818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101361,
+            "range": "± 959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76005,
+            "range": "± 7677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20128,
+            "range": "± 1172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19076,
+            "range": "± 509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11797,
+            "range": "± 782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 310634,
+            "range": "± 9657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 303614,
+            "range": "± 5250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 265793,
+            "range": "± 19911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 293254,
+            "range": "± 2049",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26583,
+            "range": "± 287",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 304412,
+            "range": "± 1356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3324131,
+            "range": "± 231325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 154469,
+            "range": "± 1847",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114215,
+            "range": "± 548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 364848,
+            "range": "± 4448",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 743,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 42,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 114,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 50,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 71,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 855,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7583,
+            "range": "± 91",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 747,
+            "range": "± 5",
             "unit": "ns/iter"
           }
         ]
