@@ -291,6 +291,38 @@ _zacrs_complete_parse_frame() {
     [[ "$last_token" != *=* ]] && _f_tty_len=$last_token
 }
 
+# Handle a daemon response header in the interactive loop.
+# Reads:  header, fd, tty_wfd from caller scope
+# Writes: _f_resp (frame|done|none|unknown)
+#         result_code, result_text (on done)
+#         _zacrs_popup_row, _zacrs_popup_height (on frame)
+#         _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len (via parse_frame)
+_zacrs_complete_handle_response() {
+    case "$header" in
+        FRAME*)
+            _zacrs_complete_parse_frame "$header"
+            if (( _f_tty_len > 0 )); then
+                sysread -i $fd -o $tty_wfd -c $_f_tty_len
+            fi
+            _zacrs_popup_row=$_f_popup_row
+            _zacrs_popup_height=$_f_popup_height
+            _f_resp=frame
+            ;;
+        DONE*)
+            result_code="${${(s: :)header}[2]}"
+            result_text="${header#DONE [0-9]## }"
+            [[ "$result_text" == "$header" ]] && result_text=""
+            _f_resp=done
+            ;;
+        NONE)
+            _f_resp=none
+            ;;
+        *)
+            _f_resp=unknown
+            ;;
+    esac
+}
+
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}"
@@ -404,26 +436,12 @@ _zacrs_invoke_daemon() {
                 fi
                 printf 'KEY %d\n%s' "${#_key}" "$_key" >&$fd
                 IFS= read -r -u $fd header
-                case "$header" in
-                    FRAME*)
-                        _zacrs_complete_parse_frame "$header"
-                        if (( _f_tty_len > 0 )); then
-                            sysread -i $fd -o $tty_wfd -c $_f_tty_len
-                        fi
-                        _zacrs_popup_row=$_f_popup_row
-                        _zacrs_popup_height=$_f_popup_height
-                        ;;
-                    DONE*)
-                        local -a parts
-                        parts=( ${(s: :)header} )
-                        result_code="${parts[2]}"
-                        result_text="${header#DONE [0-9]## }"
-                        [[ "$result_text" == "$header" ]] && result_text=""
-                        _inject_done=1
-                        break
-                        ;;
-                    NONE) ;;
-                    *) _inject_done=1; break ;;
+                _zacrs_complete_handle_response
+                case "$_f_resp" in
+                    frame) ;;
+                    done)  _inject_done=1; break ;;
+                    none)  ;;
+                    *)     _inject_done=1; break ;;
                 esac
             done
             _zacrs_cursor_stale=""
@@ -447,26 +465,12 @@ _zacrs_invoke_daemon() {
 
             # Read response
             IFS= read -r -u $fd header
-            case "$header" in
-                FRAME*)
-                    _zacrs_complete_parse_frame "$header"
-                    if (( _f_tty_len > 0 )); then
-                        sysread -i $fd -o $tty_wfd -c $_f_tty_len
-                    fi
-                    _zacrs_popup_row=$_f_popup_row
-                    _zacrs_popup_height=$_f_popup_height
-                    ;;
-                DONE*)
-                    local -a parts
-                    parts=( ${(s: :)header} )
-                    result_code="${parts[2]}"
-                    # Extract text after "DONE <code> "
-                    result_text="${header#DONE [0-9]## }"
-                    [[ "$result_text" == "$header" ]] && result_text=""
-                    break
-                    ;;
-                NONE) ;;
-                *) break ;;
+            _zacrs_complete_handle_response
+            case "$_f_resp" in
+                frame) ;;
+                done)  break ;;
+                none)  ;;
+                *)     break ;;
             esac
         done
         fi # _inject_done
