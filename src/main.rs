@@ -95,7 +95,6 @@ fn run_complete(
                 if app.filtered_indices.is_empty() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                app.select_first_after_filter();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::Backspace => {
@@ -106,7 +105,6 @@ fn run_complete(
                 if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                app.select_first_after_filter();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::None => {}

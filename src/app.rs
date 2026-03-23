@@ -11,7 +11,6 @@ pub struct App {
     cached_filters: HashMap<String, Vec<usize>>,
     pub filter_text: String,
     selected: Option<usize>,
-    pending_first_navigation: bool,
     pub scroll_offset: usize,
     pub max_visible: usize,
     pub cursor_row: u16,
@@ -75,7 +74,6 @@ impl App {
             cached_filters: HashMap::new(),
             filter_text: lcp,
             selected: None,
-            pending_first_navigation: false,
             scroll_offset: 0,
             max_visible: DEFAULT_MAX_VISIBLE,
             cursor_row,
@@ -100,7 +98,6 @@ impl App {
                 .filter_matches(&self.all_candidates, &self.filter_text, fuzzy_scope);
         self.filtered_indices = scored.into_iter().map(|s| s.candidate_idx).collect();
         self.selected = None;
-        self.pending_first_navigation = false;
         self.scroll_offset = 0;
         self.cache_current_filter();
     }
@@ -116,19 +113,12 @@ impl App {
         };
         self.filtered_indices = filtered_indices;
         self.selected = None;
-        self.pending_first_navigation = false;
         self.scroll_offset = 0;
         true
     }
 
     pub fn move_down(&mut self) {
         if self.filtered_indices.is_empty() {
-            return;
-        }
-        if self.pending_first_navigation {
-            self.pending_first_navigation = false;
-            self.selected = Some(0);
-            self.scroll_offset = 0;
             return;
         }
         let sel = match self.selected {
@@ -149,7 +139,6 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.pending_first_navigation = false;
         let sel = match self.selected {
             None | Some(0) => {
                 let last = self.filtered_indices.len() - 1;
@@ -168,7 +157,6 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.pending_first_navigation = false;
         let cur = self.selected.unwrap_or(0);
         let sel = (cur + self.max_visible).min(self.filtered_indices.len() - 1);
         self.selected = Some(sel);
@@ -181,7 +169,6 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.pending_first_navigation = false;
         let cur = self.selected.unwrap_or(0);
         let sel = cur.saturating_sub(self.max_visible);
         self.selected = Some(sel);
@@ -214,24 +201,10 @@ impl App {
     pub fn select_first(&mut self) {
         if self.filtered_indices.is_empty() {
             self.selected = None;
-            self.pending_first_navigation = false;
             self.scroll_offset = 0;
             return;
         }
         self.selected = Some(0);
-        self.pending_first_navigation = false;
-        self.scroll_offset = 0;
-    }
-
-    pub fn select_first_after_filter(&mut self) {
-        if self.filtered_indices.is_empty() {
-            self.selected = None;
-            self.pending_first_navigation = false;
-            self.scroll_offset = 0;
-            return;
-        }
-        self.selected = Some(0);
-        self.pending_first_navigation = true;
         self.scroll_offset = 0;
     }
 
@@ -654,31 +627,16 @@ mod tests {
     }
 
     #[test]
-    fn select_first_after_type_char_selects_top_filtered_match() {
-        let candidates = make_candidates(&["alpha", "zebra"]);
-        let mut app = App::new(candidates, "".to_string(), 5, 10);
-
-        app.type_char('z');
-        assert_eq!(app.selected(), None);
-        app.select_first_after_filter();
-        assert_eq!(app.selected(), Some(0));
-        assert_eq!(app.selected_candidate().unwrap().text, "zebra");
-    }
-
-    #[test]
-    fn move_down_after_filter_auto_select_stays_on_first_then_advances() {
+    fn move_down_after_filter_selects_top_filtered_match() {
         let candidates = make_candidates(&["ab", "ax", "b"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
 
         app.type_char('a');
-        app.select_first_after_filter();
-        assert_eq!(app.selected_candidate().unwrap().text, "ab");
+        assert_eq!(app.selected(), None);
 
         app.move_down();
+        assert_eq!(app.selected(), Some(0));
         assert_eq!(app.selected_candidate().unwrap().text, "ab");
-
-        app.move_down();
-        assert_eq!(app.selected_candidate().unwrap().text, "ax");
     }
 
     // --- accessors ---
@@ -696,13 +654,6 @@ mod tests {
     #[test]
     fn selected_candidate_empty_none() {
         let app = App::new(Vec::new(), "".to_string(), 5, 10);
-        assert!(app.selected_candidate().is_none());
-    }
-
-    #[test]
-    fn select_first_after_filter_empty_noop() {
-        let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
-        app.select_first_after_filter();
         assert!(app.selected_candidate().is_none());
     }
 
