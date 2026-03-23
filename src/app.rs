@@ -198,6 +198,16 @@ impl App {
         true
     }
 
+    pub fn select_first(&mut self) {
+        if self.filtered_indices.is_empty() {
+            self.selected = None;
+            self.scroll_offset = 0;
+            return;
+        }
+        self.selected = Some(0);
+        self.scroll_offset = 0;
+    }
+
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }
@@ -614,6 +624,37 @@ mod tests {
         app.type_char('a');
         assert_eq!(app.selected(), None);
         assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn select_first_after_type_char_selects_top_filtered_match() {
+        let candidates = make_candidates(&["alpha", "zebra"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        app.type_char('z');
+        assert_eq!(app.selected(), None);
+
+        app.select_first();
+
+        assert_eq!(app.selected(), Some(0));
+        assert_eq!(app.selected_candidate().unwrap().text, "zebra");
+    }
+
+    #[test]
+    fn select_first_after_backspace_selects_top_restored_match() {
+        let candidates = make_candidates(&["alpha", "beta", "zebra"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        app.type_char('z');
+        app.select_first();
+        assert!(app.backspace());
+        assert_eq!(app.selected(), None);
+
+        let expected_first = filtered_texts(&app)[0].to_string();
+        app.select_first();
+
+        assert_eq!(app.selected(), Some(0));
+        assert_eq!(app.selected_candidate().unwrap().text, expected_first);
     }
 
     // --- accessors ---

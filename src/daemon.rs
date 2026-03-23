@@ -634,10 +634,10 @@ impl DaemonServer {
             writer.flush()
         };
 
-        app.move_down(); // Auto-select first candidate for interactive mode
+        app.select_first();
 
         // Always send a full frame so the first candidate is highlighted
-        // (move_down above changed selected from None to Some(0), which the
+        // (select_first above changed selected from None to Some(0), which the
         // prior render frame did not include).
         let initial_frame_result = send_frame(writer, &app, &self.theme, &scroll_bytes);
 
@@ -692,7 +692,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        app.move_down();
+                        app.select_first();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -711,7 +711,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        app.move_down();
+                        app.select_first();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -845,10 +845,31 @@ mod tests {
     use super::{DaemonServer, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
-    use std::io::{BufRead, BufReader, Cursor, Read};
+    use std::io::{BufRead, BufReader, Cursor, Read, Write};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::thread;
+
+    fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(header.starts_with("FRAME "));
+
+        let tty_len = header
+            .split_whitespace()
+            .last()
+            .and_then(|token| token.parse::<usize>().ok())
+            .expect("tty_len in frame header");
+        let mut tty_bytes = vec![0; tty_len];
+        reader.read_exact(&mut tty_bytes).unwrap();
+        (header, String::from_utf8_lossy(&tty_bytes).into_owned())
+    }
+
+    fn send_key(writer: &mut UnixStream, bytes: &[u8]) {
+        writeln!(writer, "KEY {}", bytes.len()).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.flush().unwrap();
+    }
 
     fn test_server() -> DaemonServer {
         let config = Config::default();
@@ -985,6 +1006,43 @@ mod tests {
 
         drop(reader);
         drop(client_stream);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_confirm_after_typing_returns_top_filtered_candidate() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "".to_string(),
+                5,
+                2,
+                80,
+                24,
+                "git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"r");
+        let (_, tty) = read_frame(&mut reader);
+        assert!(tty.contains("grep"));
+
+        send_key(&mut writer, b"\r");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 grep ");
+
+        drop(reader);
+        drop(writer);
         handle.join().unwrap();
     }
 }
