@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774260916702,
+  "lastUpdate": 1774282116219,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -2951,6 +2951,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 747,
             "range": "± 5",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b72138d67468f662aeaab4468253a3cf884f5413",
+          "message": "fix(shell): prevent fast typing from dropping characters (#28)\n\n* fix(shell): prevent fast typing from dropping characters\n\nRemove the `read -t 0` tty buffer flush in `_zacrs_get_cursor_pos`\nthat consumed pending user keystrokes before the DSR cursor query.\n\nAdd two `PENDING` guards in `_zacrs_line_pre_redraw` so that heavy\nwork (compsys, gather, render) is skipped while the user is still\ntyping. The next `line-pre-redraw` fires after ZLE processes the\nqueued keystrokes and retries with `PENDING == 0`.\n\nCloses #27\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): query cursor position before compsys in Tab path\n\nMove the DSR cursor query to the start of _zacrs_tab_complete,\nbefore the heavy compsys/gather phase.  Right after ZLE processes\nthe Tab key the tty input buffer is empty, so the query always\ngets a clean response.  Keys typed while compsys runs stay in the\nbuffer and are later consumed naturally by the daemon interactive\nloop (raw-mode /dev/tty read), preserving type-ahead.\n\nThis eliminates the need for the tty buffer flush in\n_zacrs_get_cursor_pos: every call site now guarantees an empty\nbuffer (auto-trigger via PENDING guards, Tab via early query).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): address review — revert early DSR, fix PENDING retry\n\nRevert the early DSR query added in the previous commit: moving\n_zacrs_get_cursor_pos to the top of _zacrs_tab_complete forced every\nnon-reuse Tab press to pay the DSR cost (up to 1 s timeout on\nterminals that don't respond), even for no-candidate or single-\ncandidate paths that never open a popup.  The drain in\nget_cursor_pos is restored so the Tab path keeps a clean DSR\nresponse (matching pre-fix behaviour).\n\nFix the PENDING guard state management so skipped buffers are\nalways retried on the next redraw:\n\n  - Guard #1 (before compsys): move _zacrs_prev_lbuffer update to\n    AFTER the PENDING check.  A PENDING-skip now leaves prev_lbuffer\n    at its old value, so the next line-pre-redraw still sees a\n    changed LBUFFER and re-enters the processing path.\n\n  - Guard #2 (before render): reset _zacrs_prev_lbuffer to \"\" before\n    returning.  This forces the next redraw to retry even if the\n    queued input didn't change LBUFFER (e.g. arrow keys, Home/End).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): replace DSR flush with robust byte-by-byte parser\n\nReplace the `read -t 0` tty flush and `read -d R` DSR reader with\na byte-by-byte loop that matches the full `\\e[row;colR` pattern.\n\nThe old approach had two problems:\n  - The flush explicitly discarded buffered keystrokes\n  - `read -d R` stopped at the first 'R' in the buffer, which\n    could be a user keystroke rather than the DSR terminator\n\nThe new parser reads one byte at a time and applies a regex match\nafter each byte.  It correctly handles stale keystrokes in the tty\nbuffer even when they contain 'R' or '['.  Any bytes preceding the\nESC are consumed as a side-effect of reading through the shared tty\nbuffer — this is inherent to the single-buffer tty design and the\nauto-trigger path avoids it entirely via PENDING guards.\n\nA 256-byte safety limit prevents unbounded reads if no DSR response\narrives.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): recover Tab type-ahead via daemon KEY injection\n\n_zacrs_get_cursor_pos now saves any pre-DSR keystrokes (bytes that\npreceded the \\e[row;colR response) in the global _zacrs_cursor_stale\ninstead of silently discarding them.\n\n_zacrs_invoke_daemon re-injects the saved keystrokes into the daemon\ninteractive loop as individual KEY commands, right after raw-mode\nentry and before the normal key-read loop.  The daemon processes\nthem as filter input, so typing \"st\" during compsys immediately\nfilters the popup to matching candidates.  If the daemon sends DONE\nduring injection (e.g. all candidates filtered away), the main loop\nis skipped via an _inject_done flag.\n\nThe subprocess fallback (_zacrs_invoke) and the auto-trigger path\n(_zacrs_render) clear _zacrs_cursor_stale without injection, since\nthey have no interactive loop (subprocess) or are guarded by PENDING\nchecks (auto-trigger) respectively.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): recover ESC-prefixed type-ahead and subprocess fallback\n\nImprove type-ahead recovery in two areas flagged by review:\n\n1. ESC-prefixed keystrokes (arrows, Home, End, Alt-...):\n   Use MBEGIN from the DSR regex match to capture ALL bytes before\n   the DSR response, not just those before the first ESC.  The\n   injection loop now groups ESC-prefixed sequences (scanning until\n   a terminating letter or ~) into single KEY commands, matching\n   the main interactive loop's behaviour.\n\n2. Subprocess fallback (_zacrs_invoke):\n   Push stale bytes back to ZLE via `zle -U` so they are processed\n   after the widget returns, instead of silently discarding them.\n   The daemon path remains the preferred recovery mechanism (direct\n   KEY injection into the interactive loop).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): recover stale bytes on all invoke_daemon early-return paths\n\nThe initial_done branch (daemon sends DONE before the interactive\nloop) and the error branches (NONE without reuse, unknown response)\nall returned without handling _zacrs_cursor_stale.  Push the saved\nkeystrokes back to ZLE via `zle -U` and clear the global on every\nearly-return path that follows _zacrs_get_cursor_pos, ensuring no\ntype-ahead is silently lost and no stale data leaks to the next\ninvocation.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): recover stale bytes on zsocket connect failure\n\nWhen zsocket fails after _zacrs_get_cursor_pos has already consumed\ntype-ahead into _zacrs_cursor_stale, push the bytes back to ZLE\nand clear the global before returning.  The caller falls back to\n_zacrs_invoke with pre-computed cursor coordinates, so its own\nzle -U branch is never reached — this was the last uncovered\nearly-return path.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell): extract response handler from daemon interactive loops\n\nDeduplicate FRAME/DONE/NONE response handling in the injection and\nmain loops of _zacrs_invoke_daemon into a shared helper function\n_zacrs_complete_handle_response.  Also replace per-call `local -a`\narray allocation in the DONE branch with inline parameter expansion.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-24T00:59:19+09:00",
+          "tree_id": "3c48aa39be867999da7cd508aa1e5d210f85190f",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/b72138d67468f662aeaab4468253a3cf884f5413"
+        },
+        "date": 1774282115542,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7376,
+            "range": "± 836",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75653,
+            "range": "± 504",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 918047,
+            "range": "± 39198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 193143,
+            "range": "± 2096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101896,
+            "range": "± 603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76512,
+            "range": "± 575",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20238,
+            "range": "± 422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19208,
+            "range": "± 159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11836,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 313679,
+            "range": "± 4588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306529,
+            "range": "± 3642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 269327,
+            "range": "± 2769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 296185,
+            "range": "± 3192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 27260,
+            "range": "± 807",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 303823,
+            "range": "± 2816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3325619,
+            "range": "± 22955",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 154641,
+            "range": "± 1938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114881,
+            "range": "± 2038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 369382,
+            "range": "± 7202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 731,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 115,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 91,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 50,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 70,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 857,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7601,
+            "range": "± 886",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 750,
+            "range": "± 11",
             "unit": "ns/iter"
           }
         ]
