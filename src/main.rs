@@ -35,6 +35,9 @@ fn run_complete(
     }
 
     let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
+    if app.filtered_indices.is_empty() {
+        return Ok(1);
+    }
     let mut guard = TtyGuard::new()?;
 
     // Scroll terminal to ensure blank space below cursor for popup
@@ -168,6 +171,9 @@ fn run_render(
     }
 
     let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
+    if app.filtered_indices.is_empty() {
+        return Ok(1);
+    }
 
     let mut tty = tty::open_tty_write()?;
     ui::render::ensure_space(&mut tty, &mut app)?;
