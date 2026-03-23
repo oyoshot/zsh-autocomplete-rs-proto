@@ -468,16 +468,6 @@ _zacrs_tab_complete() {
         reuse_token="$_zacrs_popup_snapshot_reuse_token"
     fi
 
-    # Query cursor position early, before compsys.  Right after ZLE
-    # processes the Tab key the tty input buffer is empty, so DSR
-    # gets a clean response.  Keys typed during the slow compsys
-    # phase stay in the buffer and are later consumed naturally by
-    # the daemon interactive loop (raw-mode read).
-    if (( ! reuse_visible )); then
-        cursor_row=0 cursor_col=0
-        _zacrs_get_cursor_pos
-    fi
-
     if (( ! reuse_visible )); then
         # 候補収集: compsys → gather fallback
         _zacrs_captured=()
@@ -589,10 +579,11 @@ _zacrs_line_pre_redraw() {
     else
         return
     fi
-    _zacrs_prev_lbuffer="$LBUFFER"
-
-    # Type-ahead detected: skip heavy work, next redraw will retry
+    # Type-ahead detected: skip heavy work.  Do NOT update
+    # _zacrs_prev_lbuffer so the next redraw retries this buffer.
     (( PENDING > 0 )) && return
+
+    _zacrs_prev_lbuffer="$LBUFFER"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && return
@@ -686,8 +677,12 @@ _zacrs_line_pre_redraw() {
     cands=( ${cands:#} )
     [[ ${#cands[@]} -eq 0 ]] && return
 
-    # Type-ahead arrived during candidate gathering: skip render
-    (( PENDING > 0 )) && return
+    # Type-ahead arrived during candidate gathering: skip render.
+    # Reset prev_lbuffer so the next redraw retries this buffer.
+    if (( PENDING > 0 )); then
+        _zacrs_prev_lbuffer=""
+        return
+    fi
 
     _zacrs_render "$prefix" "$prefix_len" "$candidates_str"
 }
