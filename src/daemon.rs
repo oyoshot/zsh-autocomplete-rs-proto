@@ -692,6 +692,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
+                        app.select_first_after_filter();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -710,12 +711,13 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
+                        app.select_first_after_filter();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
                     }
                     Action::Confirm => {
-                        match app.candidate_for_confirm() {
+                        match app.selected_candidate() {
                             Some(c) => {
                                 let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
                             }
