@@ -127,6 +127,7 @@ _zacrs_render() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
+    _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
@@ -290,6 +291,38 @@ _zacrs_complete_parse_frame() {
     [[ "$last_token" != *=* ]] && _f_tty_len=$last_token
 }
 
+# Handle a daemon response header in the interactive loop.
+# Reads:  header, fd, tty_wfd from caller scope
+# Writes: _f_resp (frame|done|none|unknown)
+#         result_code, result_text (on done)
+#         _zacrs_popup_row, _zacrs_popup_height (on frame)
+#         _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len (via parse_frame)
+_zacrs_complete_handle_response() {
+    case "$header" in
+        FRAME*)
+            _zacrs_complete_parse_frame "$header"
+            if (( _f_tty_len > 0 )); then
+                sysread -i $fd -o $tty_wfd -c $_f_tty_len
+            fi
+            _zacrs_popup_row=$_f_popup_row
+            _zacrs_popup_height=$_f_popup_height
+            _f_resp=frame
+            ;;
+        DONE*)
+            result_code="${${(s: :)header}[2]}"
+            result_text="${header#DONE [0-9]## }"
+            [[ "$result_text" == "$header" ]] && result_text=""
+            _f_resp=done
+            ;;
+        NONE)
+            _f_resp=none
+            ;;
+        *)
+            _f_resp=unknown
+            ;;
+    esac
+}
+
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}"
@@ -299,7 +332,11 @@ _zacrs_invoke_daemon() {
     fi
 
     local fd
-    zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
+        return 1
+    fi
     fd=$REPLY
 
     # Send complete request
@@ -320,6 +357,8 @@ _zacrs_invoke_daemon() {
             if (( ! reuse_visible )) || [[ -z "$reuse_token" ]]; then
                 (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
                 exec {fd}<&-
+                [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+                _zacrs_cursor_stale=""
                 return 1
             fi
             _zacrs_popup_visible=1
@@ -335,12 +374,17 @@ _zacrs_invoke_daemon() {
         *)
             (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
             exec {fd}<&-
+            [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+            _zacrs_cursor_stale=""
             return 1
             ;;
     esac
 
     if (( initial_done )); then
         exec {fd}<&-
+        # No interactive loop to inject into; push stale bytes to ZLE
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
         _zacrs_clear_popup
         _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
         zle reset-prompt
@@ -369,6 +413,41 @@ _zacrs_invoke_daemon() {
     stty raw -echo < /dev/tty
 
     {
+        # Re-inject keystrokes that were consumed by the DSR query.
+        # ESC-prefixed sequences (arrows, Home, End, Alt-...) are grouped
+        # into a single KEY command, matching the main loop's behaviour.
+        local _inject_done=0
+        if [[ -n "$_zacrs_cursor_stale" ]]; then
+            local _i _ch _key
+            _i=1
+            while (( _i <= ${#_zacrs_cursor_stale} )); do
+                _ch="${_zacrs_cursor_stale[$_i]}"
+                _key="$_ch"
+                if [[ "$_ch" = $'\e' ]]; then
+                    (( _i++ ))
+                    while (( _i <= ${#_zacrs_cursor_stale} )); do
+                        _ch="${_zacrs_cursor_stale[$_i]}"
+                        _key+="$_ch"
+                        (( _i++ ))
+                        [[ "$_ch" =~ [A-Za-z~] ]] && break
+                    done
+                else
+                    (( _i++ ))
+                fi
+                printf 'KEY %d\n%s' "${#_key}" "$_key" >&$fd
+                IFS= read -r -u $fd header
+                _zacrs_complete_handle_response
+                case "$_f_resp" in
+                    frame) ;;
+                    done)  _inject_done=1; break ;;
+                    none)  ;;
+                    *)     _inject_done=1; break ;;
+                esac
+            done
+            _zacrs_cursor_stale=""
+        fi
+
+        if (( ! _inject_done )); then
         while true; do
             # Read key bytes from /dev/tty
             local input=""
@@ -386,28 +465,15 @@ _zacrs_invoke_daemon() {
 
             # Read response
             IFS= read -r -u $fd header
-            case "$header" in
-                FRAME*)
-                    _zacrs_complete_parse_frame "$header"
-                    if (( _f_tty_len > 0 )); then
-                        sysread -i $fd -o $tty_wfd -c $_f_tty_len
-                    fi
-                    _zacrs_popup_row=$_f_popup_row
-                    _zacrs_popup_height=$_f_popup_height
-                    ;;
-                DONE*)
-                    local -a parts
-                    parts=( ${(s: :)header} )
-                    result_code="${parts[2]}"
-                    # Extract text after "DONE <code> "
-                    result_text="${header#DONE [0-9]## }"
-                    [[ "$result_text" == "$header" ]] && result_text=""
-                    break
-                    ;;
-                NONE) ;;
-                *) break ;;
+            _zacrs_complete_handle_response
+            case "$_f_resp" in
+                frame) ;;
+                done)  break ;;
+                none)  ;;
+                *)     break ;;
             esac
         done
+        fi # _inject_done
     } always {
         stty "$saved_stty" < /dev/tty
         exec {tty_rfd}<&- {tty_wfd}>&-
@@ -431,6 +497,10 @@ _zacrs_invoke() {
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
+        # Subprocess path has no interactive loop; push stale bytes
+        # back to ZLE so they are processed after the widget returns.
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
     fi
 
     local output
@@ -579,6 +649,10 @@ _zacrs_line_pre_redraw() {
     else
         return
     fi
+    # Type-ahead detected: skip heavy work.  Do NOT update
+    # _zacrs_prev_lbuffer so the next redraw retries this buffer.
+    (( PENDING > 0 )) && return
+
     _zacrs_prev_lbuffer="$LBUFFER"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
@@ -672,6 +746,13 @@ _zacrs_line_pre_redraw() {
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
     [[ ${#cands[@]} -eq 0 ]] && return
+
+    # Type-ahead arrived during candidate gathering: skip render.
+    # Reset prev_lbuffer so the next redraw retries this buffer.
+    if (( PENDING > 0 )); then
+        _zacrs_prev_lbuffer=""
+        return
+    fi
 
     _zacrs_render "$prefix" "$prefix_len" "$candidates_str"
 }

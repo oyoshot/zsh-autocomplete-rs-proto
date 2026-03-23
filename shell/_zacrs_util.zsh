@@ -3,33 +3,43 @@
 # Get terminal cursor position (0-indexed row, col)
 # Sets: cursor_row, cursor_col
 _zacrs_get_cursor_pos() {
-    local pos
-    # Flush stale input buffer before sending DSR
-    read -t 0 -rs -k 256 _ < /dev/tty 2>/dev/null
+    local _buf="" _byte="" _found=0
+    typeset -g _zacrs_cursor_stale=""
     echo -ne '\e[6n' > /dev/tty
-    IFS='' read -t 1 -rs -d R pos < /dev/tty
+    # Read byte-by-byte until the full DSR pattern \e[row;colR is found.
+    # Unlike `read -d R`, this is not confused by buffered keystrokes
+    # that happen to contain 'R' or '['.  Bytes preceding the ESC are
+    # saved in _zacrs_cursor_stale so callers can re-inject them.
+    while IFS='' read -t 1 -rs -k 1 _byte < /dev/tty; do
+        _buf+="$_byte"
+        if [[ "$_buf" =~ $'\e\\[([0-9]+);([0-9]+)R$' ]]; then
+            cursor_row=$(( match[1] - 1 ))
+            cursor_col=$(( match[2] - 1 ))
+            _found=1
+            break
+        fi
+        # Safety: give up after 256 bytes (normal response is < 20)
+        (( ${#_buf} > 256 )) && break
+    done
 
-    pos="${pos#*\[}"
-    local row_str="${pos%;*}"
-    local col_str="${pos#*;}"
+    # Expose all bytes before the DSR response (including ESC sequences
+    # such as arrow keys) so callers can re-inject them.
+    if (( _found )); then
+        _zacrs_cursor_stale="${_buf[1,MBEGIN-1]}"
+    fi
 
-    # Validate: must be positive integers
-    if [[ "$row_str" =~ ^[0-9]+$ && "$col_str" =~ ^[0-9]+$ \
-          && "$row_str" -ge 1 && "$col_str" -ge 1 ]]; then
-        cursor_row=$(( row_str - 1 ))
-        cursor_col=$(( col_str - 1 ))
-    else
+    if (( ! _found )); then
         # Fallback: bottom of terminal, column 0
         cursor_row=$(( LINES - 1 ))
         cursor_col=0
-        _zacrs_dbg "get_cursor_pos: DSR failed, fallback (raw='$pos')"
+        _zacrs_dbg "get_cursor_pos: DSR failed, fallback (raw='$_buf')"
     fi
 
     # Clamp to terminal bounds
     (( cursor_row >= LINES )) && cursor_row=$(( LINES - 1 ))
     (( cursor_col >= COLUMNS )) && cursor_col=$(( COLUMNS - 1 ))
 
-    _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col"
+    _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
 }
 
 # Check if the last word in buffer is in command position
