@@ -10,7 +10,7 @@ pub struct App {
     // Unbounded; typical session produces few unique queries so no eviction needed
     cached_filters: HashMap<String, Vec<usize>>,
     pub filter_text: String,
-    pub selected: Option<usize>,
+    selected: Option<usize>,
     pub scroll_offset: usize,
     pub max_visible: usize,
     pub cursor_row: u16,
@@ -198,6 +198,15 @@ impl App {
         true
     }
 
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    #[cfg(test)]
+    pub fn set_selected(&mut self, idx: usize) {
+        self.selected = Some(idx);
+    }
+
     pub fn selected_candidate(&self) -> Option<&Candidate> {
         let sel = self.selected?;
         self.filtered_indices
@@ -362,14 +371,14 @@ mod tests {
     fn new_empty_candidates() {
         let app = App::new(Vec::new(), "fo".to_string(), 5, 10);
         assert!(app.filtered_indices.is_empty());
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
     }
 
     #[test]
     fn initial_selected_is_none() {
         let candidates = make_candidates(&["alpha", "beta", "gamma"]);
         let app = App::new(candidates, "".to_string(), 5, 10);
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         assert!(app.selected_candidate().is_none());
         assert_eq!(app.visible_selected_index(), None);
     }
@@ -380,9 +389,9 @@ mod tests {
     fn move_down_from_none_selects_first() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         app.move_down();
-        assert_eq!(app.selected, Some(0));
+        assert_eq!(app.selected(), Some(0));
     }
 
     #[test]
@@ -391,23 +400,23 @@ mod tests {
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_down();
         app.move_down();
-        assert_eq!(app.selected, Some(1));
+        assert_eq!(app.selected(), Some(1));
     }
 
     #[test]
     fn move_down_wraps() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = Some(app.filtered_indices.len() - 1);
+        app.set_selected(app.filtered_indices.len() - 1);
         app.move_down();
-        assert_eq!(app.selected, Some(0));
+        assert_eq!(app.selected(), Some(0));
     }
 
     #[test]
     fn move_down_empty_noop() {
         let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
         app.move_down();
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
     }
 
     // --- move_up ---
@@ -416,18 +425,18 @@ mod tests {
     fn move_up_from_none_selects_last() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         app.move_up();
-        assert_eq!(app.selected, Some(app.filtered_indices.len() - 1));
+        assert_eq!(app.selected(), Some(app.filtered_indices.len() - 1));
     }
 
     #[test]
     fn move_up_decrements() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = Some(2);
+        app.set_selected(2);
         app.move_up();
-        assert_eq!(app.selected, Some(1));
+        assert_eq!(app.selected(), Some(1));
     }
 
     #[test]
@@ -435,14 +444,14 @@ mod tests {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_up();
-        assert_eq!(app.selected, Some(app.filtered_indices.len() - 1));
+        assert_eq!(app.selected(), Some(app.filtered_indices.len() - 1));
     }
 
     #[test]
     fn move_up_empty_noop() {
         let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
         app.move_up();
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
     }
 
     // --- page_down / page_up ---
@@ -455,31 +464,31 @@ mod tests {
     fn page_down_by_max_visible() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
         app.page_down();
-        assert_eq!(app.selected, Some(10));
+        assert_eq!(app.selected(), Some(10));
     }
 
     #[test]
     fn page_down_clamps() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = Some(10);
+        app.set_selected(10);
         app.page_down();
-        assert_eq!(app.selected, Some(14));
+        assert_eq!(app.selected(), Some(14));
     }
 
     #[test]
     fn page_up_by_max_visible() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = Some(14);
+        app.set_selected(14);
         app.page_up();
-        assert_eq!(app.selected, Some(4));
+        assert_eq!(app.selected(), Some(4));
     }
 
     #[test]
     fn page_up_clamps() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = Some(3);
+        app.set_selected(3);
         app.page_up();
-        assert_eq!(app.selected, Some(0));
+        assert_eq!(app.selected(), Some(0));
     }
 
     // --- type_char / backspace ---
@@ -522,7 +531,7 @@ mod tests {
         app.type_char('l');
         assert!(app.cached_filters.contains_key("a"));
 
-        app.selected = Some(1);
+        app.set_selected(1);
         app.scroll_offset = 1;
         assert!(app.backspace());
 
@@ -531,7 +540,7 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert_eq!(restored, a_results);
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -564,7 +573,7 @@ mod tests {
         assert!(app.cached_filters.contains_key(""));
 
         app.type_char('a');
-        app.selected = Some(1);
+        app.set_selected(1);
         app.scroll_offset = 1;
         assert!(app.backspace());
 
@@ -574,7 +583,7 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert_eq!(restored, initial);
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -601,9 +610,9 @@ mod tests {
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_down();
         app.move_down();
-        assert!(app.selected.is_some());
+        assert!(app.selected().is_some());
         app.type_char('a');
-        assert_eq!(app.selected, None);
+        assert_eq!(app.selected(), None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -642,7 +651,7 @@ mod tests {
     fn visible_selected_index_offset() {
         let candidates = make_candidates(&["alpha", "beta", "gamma"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = Some(2);
+        app.set_selected(2);
         app.scroll_offset = 1;
         assert_eq!(app.visible_selected_index(), Some(1));
     }
@@ -708,13 +717,13 @@ mod tests {
             80,
             24,
         );
-        app.selected = Some(9);
+        app.set_selected(9);
         app.scroll_offset = 0;
 
         app.set_term_size(80, 6);
 
         assert_eq!(app.max_visible, 3);
-        let sel = app.selected.unwrap();
+        let sel = app.selected().unwrap();
         assert!(sel >= app.scroll_offset);
         assert!(sel < app.scroll_offset + app.max_visible);
     }
