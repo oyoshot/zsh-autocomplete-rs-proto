@@ -224,6 +224,14 @@ impl App {
             .and_then(|&candidate_idx| self.all_candidates.get(candidate_idx))
     }
 
+    pub fn candidate_for_confirm(&self) -> Option<&Candidate> {
+        self.selected_candidate().or_else(|| {
+            self.filtered_indices
+                .first()
+                .and_then(|&candidate_idx| self.all_candidates.get(candidate_idx))
+        })
+    }
+
     pub fn visible_candidate_indices(&self) -> &[usize] {
         let end = (self.scroll_offset + self.max_visible).min(self.filtered_indices.len());
         &self.filtered_indices[self.scroll_offset..end]
@@ -627,21 +635,17 @@ mod tests {
     }
 
     #[test]
-    fn select_first_after_type_char_selects_top_filtered_match() {
+    fn candidate_for_confirm_after_type_char_returns_top_filtered_match() {
         let candidates = make_candidates(&["alpha", "zebra"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
 
         app.type_char('z');
         assert_eq!(app.selected(), None);
-
-        app.select_first();
-
-        assert_eq!(app.selected(), Some(0));
-        assert_eq!(app.selected_candidate().unwrap().text, "zebra");
+        assert_eq!(app.candidate_for_confirm().unwrap().text, "zebra");
     }
 
     #[test]
-    fn select_first_after_backspace_selects_top_restored_match() {
+    fn candidate_for_confirm_after_backspace_returns_top_restored_match() {
         let candidates = make_candidates(&["alpha", "beta", "zebra"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
 
@@ -651,10 +655,7 @@ mod tests {
         assert_eq!(app.selected(), None);
 
         let expected_first = filtered_texts(&app)[0].to_string();
-        app.select_first();
-
-        assert_eq!(app.selected(), Some(0));
-        assert_eq!(app.selected_candidate().unwrap().text, expected_first);
+        assert_eq!(app.candidate_for_confirm().unwrap().text, expected_first);
     }
 
     // --- accessors ---
@@ -673,6 +674,12 @@ mod tests {
     fn selected_candidate_empty_none() {
         let app = App::new(Vec::new(), "".to_string(), 5, 10);
         assert!(app.selected_candidate().is_none());
+    }
+
+    #[test]
+    fn candidate_for_confirm_empty_none() {
+        let app = App::new(Vec::new(), "".to_string(), 5, 10);
+        assert!(app.candidate_for_confirm().is_none());
     }
 
     #[test]

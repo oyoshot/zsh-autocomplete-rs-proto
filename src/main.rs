@@ -71,7 +71,7 @@ fn run_complete(
             }
             input::Action::Confirm => {
                 ui::render::clear(&mut guard.tty, &app)?;
-                break match app.selected_candidate() {
+                break match app.candidate_for_confirm() {
                     Some(c) => AppResult::Selected(c.text.clone(), c.kind.clone()),
                     None => AppResult::Cancelled(Some(app.filter_text.clone())),
                 };
@@ -95,7 +95,6 @@ fn run_complete(
                 if app.filtered_indices.is_empty() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                app.select_first();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::Backspace => {
@@ -106,7 +105,6 @@ fn run_complete(
                 if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
-                app.select_first();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::None => {}

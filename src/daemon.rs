@@ -692,7 +692,6 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        app.select_first();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -711,13 +710,12 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        app.select_first();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
                     }
                     Action::Confirm => {
-                        match app.selected_candidate() {
+                        match app.candidate_for_confirm() {
                             Some(c) => {
                                 let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
                             }
@@ -1010,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_confirm_after_typing_returns_top_filtered_candidate() {
+    fn handle_complete_tab_after_typing_selects_top_filtered_candidate() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut server = test_server();
@@ -1024,7 +1022,7 @@ mod tests {
                 2,
                 80,
                 24,
-                "git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
 
@@ -1032,14 +1030,16 @@ mod tests {
         let mut reader = BufReader::new(client_stream);
 
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"r");
-        let (_, tty) = read_frame(&mut reader);
-        assert!(tty.contains("grep"));
+        send_key(&mut writer, b"a");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b"\r");
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
-        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 grep ");
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
 
         drop(reader);
         drop(writer);
