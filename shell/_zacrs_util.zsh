@@ -4,8 +4,6 @@
 # Sets: cursor_row, cursor_col
 _zacrs_get_cursor_pos() {
     local pos
-    # Flush stale input buffer before sending DSR
-    read -t 0 -rs -k 256 _ < /dev/tty 2>/dev/null
     echo -ne '\e[6n' > /dev/tty
     IFS='' read -t 1 -rs -d R pos < /dev/tty
 

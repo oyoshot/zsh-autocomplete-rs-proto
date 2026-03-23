@@ -581,6 +581,9 @@ _zacrs_line_pre_redraw() {
     fi
     _zacrs_prev_lbuffer="$LBUFFER"
 
+    # Type-ahead detected: skip heavy work, next redraw will retry
+    (( PENDING > 0 )) && return
+
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && return
 
@@ -672,6 +675,9 @@ _zacrs_line_pre_redraw() {
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
     [[ ${#cands[@]} -eq 0 ]] && return
+
+    # Type-ahead arrived during candidate gathering: skip render
+    (( PENDING > 0 )) && return
 
     _zacrs_render "$prefix" "$prefix_len" "$candidates_str"
 }
