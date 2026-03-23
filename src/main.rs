@@ -72,7 +72,7 @@ fn run_complete(
                 ui::render::clear(&mut guard.tty, &app)?;
                 break match app.selected_candidate() {
                     Some(c) => AppResult::Selected(c.text.clone(), c.kind.clone()),
-                    None => AppResult::Cancelled(None),
+                    None => AppResult::Cancelled(Some(app.filter_text.clone())),
                 };
             }
             input::Action::DismissWithSpace => {
