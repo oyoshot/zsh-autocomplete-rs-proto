@@ -371,14 +371,27 @@ _zacrs_invoke_daemon() {
 
     {
         # Re-inject keystrokes that were consumed by the DSR query.
-        # Each byte is sent as a separate KEY command so the daemon
-        # processes them as filter input (type-ahead).
+        # ESC-prefixed sequences (arrows, Home, End, Alt-...) are grouped
+        # into a single KEY command, matching the main loop's behaviour.
         local _inject_done=0
         if [[ -n "$_zacrs_cursor_stale" ]]; then
-            local _i _ch
-            for (( _i = 1; _i <= ${#_zacrs_cursor_stale}; _i++ )); do
+            local _i _ch _key
+            _i=1
+            while (( _i <= ${#_zacrs_cursor_stale} )); do
                 _ch="${_zacrs_cursor_stale[$_i]}"
-                printf 'KEY %d\n%s' 1 "$_ch" >&$fd
+                _key="$_ch"
+                if [[ "$_ch" = $'\e' ]]; then
+                    (( _i++ ))
+                    while (( _i <= ${#_zacrs_cursor_stale} )); do
+                        _ch="${_zacrs_cursor_stale[$_i]}"
+                        _key+="$_ch"
+                        (( _i++ ))
+                        [[ "$_ch" =~ [A-Za-z~] ]] && break
+                    done
+                else
+                    (( _i++ ))
+                fi
+                printf 'KEY %d\n%s' "${#_key}" "$_key" >&$fd
                 IFS= read -r -u $fd header
                 case "$header" in
                     FRAME*)
@@ -469,7 +482,10 @@ _zacrs_invoke() {
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
-        _zacrs_cursor_stale=""  # subprocess path has no interactive loop
+        # Subprocess path has no interactive loop; push stale bytes
+        # back to ZLE so they are processed after the widget returns.
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
     fi
 
     local output

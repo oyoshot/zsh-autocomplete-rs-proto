@@ -22,8 +22,11 @@ _zacrs_get_cursor_pos() {
         (( ${#_buf} > 256 )) && break
     done
 
-    # Expose any pre-DSR keystrokes so callers can recover them
-    _zacrs_cursor_stale="${_buf%%$'\e'*}"
+    # Expose all bytes before the DSR response (including ESC sequences
+    # such as arrow keys) so callers can re-inject them.
+    if (( _found )); then
+        _zacrs_cursor_stale="${_buf[1,MBEGIN-1]}"
+    fi
 
     if (( ! _found )); then
         # Fallback: bottom of terminal, column 0
