@@ -127,6 +127,7 @@ _zacrs_render() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
+    _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
@@ -369,6 +370,42 @@ _zacrs_invoke_daemon() {
     stty raw -echo < /dev/tty
 
     {
+        # Re-inject keystrokes that were consumed by the DSR query.
+        # Each byte is sent as a separate KEY command so the daemon
+        # processes them as filter input (type-ahead).
+        local _inject_done=0
+        if [[ -n "$_zacrs_cursor_stale" ]]; then
+            local _i _ch
+            for (( _i = 1; _i <= ${#_zacrs_cursor_stale}; _i++ )); do
+                _ch="${_zacrs_cursor_stale[$_i]}"
+                printf 'KEY %d\n%s' 1 "$_ch" >&$fd
+                IFS= read -r -u $fd header
+                case "$header" in
+                    FRAME*)
+                        _zacrs_complete_parse_frame "$header"
+                        if (( _f_tty_len > 0 )); then
+                            sysread -i $fd -o $tty_wfd -c $_f_tty_len
+                        fi
+                        _zacrs_popup_row=$_f_popup_row
+                        _zacrs_popup_height=$_f_popup_height
+                        ;;
+                    DONE*)
+                        local -a parts
+                        parts=( ${(s: :)header} )
+                        result_code="${parts[2]}"
+                        result_text="${header#DONE [0-9]## }"
+                        [[ "$result_text" == "$header" ]] && result_text=""
+                        _inject_done=1
+                        break
+                        ;;
+                    NONE) ;;
+                    *) _inject_done=1; break ;;
+                esac
+            done
+            _zacrs_cursor_stale=""
+        fi
+
+        if (( ! _inject_done )); then
         while true; do
             # Read key bytes from /dev/tty
             local input=""
@@ -408,6 +445,7 @@ _zacrs_invoke_daemon() {
                 *) break ;;
             esac
         done
+        fi # _inject_done
     } always {
         stty "$saved_stty" < /dev/tty
         exec {tty_rfd}<&- {tty_wfd}>&-
@@ -431,6 +469,7 @@ _zacrs_invoke() {
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
+        _zacrs_cursor_stale=""  # subprocess path has no interactive loop
     fi
 
     local output

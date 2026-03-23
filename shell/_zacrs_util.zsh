@@ -4,12 +4,12 @@
 # Sets: cursor_row, cursor_col
 _zacrs_get_cursor_pos() {
     local _buf="" _byte="" _found=0
+    typeset -g _zacrs_cursor_stale=""
     echo -ne '\e[6n' > /dev/tty
     # Read byte-by-byte until the full DSR pattern \e[row;colR is found.
     # Unlike `read -d R`, this is not confused by buffered keystrokes
-    # that happen to contain 'R' or '['.  Any bytes preceding the ESC
-    # are consumed as a side-effect of reading through the shared tty
-    # buffer — the auto-trigger path avoids this via PENDING guards.
+    # that happen to contain 'R' or '['.  Bytes preceding the ESC are
+    # saved in _zacrs_cursor_stale so callers can re-inject them.
     while IFS='' read -t 1 -rs -k 1 _byte < /dev/tty; do
         _buf+="$_byte"
         if [[ "$_buf" =~ $'\e\\[([0-9]+);([0-9]+)R$' ]]; then
@@ -22,6 +22,9 @@ _zacrs_get_cursor_pos() {
         (( ${#_buf} > 256 )) && break
     done
 
+    # Expose any pre-DSR keystrokes so callers can recover them
+    _zacrs_cursor_stale="${_buf%%$'\e'*}"
+
     if (( ! _found )); then
         # Fallback: bottom of terminal, column 0
         cursor_row=$(( LINES - 1 ))
@@ -33,7 +36,7 @@ _zacrs_get_cursor_pos() {
     (( cursor_row >= LINES )) && cursor_row=$(( LINES - 1 ))
     (( cursor_col >= COLUMNS )) && cursor_col=$(( COLUMNS - 1 ))
 
-    _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col"
+    _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
 }
 
 # Check if the last word in buffer is in command position
