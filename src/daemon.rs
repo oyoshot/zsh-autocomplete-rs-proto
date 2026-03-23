@@ -486,6 +486,12 @@ impl DaemonServer {
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
 
+        if app.filtered_indices.is_empty() {
+            debug!("render request had no matching candidates after filter");
+            self.fuzzy = Some(app.take_fuzzy());
+            return Response::Empty;
+        }
+
         // Cap max_visible based on terminal rows
         let max_popup_height = term_rows.saturating_sub(1);
         if app.max_visible as u16 + 2 > max_popup_height {
@@ -580,6 +586,13 @@ impl DaemonServer {
         let mut app = App::new_with_matcher(
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
+
+        if app.filtered_indices.is_empty() {
+            self.fuzzy = Some(app.take_fuzzy());
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return;
+        }
 
         // Cap max_visible
         let max_popup_height = term_rows.saturating_sub(1);
@@ -935,6 +948,26 @@ mod tests {
             parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
             None
         );
+    }
+
+    #[test]
+    fn handle_render_empty_after_filter_returns_empty() {
+        let mut server = test_server();
+        // Candidates exist but prefix "zzz" matches none after fuzzy filter
+        let response = server.handle_render(
+            "zzz".to_string(),
+            5,
+            2,
+            80,
+            24,
+            b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+        );
+
+        assert!(
+            matches!(response, crate::protocol::Response::Empty),
+            "expected Empty when no candidates match filter"
+        );
+        assert!(server.fuzzy.is_some());
     }
 
     #[test]
