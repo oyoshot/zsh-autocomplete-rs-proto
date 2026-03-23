@@ -42,6 +42,7 @@ fn run_complete(
 
     // Scroll terminal to ensure blank space below cursor for popup
     ui::render::ensure_space(&mut guard.tty, &mut app)?;
+    app.move_down(); // Auto-select first candidate for interactive mode
     ui::render::draw(&mut guard.tty, &app, theme)?;
 
     let result = loop {
@@ -94,6 +95,7 @@ fn run_complete(
                 if app.filtered_indices.is_empty() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
+                app.move_down();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::Backspace => {
@@ -104,6 +106,7 @@ fn run_complete(
                 if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
                     break AppResult::Cancelled(Some(app.filter_text.clone()));
                 }
+                app.move_down();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
             input::Action::None => {}

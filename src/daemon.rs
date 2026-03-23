@@ -247,7 +247,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse_token=N]\n
+    ///   complete <row> <col> <cols> <rows>\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -347,13 +347,7 @@ impl DaemonServer {
                 }
                 false
             }
-            "complete" => {
-                let Some(reuse) = parse_complete_reuse(&parts) else {
-                    warn!(header = header, "invalid text complete request");
-                    let _ = writeln!(writer, "ERROR invalid complete request");
-                    let _ = writer.flush();
-                    return false;
-                };
+            "complete" if parts.len() >= 5 => {
                 let cursor_row: u16 = parts[1].parse().unwrap_or(0);
                 let cursor_col: u16 = parts[2].parse().unwrap_or(0);
                 let term_cols: u16 = parts[3].parse().unwrap_or(80);
@@ -385,7 +379,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_requested = reuse.token.is_some(),
+                    extra_parts = parts.len().saturating_sub(5),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -403,7 +397,6 @@ impl DaemonServer {
                     term_cols,
                     term_rows,
                     &tsv,
-                    reuse,
                 );
                 false
             }
@@ -568,7 +561,6 @@ impl DaemonServer {
         term_cols: u16,
         term_rows: u16,
         tsv: &str,
-        reuse: CompleteReuse,
     ) {
         let candidates: Vec<Candidate> = tsv
             .lines()
@@ -642,39 +634,12 @@ impl DaemonServer {
             writer.flush()
         };
 
-        let send_prompt_patch = |writer: &mut io::BufWriter<&UnixStream>,
-                                 app: &App,
-                                 popup: &ui::popup::Popup|
-         -> io::Result<()> {
-            let tty_bytes = ui::render::filter_line_to_bytes(app)?;
-            writeln!(
-                writer,
-                "FRAME popup_row={} popup_height={} cursor_row={} {}",
-                popup.row,
-                popup.height,
-                app.cursor_row,
-                tty_bytes.len()
-            )?;
-            writer.write_all(&tty_bytes)?;
-            writer.flush()
-        };
+        app.move_down(); // Auto-select first candidate for interactive mode
 
-        let popup = ui::popup::Popup::compute(&app);
-        let expected_reuse_token = compute_reuse_token(&app.prefix, tsv, &app, &popup);
-        let can_reuse_initial_frame =
-            scroll_bytes.is_empty() && reuse.token == Some(expected_reuse_token);
-        // Initial frame decision:
-        //   NONE         → popup layout and filter unchanged, skip redraw entirely
-        //   prompt patch → popup layout unchanged but filter_text advanced past prefix,
-        //                  redraw only the prompt line (no border repaint)
-        //   full frame   → layout changed or no prior popup, send complete frame
-        let initial_frame_result = if can_reuse_initial_frame && app.filter_text == app.prefix {
-            writeln!(writer, "NONE").and_then(|_| writer.flush())
-        } else if can_reuse_initial_frame {
-            send_prompt_patch(writer, &app, &popup)
-        } else {
-            send_frame(writer, &app, &self.theme, &scroll_bytes)
-        };
+        // Always send a full frame so the first candidate is highlighted
+        // (move_down above changed selected from None to Some(0), which the
+        // prior render frame did not include).
+        let initial_frame_result = send_frame(writer, &app, &self.theme, &scroll_bytes);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
@@ -727,6 +692,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
+                        app.move_down();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -745,6 +711,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
+                        app.move_down();
                         if send_frame(writer, &app, theme, &clear_bytes).is_err() {
                             break;
                         }
@@ -873,25 +840,9 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
     Ok(line)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct CompleteReuse {
-    token: Option<u64>,
-}
-
-fn parse_complete_reuse(parts: &[&str]) -> Option<CompleteReuse> {
-    match parts {
-        ["complete", _, _, _, _] => Some(CompleteReuse::default()),
-        ["complete", _, _, _, _, flag] => {
-            let token = flag.strip_prefix("reuse_token=")?.parse().ok()?;
-            Some(CompleteReuse { token: Some(token) })
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CompleteReuse, DaemonServer, parse_complete_reuse, read_text_line};
+    use super::{DaemonServer, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read};
@@ -934,26 +885,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_complete_reuse_accepts_optional_token() {
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24"]),
-            Some(CompleteReuse::default())
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse_token=42"]),
-            Some(CompleteReuse { token: Some(42) })
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=1"]),
-            None
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
-            None
-        );
-    }
-
-    #[test]
     fn handle_render_empty_after_filter_returns_empty() {
         let mut server = test_server();
         // Candidates exist but prefix "zzz" matches none after fuzzy filter
@@ -989,25 +920,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_sends_none_before_interaction() {
+    fn handle_complete_always_sends_initial_frame_with_highlight() {
         let mut server = test_server();
-        let response = server.handle_render(
-            "gi".to_string(),
-            5,
-            2,
-            80,
-            24,
-            b"git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-        );
-        let crate::protocol::Response::Success { metadata, .. } = response else {
-            panic!("expected successful render response");
-        };
-        let metadata = metadata.expect("render metadata");
-        let reuse_token = metadata
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("reuse_token="))
-            .and_then(|token| token.parse::<u64>().ok())
-            .expect("reuse token in metadata");
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut reader = BufReader::new(&server_stream);
@@ -1021,16 +935,13 @@ mod tests {
                 80,
                 24,
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-                CompleteReuse {
-                    token: Some(reuse_token),
-                },
             );
         });
 
         let mut reader = BufReader::new(&client_stream);
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert_eq!(header.trim_end(), "NONE");
+        assert!(header.starts_with("FRAME "));
 
         drop(reader);
         drop(client_stream);
@@ -1038,21 +949,10 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_redraws_prompt_when_common_prefix_expands() {
-        let mut server = test_server();
-        let response =
-            server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
-        let crate::protocol::Response::Success { metadata, .. } = response else {
-            panic!("expected successful render response");
-        };
-        let metadata = metadata.expect("render metadata");
-        let reuse_token = metadata
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("reuse_token="))
-            .and_then(|token| token.parse::<u64>().ok())
-            .expect("reuse token in metadata");
+    fn handle_complete_initial_frame_includes_popup_border() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
+            let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
             let mut writer = std::io::BufWriter::new(&server_stream);
             server.handle_complete(
@@ -1064,9 +964,6 @@ mod tests {
                 80,
                 24,
                 "git\tcommand\tcommand\n",
-                CompleteReuse {
-                    token: Some(reuse_token),
-                },
             );
         });
 
@@ -1083,38 +980,8 @@ mod tests {
         let mut tty_bytes = vec![0; tty_len];
         reader.read_exact(&mut tty_bytes).unwrap();
         let tty = String::from_utf8_lossy(&tty_bytes);
+        assert!(tty.contains("┌"));
         assert!(tty.contains("git"));
-        assert!(!tty.contains("┌"));
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn handle_complete_reuse_falls_back_to_frame_when_token_mismatches() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                "git\tcommand\tcommand\n",
-                CompleteReuse { token: Some(999) },
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
-        let mut header = String::new();
-        reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
 
         drop(reader);
         drop(client_stream);
