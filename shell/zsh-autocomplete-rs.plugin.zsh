@@ -300,7 +300,11 @@ _zacrs_invoke_daemon() {
     fi
 
     local fd
-    zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
+        return 1
+    fi
     fd=$REPLY
 
     # Send complete request
