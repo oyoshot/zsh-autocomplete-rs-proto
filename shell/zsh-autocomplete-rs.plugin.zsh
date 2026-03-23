@@ -321,6 +321,8 @@ _zacrs_invoke_daemon() {
             if (( ! reuse_visible )) || [[ -z "$reuse_token" ]]; then
                 (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
                 exec {fd}<&-
+                [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+                _zacrs_cursor_stale=""
                 return 1
             fi
             _zacrs_popup_visible=1
@@ -336,12 +338,17 @@ _zacrs_invoke_daemon() {
         *)
             (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
             exec {fd}<&-
+            [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+            _zacrs_cursor_stale=""
             return 1
             ;;
     esac
 
     if (( initial_done )); then
         exec {fd}<&-
+        # No interactive loop to inject into; push stale bytes to ZLE
+        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
+        _zacrs_cursor_stale=""
         _zacrs_clear_popup
         _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
         zle reset-prompt
