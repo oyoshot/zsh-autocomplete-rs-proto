@@ -634,11 +634,12 @@ impl DaemonServer {
             writer.flush()
         };
 
-        app.select_first();
+        if app.filter_text == app.prefix {
+            app.select_first();
+        }
 
         // Always send a full frame so the first candidate is highlighted
-        // (select_first above changed selected from None to Some(0), which the
-        // prior render frame did not include).
+        // when complete mode opens without a common-prefix expansion.
         let initial_frame_result = send_frame(writer, &app, &self.theme, &scroll_bytes);
 
         if initial_frame_result.is_err() {
@@ -1076,6 +1077,39 @@ mod tests {
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_confirm_with_common_prefix_returns_filter_text() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "fo".to_string(),
+                5,
+                2,
+                80,
+                24,
+                "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\r");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 fooba");
 
         drop(reader);
         drop(writer);
