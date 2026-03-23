@@ -247,7 +247,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse_token=N]\n
+    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -347,17 +347,14 @@ impl DaemonServer {
                 }
                 false
             }
-            "complete" => {
-                let Some(reuse) = parse_complete_reuse(&parts) else {
-                    warn!(header = header, "invalid text complete request");
-                    let _ = writeln!(writer, "ERROR invalid complete request");
-                    let _ = writer.flush();
-                    return false;
-                };
+            "complete" if parts.len() >= 5 => {
                 let cursor_row: u16 = parts[1].parse().unwrap_or(0);
                 let cursor_col: u16 = parts[2].parse().unwrap_or(0);
                 let term_cols: u16 = parts[3].parse().unwrap_or(80);
                 let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let reuse_popup = parts[5..]
+                    .iter()
+                    .any(|part| part.starts_with("reuse_token="));
                 let prefix = match read_text_line(reader) {
                     Ok(prefix) => prefix,
                     Err(_) => {
@@ -385,7 +382,8 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_requested = reuse.token.is_some(),
+                    reuse_popup,
+                    extra_parts = parts.len().saturating_sub(5),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -402,8 +400,8 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    reuse_popup,
                     &tsv,
-                    reuse,
                 );
                 false
             }
@@ -567,8 +565,8 @@ impl DaemonServer {
         cursor_col: u16,
         term_cols: u16,
         term_rows: u16,
+        reuse_popup: bool,
         tsv: &str,
-        reuse: CompleteReuse,
     ) {
         let candidates: Vec<Candidate> = tsv
             .lines()
@@ -626,9 +624,14 @@ impl DaemonServer {
         let send_frame = |writer: &mut io::BufWriter<&UnixStream>,
                           app: &App,
                           theme: &Theme,
-                          extra_prefix: &[u8]|
+                          extra_prefix: &[u8],
+                          popup_only: bool|
          -> io::Result<()> {
-            let (tty_bytes, popup) = ui::render::draw_to_bytes(app, theme)?;
+            let (tty_bytes, popup) = if popup_only {
+                ui::render::render_popup_to_bytes(app, theme)?
+            } else {
+                ui::render::draw_to_bytes(app, theme)?
+            };
             let total_len = extra_prefix.len() + tty_bytes.len();
             writeln!(
                 writer,
@@ -642,39 +645,13 @@ impl DaemonServer {
             writer.flush()
         };
 
-        let send_prompt_patch = |writer: &mut io::BufWriter<&UnixStream>,
-                                 app: &App,
-                                 popup: &ui::popup::Popup|
-         -> io::Result<()> {
-            let tty_bytes = ui::render::filter_line_to_bytes(app)?;
-            writeln!(
-                writer,
-                "FRAME popup_row={} popup_height={} cursor_row={} {}",
-                popup.row,
-                popup.height,
-                app.cursor_row,
-                tty_bytes.len()
-            )?;
-            writer.write_all(&tty_bytes)?;
-            writer.flush()
-        };
+        if app.filter_text == app.prefix {
+            app.select_first();
+        }
 
-        let popup = ui::popup::Popup::compute(&app);
-        let expected_reuse_token = compute_reuse_token(&app.prefix, tsv, &app, &popup);
-        let can_reuse_initial_frame =
-            scroll_bytes.is_empty() && reuse.token == Some(expected_reuse_token);
-        // Initial frame decision:
-        //   NONE         → popup layout and filter unchanged, skip redraw entirely
-        //   prompt patch → popup layout unchanged but filter_text advanced past prefix,
-        //                  redraw only the prompt line (no border repaint)
-        //   full frame   → layout changed or no prior popup, send complete frame
-        let initial_frame_result = if can_reuse_initial_frame && app.filter_text == app.prefix {
-            writeln!(writer, "NONE").and_then(|_| writer.flush())
-        } else if can_reuse_initial_frame {
-            send_prompt_patch(writer, &app, &popup)
-        } else {
-            send_frame(writer, &app, &self.theme, &scroll_bytes)
-        };
+        let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
+        let initial_frame_result =
+            send_frame(writer, &app, &self.theme, &scroll_bytes, reuse_fast_path);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
@@ -715,7 +692,7 @@ impl DaemonServer {
                             Action::PageUp => app.page_up(),
                             _ => unreachable!(),
                         }
-                        if send_frame(writer, &app, theme, &[]).is_err() {
+                        if send_frame(writer, &app, theme, &[], false).is_err() {
                             break;
                         }
                     }
@@ -727,7 +704,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -745,7 +722,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -873,31 +850,36 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
     Ok(line)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct CompleteReuse {
-    token: Option<u64>,
-}
-
-fn parse_complete_reuse(parts: &[&str]) -> Option<CompleteReuse> {
-    match parts {
-        ["complete", _, _, _, _] => Some(CompleteReuse::default()),
-        ["complete", _, _, _, _, flag] => {
-            let token = flag.strip_prefix("reuse_token=")?.parse().ok()?;
-            Some(CompleteReuse { token: Some(token) })
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CompleteReuse, DaemonServer, parse_complete_reuse, read_text_line};
+    use super::{DaemonServer, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
-    use std::io::{BufRead, BufReader, Cursor, Read};
+    use std::io::{BufRead, BufReader, Cursor, Read, Write};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::thread;
+
+    fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(header.starts_with("FRAME "));
+
+        let tty_len = header
+            .split_whitespace()
+            .last()
+            .and_then(|token| token.parse::<usize>().ok())
+            .expect("tty_len in frame header");
+        let mut tty_bytes = vec![0; tty_len];
+        reader.read_exact(&mut tty_bytes).unwrap();
+        (header, String::from_utf8_lossy(&tty_bytes).into_owned())
+    }
+
+    fn send_key(writer: &mut UnixStream, bytes: &[u8]) {
+        writeln!(writer, "KEY {}", bytes.len()).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.flush().unwrap();
+    }
 
     fn test_server() -> DaemonServer {
         let config = Config::default();
@@ -931,26 +913,6 @@ mod tests {
         let line = read_text_line(&mut reader).unwrap();
 
         assert_eq!(line, "");
-    }
-
-    #[test]
-    fn parse_complete_reuse_accepts_optional_token() {
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24"]),
-            Some(CompleteReuse::default())
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse_token=42"]),
-            Some(CompleteReuse { token: Some(42) })
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "reuse=1"]),
-            None
-        );
-        assert_eq!(
-            parse_complete_reuse(&["complete", "1", "2", "80", "24", "unexpected"]),
-            None
-        );
     }
 
     #[test]
@@ -989,25 +951,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_sends_none_before_interaction() {
+    fn handle_complete_sends_initial_frame_for_new_popup() {
         let mut server = test_server();
-        let response = server.handle_render(
-            "gi".to_string(),
-            5,
-            2,
-            80,
-            24,
-            b"git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-        );
-        let crate::protocol::Response::Success { metadata, .. } = response else {
-            panic!("expected successful render response");
-        };
-        let metadata = metadata.expect("render metadata");
-        let reuse_token = metadata
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("reuse_token="))
-            .and_then(|token| token.parse::<u64>().ok())
-            .expect("reuse token in metadata");
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut reader = BufReader::new(&server_stream);
@@ -1020,17 +965,15 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-                CompleteReuse {
-                    token: Some(reuse_token),
-                },
             );
         });
 
         let mut reader = BufReader::new(&client_stream);
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert_eq!(header.trim_end(), "NONE");
+        assert!(header.starts_with("FRAME "));
 
         drop(reader);
         drop(client_stream);
@@ -1038,19 +981,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_redraws_prompt_when_common_prefix_expands() {
+    fn handle_complete_reuse_popup_redraws_popup_without_filter_line() {
         let mut server = test_server();
-        let response =
-            server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
-        let crate::protocol::Response::Success { metadata, .. } = response else {
-            panic!("expected successful render response");
-        };
-        let metadata = metadata.expect("render metadata");
-        let reuse_token = metadata
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("reuse_token="))
-            .and_then(|token| token.parse::<u64>().ok())
-            .expect("reuse token in metadata");
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut reader = BufReader::new(&server_stream);
@@ -1063,10 +995,38 @@ mod tests {
                 2,
                 80,
                 24,
+                true,
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut reader = BufReader::new(client_stream);
+        let (header, tty) = read_frame(&mut reader);
+        assert!(header.starts_with("FRAME "));
+        assert!(tty.contains("┌"));
+        assert!(!tty.contains("\u{1b}[6;1Hgi"));
+
+        drop(reader);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_initial_frame_includes_popup_border() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "gi".to_string(),
+                5,
+                2,
+                80,
+                24,
+                false,
                 "git\tcommand\tcommand\n",
-                CompleteReuse {
-                    token: Some(reuse_token),
-                },
             );
         });
 
@@ -1083,8 +1043,8 @@ mod tests {
         let mut tty_bytes = vec![0; tty_len];
         reader.read_exact(&mut tty_bytes).unwrap();
         let tty = String::from_utf8_lossy(&tty_bytes);
+        assert!(tty.contains("┌"));
         assert!(tty.contains("git"));
-        assert!(!tty.contains("┌"));
 
         drop(reader);
         drop(client_stream);
@@ -1092,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_reuse_falls_back_to_frame_when_token_mismatches() {
+    fn handle_complete_tab_after_typing_selects_top_filtered_candidate() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut server = test_server();
@@ -1101,23 +1061,104 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
+                "".to_string(),
                 5,
                 2,
                 80,
                 24,
-                "git\tcommand\tcommand\n",
-                CompleteReuse { token: Some(999) },
+                false,
+                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
 
-        let mut reader = BufReader::new(&client_stream);
-        let mut header = String::new();
-        reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"a");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\r");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
 
         drop(reader);
-        drop(client_stream);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_confirm_after_typing_returns_filter_text() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "".to_string(),
+                5,
+                2,
+                80,
+                24,
+                false,
+                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"a");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\r");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_confirm_with_common_prefix_returns_filter_text() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "fo".to_string(),
+                5,
+                2,
+                80,
+                24,
+                false,
+                "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\r");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 fooba");
+
+        drop(reader);
+        drop(writer);
         handle.join().unwrap();
     }
 }

@@ -198,6 +198,16 @@ impl App {
         true
     }
 
+    pub fn select_first(&mut self) {
+        if self.filtered_indices.is_empty() {
+            self.selected = None;
+            self.scroll_offset = 0;
+            return;
+        }
+        self.selected = Some(0);
+        self.scroll_offset = 0;
+    }
+
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }
@@ -614,6 +624,19 @@ mod tests {
         app.type_char('a');
         assert_eq!(app.selected(), None);
         assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn move_down_after_filter_selects_top_filtered_match() {
+        let candidates = make_candidates(&["ab", "ax", "b"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+
+        app.type_char('a');
+        assert_eq!(app.selected(), None);
+
+        app.move_down();
+        assert_eq!(app.selected(), Some(0));
+        assert_eq!(app.selected_candidate().unwrap().text, "ab");
     }
 
     // --- accessors ---

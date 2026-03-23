@@ -42,6 +42,9 @@ fn run_complete(
 
     // Scroll terminal to ensure blank space below cursor for popup
     ui::render::ensure_space(&mut guard.tty, &mut app)?;
+    if app.filter_text == app.prefix {
+        app.select_first();
+    }
     ui::render::draw(&mut guard.tty, &app, theme)?;
 
     let result = loop {
