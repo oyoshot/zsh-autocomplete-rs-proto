@@ -468,6 +468,16 @@ _zacrs_tab_complete() {
         reuse_token="$_zacrs_popup_snapshot_reuse_token"
     fi
 
+    # Query cursor position early, before compsys.  Right after ZLE
+    # processes the Tab key the tty input buffer is empty, so DSR
+    # gets a clean response.  Keys typed during the slow compsys
+    # phase stay in the buffer and are later consumed naturally by
+    # the daemon interactive loop (raw-mode read).
+    if (( ! reuse_visible )); then
+        cursor_row=0 cursor_col=0
+        _zacrs_get_cursor_pos
+    fi
+
     if (( ! reuse_visible )); then
         # 候補収集: compsys → gather fallback
         _zacrs_captured=()
