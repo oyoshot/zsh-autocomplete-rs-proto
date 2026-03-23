@@ -247,7 +247,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows>\n
+    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -352,6 +352,9 @@ impl DaemonServer {
                 let cursor_col: u16 = parts[2].parse().unwrap_or(0);
                 let term_cols: u16 = parts[3].parse().unwrap_or(80);
                 let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let reuse_popup = parts[5..]
+                    .iter()
+                    .any(|part| part.starts_with("reuse_token="));
                 let prefix = match read_text_line(reader) {
                     Ok(prefix) => prefix,
                     Err(_) => {
@@ -379,6 +382,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    reuse_popup,
                     extra_parts = parts.len().saturating_sub(5),
                     payload_bytes = tsv.len()
                 )
@@ -396,6 +400,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    reuse_popup,
                     &tsv,
                 );
                 false
@@ -560,6 +565,7 @@ impl DaemonServer {
         cursor_col: u16,
         term_cols: u16,
         term_rows: u16,
+        reuse_popup: bool,
         tsv: &str,
     ) {
         let candidates: Vec<Candidate> = tsv
@@ -618,9 +624,14 @@ impl DaemonServer {
         let send_frame = |writer: &mut io::BufWriter<&UnixStream>,
                           app: &App,
                           theme: &Theme,
-                          extra_prefix: &[u8]|
+                          extra_prefix: &[u8],
+                          popup_only: bool|
          -> io::Result<()> {
-            let (tty_bytes, popup) = ui::render::draw_to_bytes(app, theme)?;
+            let (tty_bytes, popup) = if popup_only {
+                ui::render::render_popup_to_bytes(app, theme)?
+            } else {
+                ui::render::draw_to_bytes(app, theme)?
+            };
             let total_len = extra_prefix.len() + tty_bytes.len();
             writeln!(
                 writer,
@@ -638,9 +649,9 @@ impl DaemonServer {
             app.select_first();
         }
 
-        // Always send a full frame so the first candidate is highlighted
-        // when complete mode opens without a common-prefix expansion.
-        let initial_frame_result = send_frame(writer, &app, &self.theme, &scroll_bytes);
+        let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
+        let initial_frame_result =
+            send_frame(writer, &app, &self.theme, &scroll_bytes, reuse_fast_path);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
@@ -681,7 +692,7 @@ impl DaemonServer {
                             Action::PageUp => app.page_up(),
                             _ => unreachable!(),
                         }
-                        if send_frame(writer, &app, theme, &[]).is_err() {
+                        if send_frame(writer, &app, theme, &[], false).is_err() {
                             break;
                         }
                     }
@@ -693,7 +704,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -711,7 +722,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes).is_err() {
+                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -940,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_always_sends_initial_frame_with_highlight() {
+    fn handle_complete_sends_initial_frame_for_new_popup() {
         let mut server = test_server();
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
@@ -954,6 +965,7 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
         });
@@ -965,6 +977,36 @@ mod tests {
 
         drop(reader);
         drop(client_stream);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_reuse_popup_redraws_popup_without_filter_line() {
+        let mut server = test_server();
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                "gi".to_string(),
+                5,
+                2,
+                80,
+                24,
+                true,
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut reader = BufReader::new(client_stream);
+        let (header, tty) = read_frame(&mut reader);
+        assert!(header.starts_with("FRAME "));
+        assert!(tty.contains("┌"));
+        assert!(!tty.contains("\u{1b}[6;1Hgi"));
+
+        drop(reader);
         handle.join().unwrap();
     }
 
@@ -983,6 +1025,7 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "git\tcommand\tcommand\n",
             );
         });
@@ -1023,6 +1066,7 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1062,6 +1106,7 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1098,6 +1143,7 @@ mod tests {
                 2,
                 80,
                 24,
+                false,
                 "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             );
         });
