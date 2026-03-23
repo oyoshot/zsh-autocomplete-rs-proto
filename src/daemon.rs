@@ -750,11 +750,14 @@ impl DaemonServer {
                         }
                     }
                     Action::Confirm => {
-                        let result = app
-                            .selected_candidate()
-                            .map(|c| c.text_with_suffix())
-                            .unwrap_or_default();
-                        let _ = writeln!(writer, "DONE 0 {}", result);
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                            }
+                            None => {
+                                let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                            }
+                        }
                         let _ = writer.flush();
                         break;
                     }

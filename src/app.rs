@@ -10,7 +10,7 @@ pub struct App {
     // Unbounded; typical session produces few unique queries so no eviction needed
     cached_filters: HashMap<String, Vec<usize>>,
     pub filter_text: String,
-    pub selected: usize,
+    pub selected: Option<usize>,
     pub scroll_offset: usize,
     pub max_visible: usize,
     pub cursor_row: u16,
@@ -73,7 +73,7 @@ impl App {
             filtered_indices: Vec::new(),
             cached_filters: HashMap::new(),
             filter_text: lcp,
-            selected: 0,
+            selected: None,
             scroll_offset: 0,
             max_visible: DEFAULT_MAX_VISIBLE,
             cursor_row,
@@ -97,7 +97,7 @@ impl App {
             self.fuzzy
                 .filter_matches(&self.all_candidates, &self.filter_text, fuzzy_scope);
         self.filtered_indices = scored.into_iter().map(|s| s.candidate_idx).collect();
-        self.selected = 0;
+        self.selected = None;
         self.scroll_offset = 0;
         self.cache_current_filter();
     }
@@ -112,7 +112,7 @@ impl App {
             return false;
         };
         self.filtered_indices = filtered_indices;
-        self.selected = 0;
+        self.selected = None;
         self.scroll_offset = 0;
         true
     }
@@ -121,14 +121,17 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        if self.selected + 1 < self.filtered_indices.len() {
-            self.selected += 1;
-        } else {
-            self.selected = 0;
-            self.scroll_offset = 0;
-        }
-        if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
+        let sel = match self.selected {
+            None => 0,
+            Some(s) if s + 1 < self.filtered_indices.len() => s + 1,
+            Some(_) => {
+                self.scroll_offset = 0;
+                0
+            }
+        };
+        self.selected = Some(sel);
+        if sel >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = sel + 1 - self.max_visible;
         }
     }
 
@@ -136,14 +139,17 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        if self.selected > 0 {
-            self.selected -= 1;
-        } else {
-            self.selected = self.filtered_indices.len() - 1;
-            self.scroll_offset = self.selected.saturating_sub(self.max_visible - 1);
-        }
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
+        let sel = match self.selected {
+            None | Some(0) => {
+                let last = self.filtered_indices.len() - 1;
+                self.scroll_offset = last.saturating_sub(self.max_visible - 1);
+                last
+            }
+            Some(s) => s - 1,
+        };
+        self.selected = Some(sel);
+        if sel < self.scroll_offset {
+            self.scroll_offset = sel;
         }
     }
 
@@ -151,9 +157,11 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.selected = (self.selected + self.max_visible).min(self.filtered_indices.len() - 1);
-        if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
+        let cur = self.selected.unwrap_or(0);
+        let sel = (cur + self.max_visible).min(self.filtered_indices.len() - 1);
+        self.selected = Some(sel);
+        if sel >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = sel + 1 - self.max_visible;
         }
     }
 
@@ -161,9 +169,11 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
-        self.selected = self.selected.saturating_sub(self.max_visible);
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
+        let cur = self.selected.unwrap_or(0);
+        let sel = cur.saturating_sub(self.max_visible);
+        self.selected = Some(sel);
+        if sel < self.scroll_offset {
+            self.scroll_offset = sel;
         }
     }
 
@@ -189,8 +199,9 @@ impl App {
     }
 
     pub fn selected_candidate(&self) -> Option<&Candidate> {
+        let sel = self.selected?;
         self.filtered_indices
-            .get(self.selected)
+            .get(sel)
             .and_then(|&candidate_idx| self.all_candidates.get(candidate_idx))
     }
 
@@ -200,10 +211,8 @@ impl App {
     }
 
     pub fn visible_selected_index(&self) -> Option<usize> {
-        if self.filtered_indices.is_empty() {
-            return None;
-        }
-        Some(self.selected - self.scroll_offset)
+        let sel = self.selected?;
+        Some(sel - self.scroll_offset)
     }
 
     pub fn take_fuzzy(self) -> FuzzyMatcher {
@@ -227,21 +236,25 @@ impl App {
 
     fn clamp_viewport(&mut self) {
         if self.filtered_indices.is_empty() {
-            self.selected = 0;
+            self.selected = None;
             self.scroll_offset = 0;
             return;
         }
 
-        self.selected = self.selected.min(self.filtered_indices.len() - 1);
         let max_scroll = self.filtered_indices.len().saturating_sub(self.max_visible);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
 
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        }
+        if let Some(sel) = self.selected {
+            let sel = sel.min(self.filtered_indices.len() - 1);
+            self.selected = Some(sel);
 
-        if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
+            if sel < self.scroll_offset {
+                self.scroll_offset = sel;
+            }
+
+            if sel >= self.scroll_offset + self.max_visible {
+                self.scroll_offset = sel + 1 - self.max_visible;
+            }
         }
     }
 }
@@ -349,44 +362,72 @@ mod tests {
     fn new_empty_candidates() {
         let app = App::new(Vec::new(), "fo".to_string(), 5, 10);
         assert!(app.filtered_indices.is_empty());
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
+    }
+
+    #[test]
+    fn initial_selected_is_none() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let app = App::new(candidates, "".to_string(), 5, 10);
+        assert_eq!(app.selected, None);
+        assert!(app.selected_candidate().is_none());
+        assert_eq!(app.visible_selected_index(), None);
     }
 
     // --- move_down ---
+
+    #[test]
+    fn move_down_from_none_selects_first() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        assert_eq!(app.selected, None);
+        app.move_down();
+        assert_eq!(app.selected, Some(0));
+    }
 
     #[test]
     fn move_down_increments() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_down();
-        assert_eq!(app.selected, 1);
+        app.move_down();
+        assert_eq!(app.selected, Some(1));
     }
 
     #[test]
     fn move_down_wraps() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = app.filtered_indices.len() - 1;
+        app.selected = Some(app.filtered_indices.len() - 1);
         app.move_down();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, Some(0));
     }
 
     #[test]
     fn move_down_empty_noop() {
         let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
         app.move_down();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
     }
 
     // --- move_up ---
 
     #[test]
+    fn move_up_from_none_selects_last() {
+        let candidates = make_candidates(&["a", "b", "c"]);
+        let mut app = App::new(candidates, "".to_string(), 5, 10);
+        assert_eq!(app.selected, None);
+        app.move_up();
+        assert_eq!(app.selected, Some(app.filtered_indices.len() - 1));
+    }
+
+    #[test]
     fn move_up_decrements() {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = 2;
+        app.selected = Some(2);
         app.move_up();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.selected, Some(1));
     }
 
     #[test]
@@ -394,14 +435,14 @@ mod tests {
         let candidates = make_candidates(&["a", "b", "c"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_up();
-        assert_eq!(app.selected, app.filtered_indices.len() - 1);
+        assert_eq!(app.selected, Some(app.filtered_indices.len() - 1));
     }
 
     #[test]
     fn move_up_empty_noop() {
         let mut app = App::new(Vec::new(), "".to_string(), 5, 10);
         app.move_up();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
     }
 
     // --- page_down / page_up ---
@@ -414,31 +455,31 @@ mod tests {
     fn page_down_by_max_visible() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
         app.page_down();
-        assert_eq!(app.selected, 10);
+        assert_eq!(app.selected, Some(10));
     }
 
     #[test]
     fn page_down_clamps() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = 10;
+        app.selected = Some(10);
         app.page_down();
-        assert_eq!(app.selected, 14);
+        assert_eq!(app.selected, Some(14));
     }
 
     #[test]
     fn page_up_by_max_visible() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = 14;
+        app.selected = Some(14);
         app.page_up();
-        assert_eq!(app.selected, 4);
+        assert_eq!(app.selected, Some(4));
     }
 
     #[test]
     fn page_up_clamps() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.selected = 3;
+        app.selected = Some(3);
         app.page_up();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, Some(0));
     }
 
     // --- type_char / backspace ---
@@ -481,7 +522,7 @@ mod tests {
         app.type_char('l');
         assert!(app.cached_filters.contains_key("a"));
 
-        app.selected = 1;
+        app.selected = Some(1);
         app.scroll_offset = 1;
         assert!(app.backspace());
 
@@ -490,7 +531,7 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert_eq!(restored, a_results);
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -523,7 +564,7 @@ mod tests {
         assert!(app.cached_filters.contains_key(""));
 
         app.type_char('a');
-        app.selected = 1;
+        app.selected = Some(1);
         app.scroll_offset = 1;
         assert!(app.backspace());
 
@@ -533,7 +574,7 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert_eq!(restored, initial);
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -560,9 +601,9 @@ mod tests {
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.move_down();
         app.move_down();
-        assert!(app.selected > 0);
+        assert!(app.selected.is_some());
         app.type_char('a');
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected, None);
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -572,6 +613,7 @@ mod tests {
     fn selected_candidate_correct() {
         let candidates = make_candidates(&["alpha", "beta", "gamma"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
+        app.move_down();
         app.move_down();
         let selected = app.selected_candidate().unwrap();
         assert_eq!(selected.text, filtered_texts(&app)[1]);
@@ -600,9 +642,16 @@ mod tests {
     fn visible_selected_index_offset() {
         let candidates = make_candidates(&["alpha", "beta", "gamma"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
-        app.selected = 2;
+        app.selected = Some(2);
         app.scroll_offset = 1;
         assert_eq!(app.visible_selected_index(), Some(1));
+    }
+
+    #[test]
+    fn visible_selected_index_none_when_no_selection() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let app = App::new(candidates, "".to_string(), 5, 10);
+        assert_eq!(app.visible_selected_index(), None);
     }
 
     // --- Backspace on empty filter (Tab-triggered popup regression) ---
@@ -659,15 +708,15 @@ mod tests {
             80,
             24,
         );
-        app.selected = 9;
+        app.selected = Some(9);
         app.scroll_offset = 0;
 
         app.set_term_size(80, 6);
 
         assert_eq!(app.max_visible, 3);
-        assert!(app.visible_selected_index().is_some());
-        assert!(app.selected >= app.scroll_offset);
-        assert!(app.selected < app.scroll_offset + app.max_visible);
+        let sel = app.selected.unwrap();
+        assert!(sel >= app.scroll_offset);
+        assert!(sel < app.scroll_offset + app.max_visible);
     }
 
     #[test]
