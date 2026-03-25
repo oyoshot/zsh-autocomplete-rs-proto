@@ -164,6 +164,7 @@ impl DaemonServer {
                 term_cols,
                 term_rows,
                 candidates_tsv,
+                selected,
             } => {
                 let _span = info_span!(
                     "render",
@@ -173,6 +174,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    ?selected,
                     payload_bytes = candidates_tsv.len()
                 )
                 .entered();
@@ -182,6 +184,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    selected.map(|s| s as usize),
                     &candidates_tsv,
                 );
                 let mut writer = &stream;
@@ -284,11 +287,15 @@ impl DaemonServer {
         let mut writer = io::BufWriter::new(stream);
 
         match parts[0] {
-            "render" if parts.len() == 5 => {
+            "render" if parts.len() >= 5 => {
                 let cursor_row: u16 = parts[1].parse().unwrap_or(0);
                 let cursor_col: u16 = parts[2].parse().unwrap_or(0);
                 let term_cols: u16 = parts[3].parse().unwrap_or(80);
                 let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let selected: Option<usize> = parts[5..]
+                    .iter()
+                    .find_map(|part| part.strip_prefix("selected="))
+                    .and_then(|v| v.parse().ok());
                 let prefix = match read_text_line(reader) {
                     Ok(prefix) => prefix,
                     Err(_) => {
@@ -316,6 +323,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    ?selected,
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -325,6 +333,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
+                    selected,
                     tsv.as_bytes(),
                 );
 
@@ -450,6 +459,7 @@ impl DaemonServer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_render(
         &mut self,
         prefix: String,
@@ -457,6 +467,7 @@ impl DaemonServer {
         cursor_col: u16,
         term_cols: u16,
         term_rows: u16,
+        selected: Option<usize>,
         candidates_tsv: &[u8],
     ) -> Response {
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
@@ -517,8 +528,14 @@ impl DaemonServer {
             }
         }
 
+        if let Some(idx) = selected {
+            app.set_selected(idx);
+        }
+
         // Read cursor_row before render to avoid borrowing app after render
         let cursor_row_final = app.cursor_row;
+        let filtered_count = app.filtered_indices.len();
+        let selected_original_idx = app.selected_original_idx();
         let result = ui::render::render_popup_to_bytes(&app, &self.theme);
 
         match result {
@@ -538,10 +555,13 @@ impl DaemonServer {
                     tty_bytes = tty_bytes.len(),
                     "render complete"
                 );
-                let metadata = format!(
-                    "popup_row={} popup_height={} cursor_row={} reuse_token={}",
-                    popup.row, popup.height, cursor_row_final, reuse_token
+                let mut metadata = format!(
+                    "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
+                    popup.row, popup.height, cursor_row_final, reuse_token, filtered_count
                 );
+                if let Some(orig_idx) = selected_original_idx {
+                    metadata.push_str(&format!(" selected_original_idx={}", orig_idx));
+                }
                 Response::Success {
                     tty_bytes,
                     metadata: Some(metadata),
@@ -923,6 +943,7 @@ mod tests {
             2,
             80,
             24,
+            None,
             b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
         );
 
@@ -936,8 +957,15 @@ mod tests {
     #[test]
     fn handle_render_includes_reuse_token_metadata() {
         let mut server = test_server();
-        let response =
-            server.handle_render("gi".to_string(), 5, 2, 80, 24, b"git\tcommand\tcommand\n");
+        let response = server.handle_render(
+            "gi".to_string(),
+            5,
+            2,
+            80,
+            24,
+            None,
+            b"git\tcommand\tcommand\n",
+        );
 
         match response {
             crate::protocol::Response::Success { metadata, .. } => {

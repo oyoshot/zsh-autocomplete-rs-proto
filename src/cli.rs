@@ -30,6 +30,10 @@ pub enum Command {
 
         #[arg(long, default_value_t = 0)]
         cursor_col: u16,
+
+        /// Pre-select the N-th filtered candidate (0-indexed, for Tab-cycle mode)
+        #[arg(long)]
+        selected: Option<usize>,
     },
     /// Clear a previously rendered popup
     Clear {
