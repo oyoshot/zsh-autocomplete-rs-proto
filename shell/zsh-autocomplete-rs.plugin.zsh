@@ -33,8 +33,10 @@ typeset -g _zacrs_popup_snapshot_candidates=""
 typeset -gi _zacrs_popup_snapshot_cursor_row=0
 typeset -gi _zacrs_popup_snapshot_cursor_col=0
 typeset -g _zacrs_popup_snapshot_reuse_token=""
+typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
+typeset -gi _zacrs_cached_from_gather=0
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_lbuffer=""
@@ -44,12 +46,19 @@ _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_cursor_row=0
     _zacrs_popup_snapshot_cursor_col=0
     _zacrs_popup_snapshot_reuse_token=""
+    _zacrs_popup_snapshot_from_gather=0
     _zacrs_popup_snapshot_columns=0
     _zacrs_popup_snapshot_lines=0
 }
 
+_zacrs_reset_cache() {
+    _zacrs_cached_candidates=""
+    _zacrs_cached_from_gather=0
+    _zacrs_cached_lbase=""
+}
+
 _zacrs_record_popup_snapshot() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4" reuse_token="$5"
+    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4" reuse_token="$5" from_gather="${6:-0}"
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
     _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
@@ -57,6 +66,7 @@ _zacrs_record_popup_snapshot() {
     _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
     _zacrs_popup_snapshot_cursor_col=$cursor_col
     _zacrs_popup_snapshot_reuse_token="$reuse_token"
+    _zacrs_popup_snapshot_from_gather=$from_gather
     _zacrs_popup_snapshot_columns=$COLUMNS
     _zacrs_popup_snapshot_lines=$LINES
 }
@@ -124,7 +134,7 @@ fi
 # === Non-blocking render (auto-trigger) ===
 
 _zacrs_render() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3"
+    local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}"
     local cursor_row=0 cursor_col=0
     _zacrs_get_cursor_pos
     _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
@@ -171,7 +181,7 @@ _zacrs_render() {
                 fi
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
-                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token"
+                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
                 else
                     _zacrs_reset_popup_snapshot
                     _zacrs_mark_daemon_unavailable
@@ -213,7 +223,7 @@ _zacrs_render() {
                 cursor_row)   _zacrs_popup_cursor_row=$val ;;
             esac
         done
-        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" ""
+        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "" "$from_gather"
     else
         _zacrs_reset_popup_snapshot
     fi
@@ -528,7 +538,8 @@ _zacrs_tab_complete() {
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
         && [[ -n "$_zacrs_popup_snapshot_candidates" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
-        && (( _zacrs_popup_snapshot_lines == LINES )); then
+        && (( _zacrs_popup_snapshot_lines == LINES )) \
+        && (( ! _zacrs_popup_snapshot_from_gather )); then
         reuse_visible=1
         prefix="$_zacrs_popup_snapshot_prefix"
         prefix_len=$_zacrs_popup_snapshot_prefix_len
@@ -678,12 +689,12 @@ _zacrs_line_pre_redraw() {
 
     # lbase が変わったらキャッシュ無効化
     if [[ "$lbase" != "$_zacrs_cached_lbase" ]]; then
-        _zacrs_cached_candidates=""
+        _zacrs_reset_cache
         _zacrs_cached_lbase="$lbase"
     fi
 
     # 候補収集: compsys → gather fallback
-    local candidates_str=""
+    local candidates_str="" from_gather=0
     _zacrs_captured=()
     local _zacrs_fd2
     exec {_zacrs_fd2}>&2
@@ -725,17 +736,20 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$candidates_str" ]]; then
             prefix="$naive_prefix"
             prefix_len=${#naive_prefix}
+            from_gather=1
         fi
     fi
 
     # キャッシュ更新: 同じ lbase で初めて候補が見つかった場合
     if [[ -n "$candidates_str" && -z "$_zacrs_cached_candidates" ]]; then
         _zacrs_cached_candidates="$candidates_str"
+        _zacrs_cached_from_gather=$from_gather
     fi
 
     # Fuzzy fallback: 候補なし → キャッシュから再利用
     if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
         candidates_str="$_zacrs_cached_candidates"
+        from_gather=$_zacrs_cached_from_gather
         prefix="$naive_prefix"
         prefix_len=${#naive_prefix}
     fi
@@ -754,7 +768,7 @@ _zacrs_line_pre_redraw() {
         return
     fi
 
-    _zacrs_render "$prefix" "$prefix_len" "$candidates_str"
+    _zacrs_render "$prefix" "$prefix_len" "$candidates_str" "$from_gather"
 }
 
 # === Widget wrappers: Enter/Ctrl-C でポップアップクリア ===
@@ -762,8 +776,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     _zacrs_prev_lbuffer="$LBUFFER"
-    _zacrs_cached_candidates=""
-    _zacrs_cached_lbase=""
+    _zacrs_reset_cache
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
@@ -771,8 +784,7 @@ zle -N accept-line _zacrs_accept_line
 _zacrs_send_break() {
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
-    _zacrs_cached_candidates=""
-    _zacrs_cached_lbase=""
+    _zacrs_reset_cache
     zle .send-break
 }
 zle -N send-break _zacrs_send_break
