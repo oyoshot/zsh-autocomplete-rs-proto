@@ -645,9 +645,7 @@ impl DaemonServer {
             writer.flush()
         };
 
-        if app.filter_text == app.prefix {
-            app.select_first();
-        }
+        app.select_first();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         let initial_frame_result =
@@ -1128,9 +1126,10 @@ mod tests {
         handle.join().unwrap();
     }
 
-    #[test]
-    fn handle_complete_confirm_with_common_prefix_returns_filter_text() {
+    fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let prefix = prefix.to_string();
+        let candidates_tsv = candidates_tsv.to_string();
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
@@ -1138,13 +1137,13 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "fo".to_string(),
+                prefix,
                 5,
                 2,
                 80,
                 24,
                 false,
-                "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
+                &candidates_tsv,
             );
         });
 
@@ -1155,10 +1154,28 @@ mod tests {
         send_key(&mut writer, b"\r");
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
-        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 fooba");
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
 
         drop(reader);
         drop(writer);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_auto_selects_when_lcp_exceeds_prefix() {
+        assert_immediate_confirm(
+            "car",
+            "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
+            "DONE 0 cargo ",
+        );
+    }
+
+    #[test]
+    fn handle_complete_confirm_with_common_prefix_selects_first() {
+        assert_immediate_confirm(
+            "fo",
+            "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
+            "DONE 0 foobar ",
+        );
     }
 }
