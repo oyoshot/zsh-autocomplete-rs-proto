@@ -409,6 +409,18 @@ _zacrs_invoke_daemon() {
     local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len
     if (( have_initial_frame )); then
         _zacrs_complete_parse_frame "$header"
+        # Clear stale rows from previous popup that the new frame won't cover
+        if (( _zacrs_popup_visible )); then
+            printf '\e7' >&$tty_wfd
+            local _si _row
+            for (( _si = 0; _si < _zacrs_popup_height; _si++ )); do
+                _row=$(( _zacrs_popup_row + _si ))
+                if (( _row < _f_popup_row || _row >= _f_popup_row + _f_popup_height )); then
+                    printf '\e[%d;1H\e[2K' $(( _row + 1 )) >&$tty_wfd
+                fi
+            done
+            printf '\e8' >&$tty_wfd
+        fi
         if (( _f_tty_len > 0 )); then
             sysread -i $fd -o $tty_wfd -c $_f_tty_len
         fi
