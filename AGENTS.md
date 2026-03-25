@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/` contains the Rust crate: `main.rs` wires the CLI subcommands (`complete`, `render`, `clear`, `daemon`), `lib.rs` re-exports modules, and core behavior lives in files such as `app.rs`, `candidate.rs`, `config.rs`, `fuzzy.rs`, `input.rs`, and `ui/`. Daemon and transport code lives in `client.rs`, `daemon.rs`, `protocol.rs`, and `tty.rs`. `shell/` holds the Zsh plugin entrypoint and helper scripts, all using the `_zacrs_*` prefix. `benches/` contains Criterion benchmarks, with shared fixtures in `benches/helpers/`. `docs/` stores design notes and architecture analysis. Treat `tmp/` as scratch or reference material, not primary source.
+`src/` contains the Rust crate: `main.rs` wires the CLI subcommands (`complete`, `render`, `clear`, `daemon`), `lib.rs` re-exports modules, and core behavior lives in files such as `app.rs`, `candidate.rs`, `config.rs`, `fuzzy.rs`, `input.rs`, and `ui/`. Daemon and transport code lives in `client.rs`, `daemon.rs`, `protocol.rs`, and `tty.rs`. `shell/` holds the Zsh plugin entrypoint and helper scripts, all using the `_zacrs_*` prefix. `benches/` contains Criterion benchmarks, with shared fixtures in `benches/helpers/`. Treat `tmp/` as scratch or reference material, not primary source.
 
 ## Build, Test, and Development Commands
 Use a workspace-local target dir when possible:
