@@ -164,6 +164,7 @@ _zacrs_parse_render_header() {
     for token in ${(s: :)header}; do
         local key="${token%%=*}" val="${token#*=}"
         case "$key" in
+            OK)                     ;; # daemon header prefix — skip
             popup_row)              _zacrs_popup_row=$val ;;
             popup_height)           _zacrs_popup_height=$val ;;
             cursor_row)             _zacrs_popup_cursor_row=$val ;;
@@ -171,7 +172,7 @@ _zacrs_parse_render_header() {
             filtered_count)         _zacrs_cycle_filtered_count=$val ;;
             selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
         esac
-        [[ "$token" != *=* ]] && _zacrs_parsed_tty_len=$token
+        [[ "$token" != *=* && "$token" != OK ]] && _zacrs_parsed_tty_len=$token
     done
 }
 
@@ -912,7 +913,13 @@ _zacrs_complete_interactive() {
 _zacrs_line_pre_redraw() {
     # Cycle mode: render は widget 側で直接行うため auto-trigger は抑制
     if (( _zacrs_cycle_active )); then
-        return
+        # 未処理キーで LBUFFER が変わった場合、サイクルモードを強制終了
+        if [[ "$LBUFFER" != "$_zacrs_cycle_original_lbuffer" ]]; then
+            _zacrs_cycle_exit
+            # fall through to normal auto-trigger flow
+        else
+            return
+        fi
     fi
     # LBUFFER が変わってなければスキップ
     if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
@@ -1096,6 +1103,8 @@ bindkey -M _zacrs_cycle '^M'   _zacrs_cycle_accept     # Enter
 bindkey -M _zacrs_cycle ' '    _zacrs_cycle_accept_space
 bindkey -M _zacrs_cycle '^['   _zacrs_cycle_cancel     # Escape
 bindkey -M _zacrs_cycle '^C'   _zacrs_cycle_cancel
+bindkey -M _zacrs_cycle '^?'   _zacrs_cycle_cancel     # DEL (Backspace)
+bindkey -M _zacrs_cycle '^H'   _zacrs_cycle_cancel     # BS (Backspace alt)
 # Printable ASCII: accept current completion and insert the character
 bindkey -M _zacrs_cycle -R '!'-'~' _zacrs_cycle_passthrough
 # Shift-Tab via terminfo (if available)

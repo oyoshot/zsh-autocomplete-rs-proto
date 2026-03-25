@@ -142,7 +142,7 @@ impl App {
         let sel = match self.selected {
             None | Some(0) => {
                 let last = self.filtered_indices.len() - 1;
-                self.scroll_offset = last.saturating_sub(self.max_visible - 1);
+                self.scroll_offset = last.saturating_sub(self.max_visible.saturating_sub(1));
                 last
             }
             Some(s) => s - 1,
