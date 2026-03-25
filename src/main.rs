@@ -195,14 +195,12 @@ fn run_render(
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
-    let filtered_count = app.filtered_indices.len();
-    let mut meta = format!(
-        "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
-        popup.row, popup.height, app.cursor_row, reuse_token, filtered_count
+    let meta = popup.format_metadata(
+        app.cursor_row,
+        reuse_token,
+        app.filtered_indices.len(),
+        app.selected_original_idx(),
     );
-    if let Some(orig_idx) = app.selected_original_idx() {
-        meta.push_str(&format!(" selected_original_idx={}", orig_idx));
-    }
     println!("{}", meta);
 
     Ok(0)

@@ -38,6 +38,10 @@ typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_cached_from_gather=0
 
+# Render header parse results (set by _zacrs_parse_render_header)
+typeset -g  _zacrs_parsed_reuse_token=""
+typeset -gi _zacrs_parsed_tty_len=0
+
 # Cycle mode state
 typeset -gi _zacrs_cycle_active=0
 typeset -gi _zacrs_cycle_index=0
@@ -48,7 +52,6 @@ typeset -g  _zacrs_cycle_candidates=""
 typeset -g  _zacrs_cycle_prev_keymap=""
 typeset -gi _zacrs_cycle_filtered_count=0
 typeset -gi _zacrs_cycle_selected_original_idx=-1
-typeset -gi _zacrs_cycle_pending_render=0
 typeset -gi _zacrs_cycle_cursor_row=0
 typeset -gi _zacrs_cycle_cursor_col=0
 
@@ -145,6 +148,33 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
     _zacrs_ensure_daemon
 fi
 
+# === Render header parsing (shared by daemon + subprocess + cycle paths) ===
+
+# Parse an "OK key=val ... <tty_len>" header into globals.
+# Sets: _zacrs_popup_row, _zacrs_popup_height, _zacrs_popup_cursor_row,
+#        _zacrs_cycle_filtered_count, _zacrs_cycle_selected_original_idx,
+#        _zacrs_parsed_reuse_token, _zacrs_parsed_tty_len
+_zacrs_parse_render_header() {
+    local header="$1"
+    _zacrs_parsed_reuse_token=""
+    _zacrs_parsed_tty_len=0
+    _zacrs_cycle_filtered_count=0
+    _zacrs_cycle_selected_original_idx=-1
+    local token
+    for token in ${(s: :)header}; do
+        local key="${token%%=*}" val="${token#*=}"
+        case "$key" in
+            popup_row)              _zacrs_popup_row=$val ;;
+            popup_height)           _zacrs_popup_height=$val ;;
+            cursor_row)             _zacrs_popup_cursor_row=$val ;;
+            reuse_token)            _zacrs_parsed_reuse_token=$val ;;
+            filtered_count)         _zacrs_cycle_filtered_count=$val ;;
+            selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
+        esac
+        [[ "$token" != *=* ]] && _zacrs_parsed_tty_len=$token
+    done
+}
+
 # === Non-blocking render (auto-trigger) ===
 
 _zacrs_render() {
@@ -175,23 +205,8 @@ _zacrs_render() {
             local header
             IFS= read -r -u $fd header
             if [[ "$header" == OK* ]]; then
-                # Parse: OK popup_row=N popup_height=N cursor_row=N reuse_token=N <tty_len>
-                local token tty_len=0 reuse_token=""
-                _zacrs_cycle_filtered_count=0
-                _zacrs_cycle_selected_original_idx=-1
-                for token in ${(s: :)header}; do
-                    local key="${token%%=*}" val="${token#*=}"
-                    case "$key" in
-                        popup_row)              _zacrs_popup_row=$val ;;
-                        popup_height)           _zacrs_popup_height=$val ;;
-                        cursor_row)             _zacrs_popup_cursor_row=$val ;;
-                        reuse_token)            reuse_token=$val ;;
-                        filtered_count)         _zacrs_cycle_filtered_count=$val ;;
-                        selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
-                    esac
-                    # Last token is tty_len (no = sign)
-                    [[ "$token" != *=* ]] && tty_len=$token
-                done
+                _zacrs_parse_render_header "$header"
+                local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
                 # Read tty_bytes and pipe directly to /dev/tty
                 local tty_ok=1
                 if (( tty_len > 0 )); then
@@ -233,19 +248,7 @@ _zacrs_render() {
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         _zacrs_popup_visible=1
-        _zacrs_cycle_filtered_count=0
-        _zacrs_cycle_selected_original_idx=-1
-        local token
-        for token in ${(s: :)output}; do
-            local key="${token%%=*}" val="${token#*=}"
-            case "$key" in
-                popup_row)              _zacrs_popup_row=$val ;;
-                popup_height)           _zacrs_popup_height=$val ;;
-                cursor_row)             _zacrs_popup_cursor_row=$val ;;
-                filtered_count)         _zacrs_cycle_filtered_count=$val ;;
-                selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
-            esac
-        done
+        _zacrs_parse_render_header "$output"
         _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "" "$from_gather"
     else
         _zacrs_reset_popup_snapshot
@@ -566,10 +569,13 @@ _zacrs_invoke() {
 # Exit cycle mode and restore normal keymap
 _zacrs_cycle_exit() {
     _zacrs_cycle_active=0
-    _zacrs_cycle_pending_render=0
     zle -K "$_zacrs_cycle_prev_keymap"
     _zacrs_clear_popup
     _zacrs_prev_lbuffer="$LBUFFER"
+    # Release potentially large strings
+    _zacrs_cycle_candidates=""
+    _zacrs_cycle_prefix=""
+    _zacrs_cycle_original_lbuffer=""
 }
 
 # Apply the selected candidate text to LBUFFER
@@ -611,21 +617,8 @@ _zacrs_cycle_render_and_apply() {
             local header
             IFS= read -r -u $fd header
             if [[ "$header" == OK* ]]; then
-                local token tty_len=0 reuse_token=""
-                _zacrs_cycle_filtered_count=0
-                _zacrs_cycle_selected_original_idx=-1
-                for token in ${(s: :)header}; do
-                    local key="${token%%=*}" val="${token#*=}"
-                    case "$key" in
-                        popup_row)              _zacrs_popup_row=$val ;;
-                        popup_height)           _zacrs_popup_height=$val ;;
-                        cursor_row)             _zacrs_popup_cursor_row=$val ;;
-                        reuse_token)            reuse_token=$val ;;
-                        filtered_count)         _zacrs_cycle_filtered_count=$val ;;
-                        selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
-                    esac
-                    [[ "$token" != *=* ]] && tty_len=$token
-                done
+                _zacrs_parse_render_header "$header"
+                local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
 
                 # Atomic: hide cursor + clear old popup + draw new popup + show cursor
                 {
@@ -707,6 +700,85 @@ _zacrs_cycle_passthrough() {
     zle reset-prompt
 }
 
+# === Shared completion helpers ===
+
+# Collect candidates: compsys → gather → fuzzy cache fallback.
+# Caller must declare: local prefix prefix_len candidates_str
+# (zsh dynamic scoping lets us write to these from here)
+_zacrs_collect_candidates() {
+    _zacrs_captured=()
+    local _zacrs_fd2
+    exec {_zacrs_fd2}>&2
+    zle _zacrs_compsys 2>/dev/null
+    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+
+    if (( _zacrs_ctx_valid )); then
+        prefix="$_zacrs_ctx_prefix"
+        prefix_len=$_zacrs_ctx_prefix_len
+    else
+        prefix="${LBUFFER##* }"
+        prefix_len=${#prefix}
+    fi
+
+    if (( ${#_zacrs_captured} > 0 )); then
+        candidates_str="${(pj:\n:)_zacrs_captured}"
+    fi
+    if [[ -z "$candidates_str" ]]; then
+        candidates_str="$(_zacrs_gather "$LBUFFER")"
+        if [[ -n "$candidates_str" ]]; then
+            prefix="${LBUFFER##* }"
+            prefix_len=${#prefix}
+        fi
+    fi
+    # Fuzzy fallback from auto-trigger cache
+    if [[ -z "$candidates_str" && -n "$prefix" ]]; then
+        local lbase
+        if [[ "$LBUFFER" == *" "* ]]; then
+            lbase="${LBUFFER% *} "
+        else
+            lbase=""
+        fi
+        if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
+            candidates_str="$_zacrs_cached_candidates"
+        fi
+    fi
+}
+
+# Handle single-candidate immediate completion.
+# Args: $1=prefix $2=prefix_len $3=candidate_line (tab-separated)
+_zacrs_apply_single_candidate() {
+    local prefix="$1" prefix_len="$2" cand_line="$3"
+    _zacrs_clear_popup
+    local text="${cand_line%%	*}"
+    local kind="${${cand_line##*	}}"
+    local base
+    local is_cmd_pos=0
+    if (( prefix_len > 0 )); then
+        base="${LBUFFER[1,-(prefix_len+1)]}"
+    else
+        base="$LBUFFER"
+    fi
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
+    LBUFFER="${base}${text}"
+    case "$kind" in
+        directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
+        command|alias|builtin|function|file) LBUFFER+=" " ;;
+        "")
+            if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
+                LBUFFER+=" "
+            fi
+            ;;
+    esac
+    unset POSTDISPLAY
+    if [[ "$LBUFFER" == *[\ /] ]]; then
+        _zacrs_prev_lbuffer="$base"
+        _zacrs_chain_retry=1
+    else
+        _zacrs_prev_lbuffer="$LBUFFER"
+    fi
+    zle reset-prompt
+}
+
 # === Tab-cycle completion widget (new default) ===
 
 _zacrs_complete_cycle() {
@@ -732,43 +804,7 @@ _zacrs_complete_cycle() {
     fi
 
     if (( ! reuse_visible )); then
-        # Collect candidates: compsys → gather fallback → cache
-        _zacrs_captured=()
-        local _zacrs_fd2
-        exec {_zacrs_fd2}>&2
-        zle _zacrs_compsys 2>/dev/null
-        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
-        if (( _zacrs_ctx_valid )); then
-            prefix="$_zacrs_ctx_prefix"
-            prefix_len=$_zacrs_ctx_prefix_len
-        else
-            prefix="${LBUFFER##* }"
-            prefix_len=${#prefix}
-        fi
-
-        if (( ${#_zacrs_captured} > 0 )); then
-            candidates_str="${(pj:\n:)_zacrs_captured}"
-        fi
-        if [[ -z "$candidates_str" ]]; then
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-            if [[ -n "$candidates_str" ]]; then
-                prefix="${LBUFFER##* }"
-                prefix_len=${#prefix}
-            fi
-        fi
-        # Fuzzy fallback from auto-trigger cache
-        if [[ -z "$candidates_str" && -n "$prefix" ]]; then
-            local lbase
-            if [[ "$LBUFFER" == *" "* ]]; then
-                lbase="${LBUFFER% *} "
-            else
-                lbase=""
-            fi
-            if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
-                candidates_str="$_zacrs_cached_candidates"
-            fi
-        fi
+        _zacrs_collect_candidates
     fi
 
     # No candidates → default zsh completion
@@ -784,35 +820,7 @@ _zacrs_complete_cycle() {
 
     # Single candidate → immediate completion (no cycle needed)
     if [[ ${#cands[@]} -eq 1 ]]; then
-        _zacrs_clear_popup
-        local text="${cands[1]%%	*}"
-        local kind="${${cands[1]##*	}}"
-        local base
-        local is_cmd_pos=0
-        if (( prefix_len > 0 )); then
-            base="${LBUFFER[1,-(prefix_len+1)]}"
-        else
-            base="$LBUFFER"
-        fi
-        _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
-        LBUFFER="${base}${text}"
-        case "$kind" in
-            directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
-            command|alias|builtin|function|file) LBUFFER+=" " ;;
-            "")
-                if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
-                    LBUFFER+=" "
-                fi
-                ;;
-        esac
-        unset POSTDISPLAY
-        if [[ "$LBUFFER" == *[\ /] ]]; then
-            _zacrs_prev_lbuffer="$base"
-            _zacrs_chain_retry=1
-        else
-            _zacrs_prev_lbuffer="$LBUFFER"
-        fi
-        zle reset-prompt
+        _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${cands[1]}"
         return
     fi
 
@@ -866,45 +874,7 @@ _zacrs_complete_interactive() {
     fi
 
     if (( ! reuse_visible )); then
-        # 候補収集: compsys → gather fallback
-        _zacrs_captured=()
-        local _zacrs_fd2
-        exec {_zacrs_fd2}>&2
-        zle _zacrs_compsys 2>/dev/null
-        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
-        # compsys コンテキストから prefix 取得
-        if (( _zacrs_ctx_valid )); then
-            prefix="$_zacrs_ctx_prefix"
-            prefix_len=$_zacrs_ctx_prefix_len
-        else
-            prefix="${LBUFFER##* }"
-            prefix_len=${#prefix}
-        fi
-
-        if (( ${#_zacrs_captured} > 0 )); then
-            candidates_str="${(pj:\n:)_zacrs_captured}"
-        fi
-        if [[ -z "$candidates_str" ]]; then
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-            if [[ -n "$candidates_str" ]]; then
-                prefix="${LBUFFER##* }"
-                prefix_len=${#prefix}
-            fi
-        fi
-
-        # Fuzzy fallback: auto-trigger キャッシュを再利用
-        if [[ -z "$candidates_str" && -n "$prefix" ]]; then
-            local lbase
-            if [[ "$LBUFFER" == *" "* ]]; then
-                lbase="${LBUFFER% *} "
-            else
-                lbase=""
-            fi
-            if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
-                candidates_str="$_zacrs_cached_candidates"
-            fi
-        fi
+        _zacrs_collect_candidates
     fi
 
     # 候補なし → default zsh 補完にフォールバック
@@ -920,37 +890,7 @@ _zacrs_complete_interactive() {
 
     # 単一候補 → 即補完
     if [[ ${#cands[@]} -eq 1 ]]; then
-        _zacrs_clear_popup
-        local text="${cands[1]%%	*}"
-        local kind="${${cands[1]##*	}}"
-        local base
-        local is_cmd_pos=0
-        if (( prefix_len > 0 )); then
-            base="${LBUFFER[1,-(prefix_len+1)]}"
-        else
-            base="$LBUFFER"
-        fi
-        _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
-        LBUFFER="${base}${text}"
-        case "$kind" in
-            directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
-            command|alias|builtin|function|file) LBUFFER+=" " ;;
-            "")
-                if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
-                    LBUFFER+=" "
-                fi
-                ;;
-        esac
-        unset POSTDISPLAY
-        # 末尾がスペース/スラッシュなら prev_lbuffer を更新せず
-        # line-pre-redraw にチェーンさせる
-        if [[ "$LBUFFER" == *[\ /] ]]; then
-            _zacrs_prev_lbuffer="$base"
-            _zacrs_chain_retry=1
-        else
-            _zacrs_prev_lbuffer="$LBUFFER"
-        fi
-        zle reset-prompt
+        _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${cands[1]}"
         return
     fi
 
@@ -1095,11 +1035,11 @@ _zacrs_line_pre_redraw() {
 
 _zacrs_accept_line() {
     if (( _zacrs_cycle_active )); then
-        _zacrs_cycle_active=0
-        zle -K "$_zacrs_cycle_prev_keymap"
+        _zacrs_cycle_exit
+    else
+        _zacrs_clear_popup
+        _zacrs_prev_lbuffer="$LBUFFER"
     fi
-    _zacrs_clear_popup
-    _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_reset_cache
     zle .accept-line
 }
@@ -1107,11 +1047,11 @@ zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
     if (( _zacrs_cycle_active )); then
-        _zacrs_cycle_active=0
         LBUFFER="$_zacrs_cycle_original_lbuffer"
-        zle -K "$_zacrs_cycle_prev_keymap"
+        _zacrs_cycle_exit
+    else
+        _zacrs_clear_popup
     fi
-    _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
     _zacrs_reset_cache
     zle .send-break

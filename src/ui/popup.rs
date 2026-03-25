@@ -12,6 +12,24 @@ pub struct Popup {
 }
 
 impl Popup {
+    /// Format metadata string for shell consumption (used by both daemon and subprocess paths).
+    pub fn format_metadata(
+        &self,
+        cursor_row: u16,
+        reuse_token: u64,
+        filtered_count: usize,
+        selected_original_idx: Option<usize>,
+    ) -> String {
+        let mut meta = format!(
+            "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
+            self.row, self.height, cursor_row, reuse_token, filtered_count
+        );
+        if let Some(orig_idx) = selected_original_idx {
+            meta.push_str(&format!(" selected_original_idx={}", orig_idx));
+        }
+        meta
+    }
+
     pub fn compute(app: &App) -> Self {
         let term_cols = app.term_cols;
         let term_rows = app.term_rows;

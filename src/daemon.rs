@@ -555,13 +555,12 @@ impl DaemonServer {
                     tty_bytes = tty_bytes.len(),
                     "render complete"
                 );
-                let mut metadata = format!(
-                    "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
-                    popup.row, popup.height, cursor_row_final, reuse_token, filtered_count
+                let metadata = popup.format_metadata(
+                    cursor_row_final,
+                    reuse_token,
+                    filtered_count,
+                    selected_original_idx,
                 );
-                if let Some(orig_idx) = selected_original_idx {
-                    metadata.push_str(&format!(" selected_original_idx={}", orig_idx));
-                }
                 Response::Success {
                     tty_bytes,
                     metadata: Some(metadata),
