@@ -365,8 +365,7 @@ mod tests {
 
     #[test]
     fn common_prefix_multibyte_shared() {
-        let candidates =
-            make_candidates(&["【配布】演習用RFP.pdf", "【配布】提案書.pdf"]);
+        let candidates = make_candidates(&["【配布】演習用RFP.pdf", "【配布】提案書.pdf"]);
         let result = compute_common_prefix(&candidates, "~/");
         assert_eq!(result, "【配布】");
     }
@@ -394,8 +393,7 @@ mod tests {
 
     #[test]
     fn common_prefix_ascii_then_multibyte() {
-        let candidates =
-            make_candidates(&["~/Downloads/【配布】演", "~/Downloads/【配布】提"]);
+        let candidates = make_candidates(&["~/Downloads/【配布】演", "~/Downloads/【配布】提"]);
         let result = compute_common_prefix(&candidates, "~/");
         assert_eq!(result, "~/Downloads/【配布】");
     }
