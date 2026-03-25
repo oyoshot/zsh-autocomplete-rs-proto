@@ -292,6 +292,9 @@ pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
             .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
             .count();
     }
+    while len > 0 && !first.is_char_boundary(len) {
+        len -= 1;
+    }
     let lcp = &first[..len];
     if lcp.len() > prefix.len() {
         lcp.to_string()
@@ -358,6 +361,43 @@ mod tests {
         let candidates = make_candidates(&["Foo", "foo"]);
         let result = compute_common_prefix(&candidates, "f");
         assert_eq!(result, "Foo");
+    }
+
+    #[test]
+    fn common_prefix_multibyte_shared() {
+        let candidates =
+            make_candidates(&["【配布】演習用RFP.pdf", "【配布】提案書.pdf"]);
+        let result = compute_common_prefix(&candidates, "~/");
+        assert_eq!(result, "【配布】");
+    }
+
+    #[test]
+    fn common_prefix_multibyte_no_panic() {
+        let candidates = make_candidates(&["あいう", "あえお"]);
+        let result = compute_common_prefix(&candidates, "");
+        assert_eq!(result, "あ");
+    }
+
+    #[test]
+    fn common_prefix_emoji() {
+        let candidates = make_candidates(&["🎉abc", "🎊def"]);
+        let result = compute_common_prefix(&candidates, "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn common_prefix_latin_accented() {
+        let candidates = make_candidates(&["café", "cafè"]);
+        let result = compute_common_prefix(&candidates, "");
+        assert_eq!(result, "caf");
+    }
+
+    #[test]
+    fn common_prefix_ascii_then_multibyte() {
+        let candidates =
+            make_candidates(&["~/Downloads/【配布】演", "~/Downloads/【配布】提"]);
+        let result = compute_common_prefix(&candidates, "~/");
+        assert_eq!(result, "~/Downloads/【配布】");
     }
 
     // --- App::new ---
