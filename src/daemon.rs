@@ -299,32 +299,17 @@ impl DaemonServer {
 
         match parts[0] {
             "render" if parts.len() >= 5 => {
-                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
-                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
-                let term_cols: u16 = parts[3].parse().unwrap_or(80);
-                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let (cursor_row, cursor_col, term_cols, term_rows) =
+                    parse_terminal_dims(&parts);
                 let selected: Option<usize> = parts[5..]
                     .iter()
                     .find_map(|part| part.strip_prefix("selected="))
                     .and_then(|v| v.parse().ok());
-                let prefix = match read_text_line(reader) {
-                    Ok(prefix) => prefix,
-                    Err(_) => {
-                        warn!("invalid text render prefix");
-                        let _ = writeln!(writer, "ERROR invalid prefix");
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
-
-                let tsv = match read_tsv_payload(reader) {
-                    Ok(tsv) => tsv,
-                    Err(msg) => {
-                        let _ = writeln!(writer, "ERROR {}", msg);
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
+                let (prefix, tsv) =
+                    match read_prefix_and_tsv(reader, &mut writer, "render") {
+                        Ok(v) => v,
+                        Err(()) => return false,
+                    };
 
                 let _span = info_span!(
                     "render",
@@ -370,31 +355,16 @@ impl DaemonServer {
                 false
             }
             "complete" if parts.len() >= 5 => {
-                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
-                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
-                let term_cols: u16 = parts[3].parse().unwrap_or(80);
-                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let (cursor_row, cursor_col, term_cols, term_rows) =
+                    parse_terminal_dims(&parts);
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
-                let prefix = match read_text_line(reader) {
-                    Ok(prefix) => prefix,
-                    Err(_) => {
-                        warn!("invalid text complete prefix");
-                        let _ = writeln!(writer, "ERROR invalid prefix");
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
-
-                let tsv = match read_tsv_payload(reader) {
-                    Ok(tsv) => tsv,
-                    Err(msg) => {
-                        let _ = writeln!(writer, "ERROR {}", msg);
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
+                let (prefix, tsv) =
+                    match read_prefix_and_tsv(reader, &mut writer, "complete") {
+                        Ok(v) => v,
+                        Err(()) => return false,
+                    };
 
                 let _span = info_span!(
                     "complete",
@@ -773,6 +743,39 @@ impl DaemonServer {
             }
         }
     }
+}
+
+fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
+    let cursor_row: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let cursor_col: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let term_cols: u16 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(80);
+    let term_rows: u16 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(24);
+    (cursor_row, cursor_col, term_cols, term_rows)
+}
+
+fn read_prefix_and_tsv(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    command: &str,
+) -> Result<(String, String), ()> {
+    let prefix = match read_text_line(reader) {
+        Ok(p) => p,
+        Err(_) => {
+            warn!("invalid text {} prefix", command);
+            let _ = writeln!(writer, "ERROR invalid prefix");
+            let _ = writer.flush();
+            return Err(());
+        }
+    };
+    let tsv = match read_tsv_payload(reader) {
+        Ok(t) => t,
+        Err(msg) => {
+            let _ = writeln!(writer, "ERROR {}", msg);
+            let _ = writer.flush();
+            return Err(());
+        }
+    };
+    Ok((prefix, tsv))
 }
 
 /// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
