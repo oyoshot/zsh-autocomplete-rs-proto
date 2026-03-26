@@ -25,6 +25,15 @@ struct RenderParams {
     selected: Option<usize>,
 }
 
+struct CompleteParams {
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    reuse_popup: bool,
+}
+
 struct DaemonServer {
     config: Config,
     theme: Theme,
@@ -299,31 +308,14 @@ impl DaemonServer {
 
         match parts[0] {
             "render" if parts.len() >= 5 => {
-                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
-                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
-                let term_cols: u16 = parts[3].parse().unwrap_or(80);
-                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
                 let selected: Option<usize> = parts[5..]
                     .iter()
                     .find_map(|part| part.strip_prefix("selected="))
                     .and_then(|v| v.parse().ok());
-                let prefix = match read_text_line(reader) {
-                    Ok(prefix) => prefix,
-                    Err(_) => {
-                        warn!("invalid text render prefix");
-                        let _ = writeln!(writer, "ERROR invalid prefix");
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
-
-                let tsv = match read_tsv_payload(reader) {
-                    Ok(tsv) => tsv,
-                    Err(msg) => {
-                        let _ = writeln!(writer, "ERROR {}", msg);
-                        let _ = writer.flush();
-                        return false;
-                    }
+                let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "render") {
+                    Ok(v) => v,
+                    Err(()) => return false,
                 };
 
                 let _span = info_span!(
@@ -370,30 +362,13 @@ impl DaemonServer {
                 false
             }
             "complete" if parts.len() >= 5 => {
-                let cursor_row: u16 = parts[1].parse().unwrap_or(0);
-                let cursor_col: u16 = parts[2].parse().unwrap_or(0);
-                let term_cols: u16 = parts[3].parse().unwrap_or(80);
-                let term_rows: u16 = parts[4].parse().unwrap_or(24);
+                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
-                let prefix = match read_text_line(reader) {
-                    Ok(prefix) => prefix,
-                    Err(_) => {
-                        warn!("invalid text complete prefix");
-                        let _ = writeln!(writer, "ERROR invalid prefix");
-                        let _ = writer.flush();
-                        return false;
-                    }
-                };
-
-                let tsv = match read_tsv_payload(reader) {
-                    Ok(tsv) => tsv,
-                    Err(msg) => {
-                        let _ = writeln!(writer, "ERROR {}", msg);
-                        let _ = writer.flush();
-                        return false;
-                    }
+                let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "complete") {
+                    Ok(v) => v,
+                    Err(()) => return false,
                 };
 
                 let _span = info_span!(
@@ -417,12 +392,14 @@ impl DaemonServer {
                 self.handle_complete(
                     reader,
                     &mut writer,
-                    prefix,
-                    cursor_row,
-                    cursor_col,
-                    term_cols,
-                    term_rows,
-                    reuse_popup,
+                    CompleteParams {
+                        prefix,
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        reuse_popup,
+                    },
                     &tsv,
                 );
                 false
@@ -472,6 +449,31 @@ impl DaemonServer {
         }
     }
 
+    fn send_frame(
+        &self,
+        writer: &mut io::BufWriter<&UnixStream>,
+        app: &App,
+        extra_prefix: &[u8],
+        popup_only: bool,
+    ) -> io::Result<()> {
+        let (tty_bytes, popup) = if popup_only {
+            ui::render::render_popup_to_bytes(app, &self.theme)?
+        } else {
+            ui::render::draw_to_bytes(app, &self.theme)?
+        };
+        let total_len = extra_prefix.len() + tty_bytes.len();
+        writeln!(
+            writer,
+            "FRAME popup_row={} popup_height={} cursor_row={} {}",
+            popup.row, popup.height, app.cursor_row, total_len
+        )?;
+        if !extra_prefix.is_empty() {
+            writer.write_all(extra_prefix)?;
+        }
+        writer.write_all(&tty_bytes)?;
+        writer.flush()
+    }
+
     fn handle_render(&mut self, params: RenderParams, candidates_tsv: &[u8]) -> Response {
         let RenderParams {
             prefix,
@@ -512,31 +514,12 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        // Cap max_visible based on terminal rows
-        let max_popup_height = term_rows.saturating_sub(1);
-        if app.max_visible as u16 + 2 > max_popup_height {
-            app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-        }
+        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
             debug!("render request had zero visible rows");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
-        }
-
-        // ensure_space: compute scroll amount and adjust cursor_row
-        let popup_height = app.max_visible as u16 + 2;
-        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-        let mut scroll_bytes = Vec::new();
-        if space_below < popup_height {
-            let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-            if scroll_amount > 0 {
-                let _ = crossterm::queue!(
-                    &mut scroll_bytes,
-                    crossterm::terminal::ScrollUp(scroll_amount)
-                );
-                app.cursor_row -= scroll_amount;
-            }
         }
 
         if let Some(idx) = selected {
@@ -585,19 +568,22 @@ impl DaemonServer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn handle_complete(
         &mut self,
         reader: &mut BufReader<&UnixStream>,
         writer: &mut io::BufWriter<&UnixStream>,
-        prefix: String,
-        cursor_row: u16,
-        cursor_col: u16,
-        term_cols: u16,
-        term_rows: u16,
-        reuse_popup: bool,
+        params: CompleteParams,
         tsv: &str,
     ) {
+        let CompleteParams {
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            reuse_popup,
+        } = params;
+
         let candidates: Vec<Candidate> = tsv
             .lines()
             .filter(|line| !line.is_empty())
@@ -622,11 +608,7 @@ impl DaemonServer {
             return;
         }
 
-        // Cap max_visible
-        let max_popup_height = term_rows.saturating_sub(1);
-        if app.max_visible as u16 + 2 > max_popup_height {
-            app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-        }
+        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
             self.fuzzy = Some(app.take_fuzzy());
@@ -635,60 +617,15 @@ impl DaemonServer {
             return;
         }
 
-        // ensure_space: compute scroll bytes
-        let popup_height = app.max_visible as u16 + 2;
-        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-        let mut scroll_bytes = Vec::new();
-        if space_below < popup_height {
-            let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-            if scroll_amount > 0 {
-                let _ = crossterm::queue!(
-                    &mut scroll_bytes,
-                    crossterm::terminal::ScrollUp(scroll_amount)
-                );
-                app.cursor_row -= scroll_amount;
-            }
-        }
-
-        // Initial frame
-        let send_frame = |writer: &mut io::BufWriter<&UnixStream>,
-                          app: &App,
-                          theme: &Theme,
-                          extra_prefix: &[u8],
-                          popup_only: bool|
-         -> io::Result<()> {
-            let (tty_bytes, popup) = if popup_only {
-                ui::render::render_popup_to_bytes(app, theme)?
-            } else {
-                ui::render::draw_to_bytes(app, theme)?
-            };
-            let total_len = extra_prefix.len() + tty_bytes.len();
-            writeln!(
-                writer,
-                "FRAME popup_row={} popup_height={} cursor_row={} {}",
-                popup.row, popup.height, app.cursor_row, total_len
-            )?;
-            if !extra_prefix.is_empty() {
-                writer.write_all(extra_prefix)?;
-            }
-            writer.write_all(&tty_bytes)?;
-            writer.flush()
-        };
-
         app.select_first();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
-        let initial_frame_result =
-            send_frame(writer, &app, &self.theme, &scroll_bytes, reuse_fast_path);
+        let initial_frame_result = self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
             return;
         }
-
-        // Interactive loop
-        let bindings = &self.key_bindings;
-        let theme = &self.theme;
 
         loop {
             let mut msg_line = String::new();
@@ -709,7 +646,7 @@ impl DaemonServer {
                     break;
                 }
 
-                let action = input::parse_raw_bytes(&key_buf, bindings);
+                let action = input::parse_raw_bytes(&key_buf, &self.key_bindings);
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
@@ -720,7 +657,7 @@ impl DaemonServer {
                             Action::PageUp => app.page_up(),
                             _ => unreachable!(),
                         }
-                        if send_frame(writer, &app, theme, &[], false).is_err() {
+                        if self.send_frame(writer, &app, &[], false).is_err() {
                             break;
                         }
                     }
@@ -732,7 +669,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -750,7 +687,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -811,6 +748,67 @@ impl DaemonServer {
             }
         }
     }
+}
+
+fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
+    let cursor_row: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let cursor_col: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let term_cols: u16 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(80);
+    let term_rows: u16 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(24);
+    (cursor_row, cursor_col, term_cols, term_rows)
+}
+
+fn read_prefix_and_tsv(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    command: &str,
+) -> Result<(String, String), ()> {
+    let prefix = match read_text_line(reader) {
+        Ok(p) => p,
+        Err(_) => {
+            warn!("invalid text {} prefix", command);
+            let _ = writeln!(writer, "ERROR invalid prefix");
+            let _ = writer.flush();
+            return Err(());
+        }
+    };
+    let tsv = match read_tsv_payload(reader) {
+        Ok(t) => t,
+        Err(msg) => {
+            let _ = writeln!(writer, "ERROR {}", msg);
+            let _ = writer.flush();
+            return Err(());
+        }
+    };
+    Ok((prefix, tsv))
+}
+
+/// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
+/// bytes needed to make room for the popup below the cursor.
+fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
+    let max_popup_height = term_rows.saturating_sub(1);
+    if app.max_visible as u16 + 2 > max_popup_height {
+        app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+    }
+
+    if app.max_visible == 0 {
+        return Vec::new();
+    }
+
+    let popup_height = app.max_visible as u16 + 2;
+    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+    let mut scroll_bytes = Vec::new();
+    if space_below < popup_height {
+        let scroll_amount = (popup_height - space_below).min(app.cursor_row);
+        if scroll_amount > 0 {
+            let _ = crossterm::queue!(
+                &mut scroll_bytes,
+                crossterm::terminal::ScrollUp(scroll_amount)
+            );
+            app.cursor_row -= scroll_amount;
+        }
+    }
+    scroll_bytes
 }
 
 fn init_tracing() {
@@ -880,7 +878,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonServer, RenderParams, read_text_line};
+    use super::{CompleteParams, DaemonServer, RenderParams, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -1000,12 +998,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
         });
@@ -1030,12 +1030,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                true,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: true,
+                },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
         });
@@ -1060,12 +1062,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "git\tcommand\tcommand\n",
             );
         });
@@ -1101,12 +1105,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1141,12 +1147,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1179,12 +1187,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                prefix,
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix,
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 &candidates_tsv,
             );
         });
