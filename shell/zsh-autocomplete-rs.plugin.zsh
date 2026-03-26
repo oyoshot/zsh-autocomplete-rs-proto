@@ -213,6 +213,41 @@ _zacrs_daemon_send_render() {
     fi
 }
 
+# Atomic clear+draw: hide cursor, clear stale rows, pipe tty bytes, show cursor.
+# Args: $1=fd $2=tty_len $3=prev_vis $4=prev_row $5=prev_height $6=selective(0|1)
+# When selective=1, only clears rows outside the *new* popup region
+# (_zacrs_popup_row / _zacrs_popup_height must already be set by _zacrs_parse_render_header).
+# Returns 0 on success, 1 on sysread failure.
+_zacrs_daemon_draw_atomic() {
+    local _da_fd=$1 _da_tty_len=$2 _da_prev_vis=$3 _da_prev_row=$4 _da_prev_height=$5 _da_selective=${6:-0}
+    local _da_ok=0
+    {
+        printf '\e[?25l'
+        if (( _da_prev_vis )); then
+            printf '\e7'
+            local _oi
+            for (( _oi = 0; _oi < _da_prev_height; _oi++ )); do
+                if (( _da_selective )); then
+                    local _row=$(( _da_prev_row + _oi ))
+                    if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
+                        printf '\e[%d;1H\e[2K' $(( _row + 1 ))
+                    fi
+                else
+                    printf '\e[%d;1H\e[2K' $(( _da_prev_row + _oi + 1 ))
+                fi
+            done
+            printf '\e8'
+        fi
+        if (( _da_tty_len > 0 )); then
+            if ! sysread -i $_da_fd -o 1 -c $_da_tty_len; then
+                _da_ok=1
+            fi
+        fi
+        printf '\e[?25h'
+    } > /dev/tty
+    return $_da_ok
+}
+
 # === Non-blocking render (auto-trigger) ===
 
 _zacrs_render() {
@@ -233,25 +268,8 @@ _zacrs_render() {
         if (( _send_rc == 0 )); then
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-            # Atomic: clear all old rows + draw new popup (cursor hidden)
             local tty_ok=1
-            {
-                printf '\e[?25l'
-                if (( _prev_vis )); then
-                    printf '\e7'
-                    local _oi
-                    for (( _oi = 0; _oi < _prev_height; _oi++ )); do
-                        printf '\e[%d;1H\e[2K' $(( _prev_row + _oi + 1 ))
-                    done
-                    printf '\e8'
-                fi
-                if (( tty_len > 0 )); then
-                    if ! sysread -i $fd -o 1 -c $tty_len; then
-                        tty_ok=0
-                    fi
-                fi
-                printf '\e[?25h'
-            } > /dev/tty
+            _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
                 _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
@@ -647,28 +665,8 @@ _zacrs_cycle_render_selected() {
         if (( _send_rc == 0 )); then
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-            # Atomic: hide cursor + selective-clear stale rows + draw new popup
             local tty_ok=1
-            {
-                printf '\e[?25l'
-                if (( _prev_vis )); then
-                    printf '\e7'
-                    local _oi _row
-                    for (( _oi = 0; _oi < _prev_height; _oi++ )); do
-                        _row=$(( _prev_row + _oi ))
-                        if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
-                            printf '\e[%d;1H\e[2K' $(( _row + 1 ))
-                        fi
-                    done
-                    printf '\e8'
-                fi
-                if (( tty_len > 0 )); then
-                    if ! sysread -i $fd -o 1 -c $tty_len; then
-                        tty_ok=0
-                    fi
-                fi
-                printf '\e[?25h'
-            } > /dev/tty
+            _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 1 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
                 _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
