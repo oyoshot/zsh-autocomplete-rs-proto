@@ -163,4 +163,34 @@ mod tests {
         assert!(resized.col + resized.width <= app.term_cols);
         assert!(resized.row + resized.height <= app.term_rows);
     }
+
+    #[test]
+    fn format_metadata_without_selection() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 12345, 10, None);
+        assert_eq!(
+            meta,
+            "popup_row=6 popup_height=5 cursor_row=5 reuse_token=12345 filtered_count=10"
+        );
+    }
+
+    #[test]
+    fn format_metadata_with_selection() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 99, 3, Some(2));
+        assert_eq!(
+            meta,
+            "popup_row=6 popup_height=5 cursor_row=5 reuse_token=99 filtered_count=3 selected_original_idx=2"
+        );
+    }
 }
