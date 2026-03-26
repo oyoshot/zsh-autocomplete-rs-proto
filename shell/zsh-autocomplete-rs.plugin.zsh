@@ -623,6 +623,7 @@ _zacrs_cycle_exit() {
     _zacrs_cycle_active=0
     zle -K "$_zacrs_cycle_prev_keymap"
     _zacrs_clear_popup
+    unset POSTDISPLAY
     _zacrs_prev_lbuffer="$LBUFFER"
     # Release potentially large strings
     _zacrs_cycle_candidates=""
