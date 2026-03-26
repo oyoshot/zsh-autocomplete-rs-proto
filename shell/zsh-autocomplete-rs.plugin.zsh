@@ -642,6 +642,7 @@ _zacrs_cycle_render_and_apply() {
                 local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
 
                 # Atomic: hide cursor + selective-clear stale rows + draw new popup
+                local tty_ok=1
                 {
                     printf '\e[?25l'
                     if (( _prev_vis )); then
@@ -655,7 +656,6 @@ _zacrs_cycle_render_and_apply() {
                         done
                         printf '\e8'
                     fi
-                    local tty_ok=1
                     if (( tty_len > 0 )); then
                         if ! sysread -i $fd -o 1 -c $tty_len; then
                             tty_ok=0
