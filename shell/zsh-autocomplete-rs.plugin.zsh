@@ -616,11 +616,11 @@ _zacrs_cycle_apply_selected() {
     fi
 }
 
-# Render popup with selected index and update LBUFFER.
+# Render popup with the current cycle selection highlighted.
 # Uses daemon zsocket path directly to clear old popup + draw new popup
 # atomically (in one output group) — prevents ghost borders and flicker.
 # NOTE: daemon protocol mirrors _zacrs_render — keep both in sync.
-_zacrs_cycle_render_and_apply() {
+_zacrs_cycle_render_selected() {
     local cursor_row=$_zacrs_cycle_cursor_row cursor_col=$_zacrs_cycle_cursor_col
 
     local _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height _prev_vis=$_zacrs_popup_visible
@@ -699,13 +699,13 @@ _zacrs_cycle_render_and_apply() {
 _zacrs_cycle_next() {
     (( _zacrs_cycle_filtered_count <= 0 )) && return
     _zacrs_cycle_index=$(( (_zacrs_cycle_index + 1) % _zacrs_cycle_filtered_count ))
-    _zacrs_cycle_render_and_apply
+    _zacrs_cycle_render_selected
 }
 
 _zacrs_cycle_prev() {
     (( _zacrs_cycle_filtered_count <= 0 )) && return
     _zacrs_cycle_index=$(( (_zacrs_cycle_index - 1 + _zacrs_cycle_filtered_count) % _zacrs_cycle_filtered_count ))
-    _zacrs_cycle_render_and_apply
+    _zacrs_cycle_render_selected
 }
 
 _zacrs_cycle_accept() {
@@ -885,7 +885,7 @@ _zacrs_complete_cycle() {
     fi
 
     zle -K _zacrs_cycle
-    _zacrs_cycle_render_and_apply
+    _zacrs_cycle_render_selected
 }
 
 # === Interactive completion widget (blocking mode, legacy) ===
