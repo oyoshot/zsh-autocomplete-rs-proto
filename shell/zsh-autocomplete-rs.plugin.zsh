@@ -284,7 +284,6 @@ _zacrs_render() {
             return
         fi
         # _send_rc == 2: daemon unavailable, fall through to subprocess
-        _zacrs_clear_popup
     fi
 
     # Fallback: subprocess (clear stale popup before spawning)
@@ -685,8 +684,7 @@ _zacrs_cycle_render_selected() {
         # _send_rc == 2: daemon unavailable, fall through to subprocess
     fi
 
-    # Fallback: general render path (subprocess, may have slight flicker)
-    _zacrs_clear_popup
+    # Fallback: general render path (subprocess)
     _zacrs_render "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
         "$_zacrs_cycle_candidates" "0" "$_zacrs_cycle_index"
     if (( ! _zacrs_popup_visible )); then
