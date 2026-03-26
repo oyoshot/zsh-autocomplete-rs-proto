@@ -621,19 +621,21 @@ _zacrs_cycle_render_and_apply() {
                 _zacrs_parse_render_header "$header"
                 local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
 
-                # Atomic: hide cursor + clear old popup + draw new popup + show cursor
+                # Atomic: hide cursor + selective-clear stale rows + draw new popup
                 {
                     printf '\e[?25l'
                     if (( _prev_vis )); then
                         printf '\e7'
-                        local _oi
+                        local _oi _row
                         for (( _oi = 0; _oi < _prev_height; _oi++ )); do
-                            printf '\e[%d;1H\e[2K' $(( _prev_row + _oi + 1 ))
+                            _row=$(( _prev_row + _oi ))
+                            if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
+                                printf '\e[%d;1H\e[2K' $(( _row + 1 ))
+                            fi
                         done
                         printf '\e8'
                     fi
-                    (( tty_len > 0 )) && head -c "$tty_len" <&$fd
-                    printf '\e[?25h'
+                    (( tty_len > 0 )) && sysread -i $fd -o 1 -c $tty_len
                 } > /dev/tty
 
                 _zacrs_popup_visible=1
