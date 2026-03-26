@@ -16,6 +16,15 @@ use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+struct RenderParams {
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    selected: Option<usize>,
+}
+
 struct DaemonServer {
     config: Config,
     theme: Theme,
@@ -179,12 +188,14 @@ impl DaemonServer {
                 )
                 .entered();
                 let response = self.handle_render(
-                    prefix,
-                    cursor_row,
-                    cursor_col,
-                    term_cols,
-                    term_rows,
-                    selected.map(|s| s as usize),
+                    RenderParams {
+                        prefix,
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        selected: selected.map(|s| s as usize),
+                    },
                     &candidates_tsv,
                 );
                 let mut writer = &stream;
@@ -328,12 +339,14 @@ impl DaemonServer {
                 )
                 .entered();
                 let response = self.handle_render(
-                    prefix,
-                    cursor_row,
-                    cursor_col,
-                    term_cols,
-                    term_rows,
-                    selected,
+                    RenderParams {
+                        prefix,
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        selected,
+                    },
                     tsv.as_bytes(),
                 );
 
@@ -459,17 +472,15 @@ impl DaemonServer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn handle_render(
-        &mut self,
-        prefix: String,
-        cursor_row: u16,
-        cursor_col: u16,
-        term_cols: u16,
-        term_rows: u16,
-        selected: Option<usize>,
-        candidates_tsv: &[u8],
-    ) -> Response {
+    fn handle_render(&mut self, params: RenderParams, candidates_tsv: &[u8]) -> Response {
+        let RenderParams {
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            selected,
+        } = params;
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
             Err(e) => {
@@ -869,7 +880,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonServer, read_text_line};
+    use super::{DaemonServer, RenderParams, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -937,12 +948,14 @@ mod tests {
         let mut server = test_server();
         // Candidates exist but prefix "zzz" matches none after fuzzy filter
         let response = server.handle_render(
-            "zzz".to_string(),
-            5,
-            2,
-            80,
-            24,
-            None,
+            RenderParams {
+                prefix: "zzz".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+            },
             b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
         );
 
@@ -957,12 +970,14 @@ mod tests {
     fn handle_render_includes_reuse_token_metadata() {
         let mut server = test_server();
         let response = server.handle_render(
-            "gi".to_string(),
-            5,
-            2,
-            80,
-            24,
-            None,
+            RenderParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+            },
             b"git\tcommand\tcommand\n",
         );
 
