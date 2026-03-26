@@ -784,7 +784,7 @@ _zacrs_apply_single_candidate() {
     local prefix="$1" prefix_len="$2" cand_line="$3"
     _zacrs_clear_popup
     local text="${cand_line%%	*}"
-    local kind="${${cand_line##*	}}"
+    local kind="${cand_line##*	}"
     local base
     local is_cmd_pos=0
     if (( prefix_len > 0 )); then
