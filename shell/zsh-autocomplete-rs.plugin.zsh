@@ -206,40 +206,53 @@ _zacrs_render() {
             local header
             IFS= read -r -u $fd header
             if [[ "$header" == OK* ]]; then
+                local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
                 _zacrs_parse_render_header "$header"
                 local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-                # Read tty_bytes and pipe directly to /dev/tty
+                # Atomic: clear all old rows + draw new popup (cursor hidden)
                 local tty_ok=1
-                if (( tty_len > 0 )); then
-                    if ! head -c "$tty_len" <&$fd > /dev/tty; then
-                        tty_ok=0
+                {
+                    printf '\e[?25l'
+                    if (( _prev_vis )); then
+                        printf '\e7'
+                        local _oi
+                        for (( _oi = 0; _oi < _prev_height; _oi++ )); do
+                            printf '\e[%d;1H\e[2K' $(( _prev_row + _oi + 1 ))
+                        done
+                        printf '\e8'
                     fi
-                fi
+                    if (( tty_len > 0 )); then
+                        if ! sysread -i $fd -o 1 -c $tty_len; then
+                            tty_ok=0
+                        fi
+                    fi
+                } > /dev/tty
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
                     _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
                 else
-                    _zacrs_reset_popup_snapshot
+                    _zacrs_clear_popup
                     _zacrs_mark_daemon_unavailable
                 fi
                 exec {fd}<&-
                 return
             elif [[ "$header" == EMPTY ]]; then
-                _zacrs_reset_popup_snapshot
+                _zacrs_clear_popup
                 exec {fd}<&-
                 return
             elif [[ "$header" == ERROR* ]]; then
-                _zacrs_reset_popup_snapshot
+                _zacrs_clear_popup
                 _zacrs_mark_daemon_unavailable
             fi
             exec {fd}<&-
         fi
         # Socket connect failed, daemon may have died
-        _zacrs_reset_popup_snapshot
+        _zacrs_clear_popup
         _zacrs_mark_daemon_unavailable
     fi
 
-    # Fallback: subprocess
+    # Fallback: subprocess (clear stale popup before spawning)
+    _zacrs_clear_popup
     local -a render_args
     render_args=(render --prefix "$prefix" --cursor-row "$cursor_row" --cursor-col "$cursor_col")
     [[ -n "$selected" ]] && render_args+=(--selected "$selected")
@@ -263,12 +276,14 @@ _zacrs_clear_popup() {
         _zacrs_reset_popup_snapshot
         return 0
     fi
-    printf '\e7' > /dev/tty
-    local i
-    for (( i = 0; i < _zacrs_popup_height; i++ )); do
-        printf '\e[%d;1H\e[2K' $(( _zacrs_popup_row + i + 1 )) > /dev/tty
-    done
-    printf '\e8' > /dev/tty
+    {
+        printf '\e[?25l\e7'
+        local i
+        for (( i = 0; i < _zacrs_popup_height; i++ )); do
+            printf '\e[%d;1H\e[2K' $(( _zacrs_popup_row + i + 1 ))
+        done
+        printf '\e8\e[?25h'
+    } > /dev/tty
     _zacrs_popup_visible=0
     _zacrs_reset_popup_snapshot
 }
@@ -925,7 +940,9 @@ _zacrs_line_pre_redraw() {
     fi
     # LBUFFER が変わってなければスキップ
     if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
-        _zacrs_clear_popup
+        # Defer popup clear — _zacrs_render will do selective clear to avoid flicker.
+        # Just invalidate the snapshot so Tab reuse check uses fresh data.
+        _zacrs_reset_popup_snapshot
     else
         return
     fi
@@ -936,7 +953,7 @@ _zacrs_line_pre_redraw() {
     _zacrs_prev_lbuffer="$LBUFFER"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
-    [[ ! "$LBUFFER" =~ [^[:space:]] ]] && return
+    [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_clear_popup; return }
 
     # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
     local naive_prefix="${LBUFFER##* }"
@@ -944,7 +961,7 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$naive_prefix" ]]; then
             _zacrs_suppressed=0
         else
-            return
+            _zacrs_clear_popup; return
         fi
     fi
 
@@ -1023,12 +1040,12 @@ _zacrs_line_pre_redraw() {
         prefix_len=${#naive_prefix}
     fi
 
-    [[ -z "$candidates_str" ]] && return
+    [[ -z "$candidates_str" ]] && { _zacrs_clear_popup; return }
 
     local -a cands
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
-    [[ ${#cands[@]} -eq 0 ]] && return
+    [[ ${#cands[@]} -eq 0 ]] && { _zacrs_clear_popup; return }
 
     # Type-ahead arrived during candidate gathering: skip render.
     # Reset prev_lbuffer so the next redraw retries this buffer.
