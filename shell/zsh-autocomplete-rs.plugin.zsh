@@ -595,7 +595,9 @@ _zacrs_cycle_exit() {
     _zacrs_cycle_original_lbuffer=""
 }
 
-# Apply the selected candidate text to LBUFFER
+# Apply the selected candidate text to LBUFFER.
+# NOTE: selected_original_idx is the Rust-side index into all_candidates[],
+# which corresponds 1:1 with the shell cands array (same order, same content).
 _zacrs_cycle_apply_selected() {
     if (( _zacrs_cycle_selected_original_idx >= 0 )); then
         local -a cands
