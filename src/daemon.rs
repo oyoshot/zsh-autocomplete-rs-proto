@@ -442,6 +442,31 @@ impl DaemonServer {
         }
     }
 
+    fn send_frame(
+        &self,
+        writer: &mut io::BufWriter<&UnixStream>,
+        app: &App,
+        extra_prefix: &[u8],
+        popup_only: bool,
+    ) -> io::Result<()> {
+        let (tty_bytes, popup) = if popup_only {
+            ui::render::render_popup_to_bytes(app, &self.theme)?
+        } else {
+            ui::render::draw_to_bytes(app, &self.theme)?
+        };
+        let total_len = extra_prefix.len() + tty_bytes.len();
+        writeln!(
+            writer,
+            "FRAME popup_row={} popup_height={} cursor_row={} {}",
+            popup.row, popup.height, app.cursor_row, total_len
+        )?;
+        if !extra_prefix.is_empty() {
+            writer.write_all(extra_prefix)?;
+        }
+        writer.write_all(&tty_bytes)?;
+        writer.flush()
+    }
+
     fn handle_render(&mut self, params: RenderParams, candidates_tsv: &[u8]) -> Response {
         let RenderParams {
             prefix,
@@ -582,45 +607,16 @@ impl DaemonServer {
             return;
         }
 
-        // Initial frame
-        let send_frame = |writer: &mut io::BufWriter<&UnixStream>,
-                          app: &App,
-                          theme: &Theme,
-                          extra_prefix: &[u8],
-                          popup_only: bool|
-         -> io::Result<()> {
-            let (tty_bytes, popup) = if popup_only {
-                ui::render::render_popup_to_bytes(app, theme)?
-            } else {
-                ui::render::draw_to_bytes(app, theme)?
-            };
-            let total_len = extra_prefix.len() + tty_bytes.len();
-            writeln!(
-                writer,
-                "FRAME popup_row={} popup_height={} cursor_row={} {}",
-                popup.row, popup.height, app.cursor_row, total_len
-            )?;
-            if !extra_prefix.is_empty() {
-                writer.write_all(extra_prefix)?;
-            }
-            writer.write_all(&tty_bytes)?;
-            writer.flush()
-        };
-
         app.select_first();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         let initial_frame_result =
-            send_frame(writer, &app, &self.theme, &scroll_bytes, reuse_fast_path);
+            self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
             return;
         }
-
-        // Interactive loop
-        let bindings = &self.key_bindings;
-        let theme = &self.theme;
 
         loop {
             let mut msg_line = String::new();
@@ -641,7 +637,7 @@ impl DaemonServer {
                     break;
                 }
 
-                let action = input::parse_raw_bytes(&key_buf, bindings);
+                let action = input::parse_raw_bytes(&key_buf, &self.key_bindings);
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
@@ -652,7 +648,7 @@ impl DaemonServer {
                             Action::PageUp => app.page_up(),
                             _ => unreachable!(),
                         }
-                        if send_frame(writer, &app, theme, &[], false).is_err() {
+                        if self.send_frame(writer, &app, &[], false).is_err() {
                             break;
                         }
                     }
@@ -664,7 +660,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
@@ -682,7 +678,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if send_frame(writer, &app, theme, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
                             break;
                         }
                     }
