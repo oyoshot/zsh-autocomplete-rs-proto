@@ -171,8 +171,8 @@ _zacrs_parse_render_header() {
             reuse_token)            _zacrs_parsed_reuse_token=$val ;;
             filtered_count)         _zacrs_cycle_filtered_count=$val ;;
             selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
+            tty_len)                _zacrs_parsed_tty_len=$val ;;
         esac
-        [[ "$token" != *=* && "$token" != OK ]] && _zacrs_parsed_tty_len=$token
     done
 }
 

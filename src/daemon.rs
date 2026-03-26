@@ -343,7 +343,7 @@ impl DaemonServer {
                         metadata,
                     } => {
                         let meta = metadata.unwrap_or_default();
-                        let _ = writeln!(writer, "OK {} {}", meta, tty_bytes.len());
+                        let _ = writeln!(writer, "OK {} tty_len={}", meta, tty_bytes.len());
                         let _ = writer.write_all(&tty_bytes);
                         let _ = writer.flush();
                     }
