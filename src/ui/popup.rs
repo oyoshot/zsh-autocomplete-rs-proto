@@ -12,6 +12,24 @@ pub struct Popup {
 }
 
 impl Popup {
+    /// Format metadata string for shell consumption (used by both daemon and subprocess paths).
+    pub fn format_metadata(
+        &self,
+        cursor_row: u16,
+        reuse_token: u64,
+        filtered_count: usize,
+        selected_original_idx: Option<usize>,
+    ) -> String {
+        let mut meta = format!(
+            "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
+            self.row, self.height, cursor_row, reuse_token, filtered_count
+        );
+        if let Some(orig_idx) = selected_original_idx {
+            meta.push_str(&format!(" selected_original_idx={}", orig_idx));
+        }
+        meta
+    }
+
     pub fn compute(app: &App) -> Self {
         let term_cols = app.term_cols;
         let term_rows = app.term_rows;
@@ -144,5 +162,35 @@ mod tests {
         assert_ne!(initial.col, resized.col);
         assert!(resized.col + resized.width <= app.term_cols);
         assert!(resized.row + resized.height <= app.term_rows);
+    }
+
+    #[test]
+    fn format_metadata_without_selection() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 12345, 10, None);
+        assert_eq!(
+            meta,
+            "popup_row=6 popup_height=5 cursor_row=5 reuse_token=12345 filtered_count=10"
+        );
+    }
+
+    #[test]
+    fn format_metadata_with_selection() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 99, 3, Some(2));
+        assert_eq!(
+            meta,
+            "popup_row=6 popup_height=5 cursor_row=5 reuse_token=99 filtered_count=3 selected_original_idx=2"
+        );
     }
 }

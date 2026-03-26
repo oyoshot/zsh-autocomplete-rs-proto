@@ -13,6 +13,7 @@ pub fn try_daemon_render(
     prefix: &str,
     cursor_row: u16,
     cursor_col: u16,
+    selected: Option<usize>,
     candidates_raw: &[u8],
 ) -> Result<RenderResponse, DaemonUnavailable> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -24,6 +25,7 @@ pub fn try_daemon_render(
         term_cols,
         term_rows,
         candidates_tsv: candidates_raw.to_vec(),
+        selected: selected.and_then(|s| u16::try_from(s).ok()),
     };
 
     let response = send_request(&request)?;

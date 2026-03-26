@@ -142,7 +142,7 @@ impl App {
         let sel = match self.selected {
             None | Some(0) => {
                 let last = self.filtered_indices.len() - 1;
-                self.scroll_offset = last.saturating_sub(self.max_visible - 1);
+                self.scroll_offset = last.saturating_sub(self.max_visible.saturating_sub(1));
                 last
             }
             Some(s) => s - 1,
@@ -212,9 +212,23 @@ impl App {
         self.selected
     }
 
-    #[cfg(test)]
     pub fn set_selected(&mut self, idx: usize) {
+        if idx >= self.filtered_indices.len() {
+            return;
+        }
         self.selected = Some(idx);
+        // Adjust viewport to keep selected visible
+        if idx < self.scroll_offset {
+            self.scroll_offset = idx;
+        } else if idx >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = idx + 1 - self.max_visible;
+        }
+    }
+
+    /// Returns the index into `all_candidates` for the currently selected item.
+    pub fn selected_original_idx(&self) -> Option<usize> {
+        let sel = self.selected?;
+        self.filtered_indices.get(sel).copied()
     }
 
     pub fn selected_candidate(&self) -> Option<&Candidate> {
@@ -805,5 +819,46 @@ mod tests {
         assert_eq!(app.cursor_col, 0);
         assert_eq!(app.cursor_row, 0);
         assert_eq!(app.max_visible, 1);
+    }
+
+    fn make_test_app(prefix: &str, items: &[&str]) -> App {
+        let candidates = make_candidates(items);
+        App::new_with_term_size(candidates, prefix.to_string(), 5, 2, 80, 24)
+    }
+
+    #[test]
+    fn set_selected_clamps_out_of_range() {
+        let mut app = make_test_app("gi", &["git", "gist", "gizmo"]);
+        app.set_selected(99);
+        assert_eq!(app.selected(), None);
+    }
+
+    #[test]
+    fn set_selected_adjusts_viewport() {
+        let mut app = make_test_app("", &["a", "b", "c", "d", "e", "f", "g", "h"]);
+        app.max_visible = 3;
+        app.set_selected(5);
+        assert_eq!(app.selected(), Some(5));
+        assert!(app.scroll_offset <= 5);
+        assert!(5 < app.scroll_offset + app.max_visible);
+    }
+
+    #[test]
+    fn selected_original_idx_maps_to_all_candidates() {
+        let mut app = make_test_app("gi", &["git", "gist", "gizmo"]);
+        // filtered_indices[0] is "git" (shortest match), original index 0
+        app.set_selected(0);
+        let orig = app.selected_original_idx().unwrap();
+        assert_eq!(app.all_candidates[orig].text, "git");
+        // filtered_indices[1] is "gist", original index 1
+        app.set_selected(1);
+        let orig = app.selected_original_idx().unwrap();
+        assert_eq!(app.all_candidates[orig].text, "gist");
+    }
+
+    #[test]
+    fn selected_original_idx_none_when_no_selection() {
+        let app = make_test_app("gi", &["git", "gist"]);
+        assert_eq!(app.selected_original_idx(), None);
     }
 }

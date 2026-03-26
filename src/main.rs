@@ -139,6 +139,7 @@ fn run_render(
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
+    selected: Option<usize>,
     theme: &config::Theme,
 ) -> io::Result<i32> {
     // Read raw stdin before trying daemon (we need it for both paths)
@@ -149,7 +150,9 @@ fn run_render(
     };
 
     // Try daemon first
-    if let Ok(resp) = client::try_daemon_render(&prefix, cursor_row, cursor_col, &raw_stdin) {
+    if let Ok(resp) =
+        client::try_daemon_render(&prefix, cursor_row, cursor_col, selected, &raw_stdin)
+    {
         let mut tty = tty::open_tty_write()?;
         tty.write_all(&resp.tty_bytes)?;
         tty.flush()?;
@@ -182,15 +185,23 @@ fn run_render(
     if app.max_visible == 0 {
         return Ok(1);
     }
+
+    if let Some(idx) = selected {
+        app.set_selected(idx);
+    }
+
     ui::render::draw_popup_only(&mut tty, &app, theme)?;
 
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
-    println!(
-        "popup_row={} popup_height={} cursor_row={} reuse_token={}",
-        popup.row, popup.height, app.cursor_row, reuse_token
+    let meta = popup.format_metadata(
+        app.cursor_row,
+        reuse_token,
+        app.filtered_indices.len(),
+        app.selected_original_idx(),
     );
+    println!("{}", meta);
 
     Ok(0)
 }
@@ -234,7 +245,8 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
-        } => match run_render(prefix, cursor_row, cursor_col, &theme) {
+            selected,
+        } => match run_render(prefix, cursor_row, cursor_col, selected, &theme) {
             Ok(code) => process::exit(code),
             Err(e) => {
                 eprintln!("error: {}", e);

@@ -23,6 +23,8 @@ pub enum Request {
         term_cols: u16,
         term_rows: u16,
         candidates_tsv: Vec<u8>,
+        /// Pre-select the N-th filtered candidate (for Tab-cycle mode).
+        selected: Option<u16>,
     },
     Clear {
         popup_row: u16,
@@ -74,6 +76,7 @@ impl Request {
                 term_cols,
                 term_rows,
                 candidates_tsv,
+                selected,
             } => {
                 payload.push(CMD_RENDER);
                 let prefix_bytes = prefix.as_bytes();
@@ -83,6 +86,12 @@ impl Request {
                 write_u16(&mut payload, *cursor_col);
                 write_u16(&mut payload, *term_cols);
                 write_u16(&mut payload, *term_rows);
+                // Flags byte: bit 0 = has_selected
+                let flags: u8 = if selected.is_some() { 0x01 } else { 0x00 };
+                payload.push(flags);
+                if let Some(sel) = selected {
+                    write_u16(&mut payload, *sel);
+                }
                 payload.extend_from_slice(candidates_tsv);
             }
             Request::Clear {
@@ -143,6 +152,20 @@ impl Request {
                 let cursor_col = read_u16(&mut cursor)?;
                 let term_cols = read_u16(&mut cursor)?;
                 let term_rows = read_u16(&mut cursor)?;
+                // Flags byte: bit 0 = has_selected
+                if cursor.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "missing flags byte",
+                    ));
+                }
+                let flags = cursor[0];
+                cursor = &cursor[1..];
+                let selected = if flags & 0x01 != 0 {
+                    Some(read_u16(&mut cursor)?)
+                } else {
+                    None
+                };
                 let candidates_tsv = cursor.to_vec();
                 Ok(Request::Render {
                     prefix,
@@ -151,6 +174,7 @@ impl Request {
                     term_cols,
                     term_rows,
                     candidates_tsv,
+                    selected,
                 })
             }
             CMD_CLEAR => {
@@ -285,6 +309,7 @@ mod tests {
             term_cols: 80,
             term_rows: 24,
             candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
+            selected: None,
         };
         let bytes = req.serialize();
         let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
@@ -296,12 +321,40 @@ mod tests {
                 term_cols,
                 term_rows,
                 candidates_tsv,
+                selected,
             } => {
                 assert_eq!(prefix, "gi");
                 assert_eq!(cursor_row, 5);
                 assert_eq!(cursor_col, 2);
                 assert_eq!(term_cols, 80);
                 assert_eq!(term_rows, 24);
+                assert!(candidates_tsv.starts_with(b"git\t"));
+                assert_eq!(selected, None);
+            }
+            _ => panic!("expected Render"),
+        }
+    }
+
+    #[test]
+    fn render_request_with_selected_roundtrip() {
+        let req = Request::Render {
+            prefix: "gi".to_string(),
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
+            selected: Some(1),
+        };
+        let bytes = req.serialize();
+        let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
+        match parsed {
+            Request::Render {
+                selected,
+                candidates_tsv,
+                ..
+            } => {
+                assert_eq!(selected, Some(1));
                 assert!(candidates_tsv.starts_with(b"git\t"));
             }
             _ => panic!("expected Render"),
