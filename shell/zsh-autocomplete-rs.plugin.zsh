@@ -19,6 +19,8 @@ typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
 typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
+typeset -gi _zacrs_last_render_cursor_row=0
+typeset -gi _zacrs_last_render_cursor_col=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
 typeset -gi _zacrs_chain_retry=0
@@ -261,8 +263,20 @@ _zacrs_daemon_draw_atomic() {
 _zacrs_render() {
     local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}" selected="${5:-}"
     local cursor_row=0 cursor_col=0
-    _zacrs_get_cursor_pos
-    _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
+    # When the popup is already on screen and the terminal hasn't resized,
+    # reuse the previous cursor position instead of querying the terminal.
+    # This eliminates the \e[6n round-trip (an extra /dev/tty write + read
+    # loop) that can trigger a mid-render terminal flush on some platforms.
+    if (( _zacrs_popup_visible
+            && _zacrs_last_render_cursor_row > 0
+            && COLUMNS == _zacrs_popup_snapshot_columns
+            && LINES == _zacrs_popup_snapshot_lines )); then
+        cursor_row=$_zacrs_last_render_cursor_row
+        cursor_col=$_zacrs_last_render_cursor_col
+    else
+        _zacrs_get_cursor_pos
+        _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
+    fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
@@ -280,6 +294,8 @@ _zacrs_render() {
             _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
+                _zacrs_last_render_cursor_row=$cursor_row
+                _zacrs_last_render_cursor_col=$cursor_col
                 _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
             else
                 _zacrs_clear_popup
@@ -305,6 +321,8 @@ _zacrs_render() {
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         _zacrs_popup_visible=1
+        _zacrs_last_render_cursor_row=$cursor_row
+        _zacrs_last_render_cursor_col=$cursor_col
         _zacrs_parse_render_header "$output"
         _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "" "$from_gather"
     else
@@ -327,6 +345,8 @@ _zacrs_clear_popup() {
     _cb+=$'\e8\e[?25h\e[?2026l'
     printf '%s' "$_cb" > /dev/tty
     _zacrs_popup_visible=0
+    _zacrs_last_render_cursor_row=0
+    _zacrs_last_render_cursor_col=0
     _zacrs_reset_popup_snapshot
 }
 
