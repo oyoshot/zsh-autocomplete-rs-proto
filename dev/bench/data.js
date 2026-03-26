@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774418987585,
+  "lastUpdate": 1774507247695,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -4091,6 +4091,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 743,
             "range": "± 16",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe67f40345b95f3977140b614a0455ecd8163c22",
+          "message": "feat(shell): add Tab-cycle completion mode (#18) (#36)\n\n* feat(shell): add Tab-cycle completion mode (#18)\n\nReplace blocking interactive loop with lightweight cycle-mode keymap.\nTab cycles through candidates with highlight-only updates (no LBUFFER\nmodification until accept/exit), cursor hiding during atomic\nclear+render to eliminate flicker, and cached cursor position to\navoid repeated DSR queries.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor: deduplicate shell helpers and extract Popup::format_metadata\n\nExtract shared logic from cycle and interactive completion paths:\n- _zacrs_parse_render_header: unifies 3 header parsing loops\n- _zacrs_collect_candidates: unifies candidate collection (compsys/gather/cache)\n- _zacrs_apply_single_candidate: unifies single-candidate immediate completion\n- Popup::format_metadata: consolidates metadata formatting from daemon.rs and main.rs\n\nAlso: use _zacrs_cycle_exit() in accept_line/send_break, remove dead\n_zacrs_cycle_pending_render variable, clear cycle state on exit.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): handle unbound keys during Tab-cycle mode\n\n- Bind Backspace (^? / ^H) to cancel in the cycle keymap so it\n  doesn't silently modify LBUFFER via the inherited main binding\n- Add a safety net in line-pre-redraw: if an unhandled key (e.g.\n  multi-byte character input) mutates LBUFFER during cycle mode,\n  auto-exit cycle and fall through to the normal auto-trigger flow\n- Skip the \"OK\" daemon header prefix in _zacrs_parse_render_header\n  so it never transiently sets _zacrs_parsed_tty_len to a non-numeric\n- Use saturating_sub in App::move_up() to guard against a theoretical\n  panic if max_visible were ever 0\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): eliminate Tab-cycle popup flicker with selective clear\n\nReplace blanket clear of all previous popup rows with selective clear\nthat only erases rows not covered by the new popup. Also switch from\nhead -c (fork+exec) to sysread builtin and drop redundant cursor::Show.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): eliminate auto-trigger popup flicker and cursor jump\n\nDefer popup clear in line-pre-redraw so _zacrs_render can batch\nold-popup clear + new-popup draw in a single output group with cursor\nhidden. This prevents the visible blank frame between clear and draw.\n\n- _zacrs_clear_popup: add cursor hide/show, group writes via { } > /dev/tty\n- _zacrs_render daemon path: save old popup geometry, clear all old rows\n  atomically before drawing new popup; replace head -c with sysread\n- _zacrs_line_pre_redraw: defer clear to render, add explicit clear at\n  early-return points where no new popup will be drawn\n- Error/EMPTY/socket-fail paths: clear stale popup properly\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): add sysread error handling to cycle render path\n\nMirror the tty_ok guard from _zacrs_render into\n_zacrs_cycle_render_and_apply so a daemon crash mid-response correctly\nclears the popup and marks the daemon unavailable instead of leaving\n_zacrs_popup_visible=1 with nothing drawn.\n\nAlso add a sync comment noting the two daemon paths must stay aligned.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): exit cycle mode immediately on EMPTY daemon response\n\nWhen the daemon returns EMPTY during Tab-cycle (no candidates match the\nfilter), exit cycle mode right away instead of falling through to the\nsubprocess fallback which would produce the same EMPTY result.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell): simplify redundant parameter expansion in apply_single_candidate\n\nRemove unnecessary outer ${} wrapping around the ##-expansion for\nextracting the candidate kind field.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): use _zacrs_cycle_exit in cycle render fallback path\n\nThe subprocess fallback in _zacrs_cycle_render_and_apply was manually\nresetting only _zacrs_cycle_active and the keymap, missing state cleanup\n(prev_lbuffer, candidates, prefix, original_lbuffer). Replace with\n_zacrs_cycle_exit which handles all cleanup consistently.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* test(ui): add unit test for Popup::format_metadata\n\nVerify the exact key=value format that the shell parser\n_zacrs_parse_render_header depends on, both with and without\nselected_original_idx.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): restore cursor visibility after render paths\n\nBoth _zacrs_render and _zacrs_cycle_render_and_apply hide the cursor\nwith \\e[?25l but never restore it with \\e[?25h. If sysread fails or\ntty_len is 0, the cursor stays invisible. Add cursor restore at the\nend of both atomic output blocks.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell,daemon): use tty_len key-value in render header\n\nReplace the fragile bare-number detection for tty_len in\n_zacrs_parse_render_header with an explicit tty_len=N key-value pair,\nconsistent with all other header fields. The daemon text protocol now\nemits \"OK ... tty_len=N\" instead of appending a bare number.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(protocol): remove old-client backward compat for flags byte\n\nAlways expect the flags byte in binary protocol Render requests.\nReturn a parse error instead of silently defaulting to None when the\nflags byte is missing.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(daemon): introduce RenderParams to reduce handle_render args\n\nReplace 6 individual parameters with a RenderParams struct, removing\nthe need for #[allow(clippy::too_many_arguments)].\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* docs(shell): clarify index mapping in cycle_apply_selected\n\nAdd a comment explaining that selected_original_idx maps into the\nRust-side all_candidates array, which corresponds 1:1 with the shell\ncands array.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): guard against empty sel_line in cycle_apply_selected\n\nIf selected_original_idx is out of range for the candidates array,\nsel_line becomes empty and LBUFFER would be truncated to just the\nbase prefix. Add an early return guard to preserve LBUFFER unchanged.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): move tty_ok declaration before output group\n\nMove `local tty_ok=1` outside the `{ } > /dev/tty` block in\n_zacrs_cycle_render_and_apply so the variable scope is visually\nclear.  zsh does not create a subshell for `{ }`, so behavior is\nunchanged, but declaring it before the block makes intent explicit.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(protocol): use safe u16 conversion for selected index\n\nReplace `selected.map(|s| s as u16)` with `and_then(try_from.ok())`\nto avoid silent truncation when selected index exceeds u16::MAX.\nOverflow now yields None (no selection), which is safe because\napp.set_selected already bounds-checks against filtered_indices.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell): rename cycle_render_and_apply to cycle_render_selected\n\nThe function only renders the popup with a highlighted selection —\nit does not modify LBUFFER.  Rename to _zacrs_cycle_render_selected\nand update the docstring to match the actual behavior.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* docs(shell): document multi-byte input behavior in cycle keymap\n\nExplain that unbound keys in the _zacrs_cycle keymap (copied from\nmain) fall through to self-insert, and the line-pre-redraw hook\ndetects the resulting LBUFFER mutation to auto-exit cycle mode.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell): extract _zacrs_daemon_send_render to reduce duplication\n\nMove the shared daemon connection logic (zsocket connect, send render\nrequest, read+parse response header) into a single helper function.\nBoth _zacrs_render and _zacrs_cycle_render_selected now call the\nhelper and only handle the tty draw phase and error paths themselves,\nwhich differ between auto-trigger (full clear) and cycle (selective\nclear) modes.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(shell): extract _zacrs_daemon_draw_atomic to reduce render duplication\n\nConsolidate the atomic clear+draw output groups from _zacrs_render and\n_zacrs_cycle_render_selected into a shared helper. The selective flag\ncontrols whether all previous rows are cleared (auto-trigger) or only\nrows outside the new popup region (cycle mode).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(daemon): use safe usize::from instead of as usize for selected\n\nConsistent with the safe conversion approach established in 357176e.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-26T15:33:08+09:00",
+          "tree_id": "00b42ec7e50d3345fe51f3d5b775c7a6a449db82",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/fe67f40345b95f3977140b614a0455ecd8163c22"
+        },
+        "date": 1774507247414,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7412,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75423,
+            "range": "± 274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 910188,
+            "range": "± 10721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 191411,
+            "range": "± 2543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100219,
+            "range": "± 562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76104,
+            "range": "± 610",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20136,
+            "range": "± 161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19099,
+            "range": "± 138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11809,
+            "range": "± 576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 310063,
+            "range": "± 1017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 303359,
+            "range": "± 1550",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 266041,
+            "range": "± 1490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 293364,
+            "range": "± 1697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26547,
+            "range": "± 171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 303324,
+            "range": "± 1102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3317922,
+            "range": "± 9202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 154530,
+            "range": "± 791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114549,
+            "range": "± 369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 365172,
+            "range": "± 2330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 734,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 114,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 50,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 71,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 861,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7584,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 743,
+            "range": "± 2",
             "unit": "ns/iter"
           }
         ]
