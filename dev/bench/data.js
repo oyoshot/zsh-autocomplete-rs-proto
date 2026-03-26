@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774508770242,
+  "lastUpdate": 1774511871138,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -4546,6 +4546,234 @@ window.BENCHMARK_DATA = {
           {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 747,
+            "range": "± 3",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4cf66356a51347351fe391ac5edd4bd0d76e9684",
+          "message": "fix(shell): clear stale POSTDISPLAY on cycle mode exit (#38)\n\nWhen the Tab-cycle widget modified LBUFFER (e.g. \"car\" → \"cargo\"),\nPOSTDISPLAY set by other plugins remained stale, causing ghost text\nartifacts like \"cargo go install --path .\" instead of \"cargo install\n--path .\".  Unset POSTDISPLAY in _zacrs_cycle_exit so the old value\nis never carried over after the buffer changes.\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-26T16:50:12+09:00",
+          "tree_id": "264d89f7c7690a178e696ce462d04b224a6fdaa2",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/4cf66356a51347351fe391ac5edd4bd0d76e9684"
+        },
+        "date": 1774511870872,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7387,
+            "range": "± 119",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75535,
+            "range": "± 291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 919296,
+            "range": "± 12613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 192403,
+            "range": "± 927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101161,
+            "range": "± 363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76125,
+            "range": "± 1441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20141,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19089,
+            "range": "± 459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11795,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 320337,
+            "range": "± 4748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 323936,
+            "range": "± 3580",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 275291,
+            "range": "± 5172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 302264,
+            "range": "± 4695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 28031,
+            "range": "± 1182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 320368,
+            "range": "± 13118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3502629,
+            "range": "± 149257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 153755,
+            "range": "± 4865",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114417,
+            "range": "± 1907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 368213,
+            "range": "± 2411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 753,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 114,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 91,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 50,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 71,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 846,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7462,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 743,
             "range": "± 3",
             "unit": "ns/iter"
           }
