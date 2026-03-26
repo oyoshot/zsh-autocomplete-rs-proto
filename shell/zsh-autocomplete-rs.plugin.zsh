@@ -669,8 +669,13 @@ _zacrs_cycle_render_and_apply() {
                 fi
                 exec {fd}<&-
                 return
+            elif [[ "$header" == EMPTY ]]; then
+                # No candidates match — exit cycle immediately (no fallback needed)
+                exec {fd}<&-
+                _zacrs_cycle_exit
+                return
             fi
-            # EMPTY or ERROR
+            # ERROR — fall through to subprocess fallback
             exec {fd}<&-
         fi
     fi
