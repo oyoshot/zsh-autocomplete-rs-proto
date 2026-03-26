@@ -604,6 +604,7 @@ _zacrs_cycle_apply_selected() {
         cands=( ${(f)_zacrs_cycle_candidates} )
         cands=( ${cands:#} )
         local sel_line="${cands[$((_zacrs_cycle_selected_original_idx + 1))]}"
+        [[ -z "$sel_line" ]] && return
         local sel_text="${sel_line%%	*}"
         local base
         if (( _zacrs_cycle_prefix_len > 0 )); then
