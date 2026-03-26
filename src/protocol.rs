@@ -153,17 +153,18 @@ impl Request {
                 let term_cols = read_u16(&mut cursor)?;
                 let term_rows = read_u16(&mut cursor)?;
                 // Flags byte: bit 0 = has_selected
-                let selected = if cursor.is_empty() {
-                    // Old client without flags byte
-                    None
+                if cursor.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "missing flags byte",
+                    ));
+                }
+                let flags = cursor[0];
+                cursor = &cursor[1..];
+                let selected = if flags & 0x01 != 0 {
+                    Some(read_u16(&mut cursor)?)
                 } else {
-                    let flags = cursor[0];
-                    cursor = &cursor[1..];
-                    if flags & 0x01 != 0 {
-                        Some(read_u16(&mut cursor)?)
-                    } else {
-                        None
-                    }
+                    None
                 };
                 let candidates_tsv = cursor.to_vec();
                 Ok(Request::Render {
