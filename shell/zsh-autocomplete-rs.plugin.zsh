@@ -226,6 +226,7 @@ _zacrs_render() {
                             tty_ok=0
                         fi
                     fi
+                    printf '\e[?25h'
                 } > /dev/tty
                 if (( tty_ok )); then
                     _zacrs_popup_visible=1
@@ -657,6 +658,7 @@ _zacrs_cycle_render_and_apply() {
                             tty_ok=0
                         fi
                     fi
+                    printf '\e[?25h'
                 } > /dev/tty
 
                 if (( tty_ok )); then
