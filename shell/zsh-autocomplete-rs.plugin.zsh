@@ -718,7 +718,8 @@ _zacrs_cycle_accept_space() {
     _zacrs_cycle_apply_selected
     LBUFFER+=" "
     _zacrs_cycle_exit
-    _zacrs_suppressed=1
+    # Chain: override _zacrs_cycle_exit の prev_lbuffer で line-pre-redraw に変化を検知させる
+    _zacrs_prev_lbuffer=""
     _zacrs_chain_retry=1
     zle reset-prompt
 }
