@@ -512,31 +512,12 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        // Cap max_visible based on terminal rows
-        let max_popup_height = term_rows.saturating_sub(1);
-        if app.max_visible as u16 + 2 > max_popup_height {
-            app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-        }
+        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
             debug!("render request had zero visible rows");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
-        }
-
-        // ensure_space: compute scroll amount and adjust cursor_row
-        let popup_height = app.max_visible as u16 + 2;
-        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-        let mut scroll_bytes = Vec::new();
-        if space_below < popup_height {
-            let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-            if scroll_amount > 0 {
-                let _ = crossterm::queue!(
-                    &mut scroll_bytes,
-                    crossterm::terminal::ScrollUp(scroll_amount)
-                );
-                app.cursor_row -= scroll_amount;
-            }
         }
 
         if let Some(idx) = selected {
@@ -622,32 +603,13 @@ impl DaemonServer {
             return;
         }
 
-        // Cap max_visible
-        let max_popup_height = term_rows.saturating_sub(1);
-        if app.max_visible as u16 + 2 > max_popup_height {
-            app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-        }
+        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = writeln!(writer, "DONE 1 ");
             let _ = writer.flush();
             return;
-        }
-
-        // ensure_space: compute scroll bytes
-        let popup_height = app.max_visible as u16 + 2;
-        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-        let mut scroll_bytes = Vec::new();
-        if space_below < popup_height {
-            let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-            if scroll_amount > 0 {
-                let _ = crossterm::queue!(
-                    &mut scroll_bytes,
-                    crossterm::terminal::ScrollUp(scroll_amount)
-                );
-                app.cursor_row -= scroll_amount;
-            }
         }
 
         // Initial frame
@@ -811,6 +773,34 @@ impl DaemonServer {
             }
         }
     }
+}
+
+/// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
+/// bytes needed to make room for the popup below the cursor.
+fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
+    let max_popup_height = term_rows.saturating_sub(1);
+    if app.max_visible as u16 + 2 > max_popup_height {
+        app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+    }
+
+    if app.max_visible == 0 {
+        return Vec::new();
+    }
+
+    let popup_height = app.max_visible as u16 + 2;
+    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+    let mut scroll_bytes = Vec::new();
+    if space_below < popup_height {
+        let scroll_amount = (popup_height - space_below).min(app.cursor_row);
+        if scroll_amount > 0 {
+            let _ = crossterm::queue!(
+                &mut scroll_bytes,
+                crossterm::terminal::ScrollUp(scroll_amount)
+            );
+            app.cursor_row -= scroll_amount;
+        }
+    }
+    scroll_bytes
 }
 
 fn init_tracing() {
