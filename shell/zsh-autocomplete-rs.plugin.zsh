@@ -19,6 +19,8 @@ typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
 typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
+typeset -gi _zacrs_last_render_cursor_row=0
+typeset -gi _zacrs_last_render_cursor_col=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
 typeset -gi _zacrs_chain_retry=0
@@ -221,30 +223,38 @@ _zacrs_daemon_send_render() {
 _zacrs_daemon_draw_atomic() {
     local _da_fd=$1 _da_tty_len=$2 _da_prev_vis=$3 _da_prev_row=$4 _da_prev_height=$5 _da_selective=${6:-0}
     local _da_ok=0
-    {
-        printf '\e[?25l'
-        if (( _da_prev_vis )); then
-            printf '\e7'
-            local _oi
-            for (( _oi = 0; _oi < _da_prev_height; _oi++ )); do
-                if (( _da_selective )); then
-                    local _row=$(( _da_prev_row + _oi ))
-                    if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
-                        printf '\e[%d;1H\e[2K' $(( _row + 1 ))
-                    fi
-                else
-                    printf '\e[%d;1H\e[2K' $(( _da_prev_row + _oi + 1 ))
+    # Build the entire clear+draw sequence into a single buffer so that
+    # it reaches the terminal as one write() — no intermediate frames.
+    # Synchronized Output markers (\e[?2026h/l) are embedded inside the
+    # same write to avoid nesting conflicts with ZSH's own sync regions.
+    local _da_buf=$'\e[?2026h\e[?25l'
+    if (( _da_prev_vis )); then
+        _da_buf+=$'\e7'
+        local _oi
+        for (( _oi = 0; _oi < _da_prev_height; _oi++ )); do
+            if (( _da_selective )); then
+                local _row=$(( _da_prev_row + _oi ))
+                if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
+                    _da_buf+=$'\e['"$(( _row + 1 ))"$';1H\e[2K'
                 fi
-            done
-            printf '\e8'
-        fi
-        if (( _da_tty_len > 0 )); then
-            if ! sysread -i $_da_fd -o 1 -c $_da_tty_len; then
-                _da_ok=1
+            else
+                _da_buf+=$'\e['"$(( _da_prev_row + _oi + 1 ))"$';1H\e[2K'
             fi
+        done
+        _da_buf+=$'\e8'
+    fi
+    if (( _da_tty_len > 0 )); then
+        local _da_tty_data=""
+        if sysread -i $_da_fd -c $_da_tty_len _da_tty_data; then
+            _da_buf+="$_da_tty_data"
+        else
+            _da_ok=1
         fi
-        printf '\e[?25h'
-    } > /dev/tty
+    fi
+    _da_buf+=$'\e[?25h\e[?2026l'
+    if (( _da_ok == 0 )); then
+        printf '%s' "$_da_buf" > /dev/tty
+    fi
     return $_da_ok
 }
 
@@ -253,8 +263,20 @@ _zacrs_daemon_draw_atomic() {
 _zacrs_render() {
     local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}" selected="${5:-}"
     local cursor_row=0 cursor_col=0
-    _zacrs_get_cursor_pos
-    _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
+    # When the popup is already on screen and the terminal hasn't resized,
+    # reuse the previous cursor position instead of querying the terminal.
+    # This eliminates the \e[6n round-trip (an extra /dev/tty write + read
+    # loop) that can trigger a mid-render terminal flush on some platforms.
+    if (( _zacrs_popup_visible
+            && _zacrs_last_render_cursor_row > 0
+            && COLUMNS == _zacrs_popup_snapshot_columns
+            && LINES == _zacrs_popup_snapshot_lines )); then
+        cursor_row=$_zacrs_last_render_cursor_row
+        cursor_col=$_zacrs_last_render_cursor_col
+    else
+        _zacrs_get_cursor_pos
+        _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
+    fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
@@ -272,6 +294,8 @@ _zacrs_render() {
             _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
+                _zacrs_last_render_cursor_row=$cursor_row
+                _zacrs_last_render_cursor_col=$cursor_col
                 _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
             else
                 _zacrs_clear_popup
@@ -284,7 +308,6 @@ _zacrs_render() {
             return
         fi
         # _send_rc == 2: daemon unavailable, fall through to subprocess
-        _zacrs_clear_popup
     fi
 
     # Fallback: subprocess (clear stale popup before spawning)
@@ -298,6 +321,8 @@ _zacrs_render() {
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         _zacrs_popup_visible=1
+        _zacrs_last_render_cursor_row=$cursor_row
+        _zacrs_last_render_cursor_col=$cursor_col
         _zacrs_parse_render_header "$output"
         _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "" "$from_gather"
     else
@@ -312,15 +337,16 @@ _zacrs_clear_popup() {
         _zacrs_reset_popup_snapshot
         return 0
     fi
-    {
-        printf '\e[?25l\e7'
-        local i
-        for (( i = 0; i < _zacrs_popup_height; i++ )); do
-            printf '\e[%d;1H\e[2K' $(( _zacrs_popup_row + i + 1 ))
-        done
-        printf '\e8\e[?25h'
-    } > /dev/tty
+    local _cb=$'\e[?2026h\e[?25l\e7'
+    local i
+    for (( i = 0; i < _zacrs_popup_height; i++ )); do
+        _cb+=$'\e['"$(( _zacrs_popup_row + i + 1 ))"$';1H\e[2K'
+    done
+    _cb+=$'\e8\e[?25h\e[?2026l'
+    printf '%s' "$_cb" > /dev/tty
     _zacrs_popup_visible=0
+    _zacrs_last_render_cursor_row=0
+    _zacrs_last_render_cursor_col=0
     _zacrs_reset_popup_snapshot
 }
 
@@ -685,8 +711,7 @@ _zacrs_cycle_render_selected() {
         # _send_rc == 2: daemon unavailable, fall through to subprocess
     fi
 
-    # Fallback: general render path (subprocess, may have slight flicker)
-    _zacrs_clear_popup
+    # Fallback: general render path (subprocess)
     _zacrs_render "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
         "$_zacrs_cycle_candidates" "0" "$_zacrs_cycle_index"
     if (( ! _zacrs_popup_visible )); then
