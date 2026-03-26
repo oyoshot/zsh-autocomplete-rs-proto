@@ -25,7 +25,7 @@ pub fn try_daemon_render(
         term_cols,
         term_rows,
         candidates_tsv: candidates_raw.to_vec(),
-        selected: selected.map(|s| s as u16),
+        selected: selected.and_then(|s| u16::try_from(s).ok()),
     };
 
     let response = send_request(&request)?;
