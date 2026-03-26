@@ -685,8 +685,7 @@ _zacrs_cycle_render_and_apply() {
     _zacrs_render "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
         "$_zacrs_cycle_candidates" "0" "$_zacrs_cycle_index"
     if (( ! _zacrs_popup_visible )); then
-        _zacrs_cycle_active=0
-        zle -K "$_zacrs_cycle_prev_keymap"
+        _zacrs_cycle_exit
     fi
 }
 
