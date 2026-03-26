@@ -221,30 +221,38 @@ _zacrs_daemon_send_render() {
 _zacrs_daemon_draw_atomic() {
     local _da_fd=$1 _da_tty_len=$2 _da_prev_vis=$3 _da_prev_row=$4 _da_prev_height=$5 _da_selective=${6:-0}
     local _da_ok=0
-    {
-        printf '\e[?25l'
-        if (( _da_prev_vis )); then
-            printf '\e7'
-            local _oi
-            for (( _oi = 0; _oi < _da_prev_height; _oi++ )); do
-                if (( _da_selective )); then
-                    local _row=$(( _da_prev_row + _oi ))
-                    if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
-                        printf '\e[%d;1H\e[2K' $(( _row + 1 ))
-                    fi
-                else
-                    printf '\e[%d;1H\e[2K' $(( _da_prev_row + _oi + 1 ))
+    # Build the entire clear+draw sequence into a single buffer so that
+    # it reaches the terminal as one write() — no intermediate frames.
+    # Synchronized Output markers (\e[?2026h/l) are embedded inside the
+    # same write to avoid nesting conflicts with ZSH's own sync regions.
+    local _da_buf=$'\e[?2026h\e[?25l'
+    if (( _da_prev_vis )); then
+        _da_buf+=$'\e7'
+        local _oi
+        for (( _oi = 0; _oi < _da_prev_height; _oi++ )); do
+            if (( _da_selective )); then
+                local _row=$(( _da_prev_row + _oi ))
+                if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
+                    _da_buf+=$'\e['"$(( _row + 1 ))"$';1H\e[2K'
                 fi
-            done
-            printf '\e8'
-        fi
-        if (( _da_tty_len > 0 )); then
-            if ! sysread -i $_da_fd -o 1 -c $_da_tty_len; then
-                _da_ok=1
+            else
+                _da_buf+=$'\e['"$(( _da_prev_row + _oi + 1 ))"$';1H\e[2K'
             fi
+        done
+        _da_buf+=$'\e8'
+    fi
+    if (( _da_tty_len > 0 )); then
+        local _da_tty_data=""
+        if sysread -i $_da_fd -c $_da_tty_len _da_tty_data; then
+            _da_buf+="$_da_tty_data"
+        else
+            _da_ok=1
         fi
-        printf '\e[?25h'
-    } > /dev/tty
+    fi
+    _da_buf+=$'\e[?25h\e[?2026l'
+    if (( _da_ok == 0 )); then
+        printf '%s' "$_da_buf" > /dev/tty
+    fi
     return $_da_ok
 }
 
@@ -311,14 +319,13 @@ _zacrs_clear_popup() {
         _zacrs_reset_popup_snapshot
         return 0
     fi
-    {
-        printf '\e[?25l\e7'
-        local i
-        for (( i = 0; i < _zacrs_popup_height; i++ )); do
-            printf '\e[%d;1H\e[2K' $(( _zacrs_popup_row + i + 1 ))
-        done
-        printf '\e8\e[?25h'
-    } > /dev/tty
+    local _cb=$'\e[?2026h\e[?25l\e7'
+    local i
+    for (( i = 0; i < _zacrs_popup_height; i++ )); do
+        _cb+=$'\e['"$(( _zacrs_popup_row + i + 1 ))"$';1H\e[2K'
+    done
+    _cb+=$'\e8\e[?25h\e[?2026l'
+    printf '%s' "$_cb" > /dev/tty
     _zacrs_popup_visible=0
     _zacrs_reset_popup_snapshot
 }
