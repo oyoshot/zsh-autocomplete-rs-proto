@@ -25,6 +25,15 @@ struct RenderParams {
     selected: Option<usize>,
 }
 
+struct CompleteParams {
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    reuse_popup: bool,
+}
+
 struct DaemonServer {
     config: Config,
     theme: Theme,
@@ -299,17 +308,15 @@ impl DaemonServer {
 
         match parts[0] {
             "render" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) =
-                    parse_terminal_dims(&parts);
+                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
                 let selected: Option<usize> = parts[5..]
                     .iter()
                     .find_map(|part| part.strip_prefix("selected="))
                     .and_then(|v| v.parse().ok());
-                let (prefix, tsv) =
-                    match read_prefix_and_tsv(reader, &mut writer, "render") {
-                        Ok(v) => v,
-                        Err(()) => return false,
-                    };
+                let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "render") {
+                    Ok(v) => v,
+                    Err(()) => return false,
+                };
 
                 let _span = info_span!(
                     "render",
@@ -355,16 +362,14 @@ impl DaemonServer {
                 false
             }
             "complete" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) =
-                    parse_terminal_dims(&parts);
+                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
-                let (prefix, tsv) =
-                    match read_prefix_and_tsv(reader, &mut writer, "complete") {
-                        Ok(v) => v,
-                        Err(()) => return false,
-                    };
+                let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "complete") {
+                    Ok(v) => v,
+                    Err(()) => return false,
+                };
 
                 let _span = info_span!(
                     "complete",
@@ -387,12 +392,14 @@ impl DaemonServer {
                 self.handle_complete(
                     reader,
                     &mut writer,
-                    prefix,
-                    cursor_row,
-                    cursor_col,
-                    term_cols,
-                    term_rows,
-                    reuse_popup,
+                    CompleteParams {
+                        prefix,
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        reuse_popup,
+                    },
                     &tsv,
                 );
                 false
@@ -561,19 +568,22 @@ impl DaemonServer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn handle_complete(
         &mut self,
         reader: &mut BufReader<&UnixStream>,
         writer: &mut io::BufWriter<&UnixStream>,
-        prefix: String,
-        cursor_row: u16,
-        cursor_col: u16,
-        term_cols: u16,
-        term_rows: u16,
-        reuse_popup: bool,
+        params: CompleteParams,
         tsv: &str,
     ) {
+        let CompleteParams {
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            reuse_popup,
+        } = params;
+
         let candidates: Vec<Candidate> = tsv
             .lines()
             .filter(|line| !line.is_empty())
@@ -610,8 +620,7 @@ impl DaemonServer {
         app.select_first();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
-        let initial_frame_result =
-            self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
+        let initial_frame_result = self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
 
         if initial_frame_result.is_err() {
             self.fuzzy = Some(app.take_fuzzy());
@@ -869,7 +878,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonServer, RenderParams, read_text_line};
+    use super::{CompleteParams, DaemonServer, RenderParams, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -989,12 +998,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
         });
@@ -1019,12 +1030,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                true,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: true,
+                },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
         });
@@ -1049,12 +1062,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "gi".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "git\tcommand\tcommand\n",
             );
         });
@@ -1090,12 +1105,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1130,12 +1147,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                "".to_string(),
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
         });
@@ -1168,12 +1187,14 @@ mod tests {
             server.handle_complete(
                 &mut reader,
                 &mut writer,
-                prefix,
-                5,
-                2,
-                80,
-                24,
-                false,
+                CompleteParams {
+                    prefix,
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
                 &candidates_tsv,
             );
         });
