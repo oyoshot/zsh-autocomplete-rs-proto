@@ -194,7 +194,7 @@ impl DaemonServer {
                         cursor_col,
                         term_cols,
                         term_rows,
-                        selected: selected.map(|s| s as usize),
+                        selected: selected.map(usize::from),
                     },
                     &candidates_tsv,
                 );
