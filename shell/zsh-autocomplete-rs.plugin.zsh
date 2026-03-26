@@ -615,6 +615,7 @@ _zacrs_cycle_apply_selected() {
 # Render popup with selected index and update LBUFFER.
 # Uses daemon zsocket path directly to clear old popup + draw new popup
 # atomically (in one output group) — prevents ghost borders and flicker.
+# NOTE: daemon protocol mirrors _zacrs_render — keep both in sync.
 _zacrs_cycle_render_and_apply() {
     local cursor_row=$_zacrs_cycle_cursor_row cursor_col=$_zacrs_cycle_cursor_col
 
@@ -650,12 +651,22 @@ _zacrs_cycle_render_and_apply() {
                         done
                         printf '\e8'
                     fi
-                    (( tty_len > 0 )) && sysread -i $fd -o 1 -c $tty_len
+                    local tty_ok=1
+                    if (( tty_len > 0 )); then
+                        if ! sysread -i $fd -o 1 -c $tty_len; then
+                            tty_ok=0
+                        fi
+                    fi
                 } > /dev/tty
 
-                _zacrs_popup_visible=1
-                _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
-                    "$_zacrs_cycle_candidates" "$cursor_col" "$reuse_token" "0"
+                if (( tty_ok )); then
+                    _zacrs_popup_visible=1
+                    _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
+                        "$_zacrs_cycle_candidates" "$cursor_col" "$reuse_token" "0"
+                else
+                    _zacrs_clear_popup
+                    _zacrs_mark_daemon_unavailable
+                fi
                 exec {fd}<&-
                 return
             fi
