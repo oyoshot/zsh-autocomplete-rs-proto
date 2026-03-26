@@ -41,6 +41,8 @@ typeset -gi _zacrs_cached_from_gather=0
 # Render header parse results (set by _zacrs_parse_render_header)
 typeset -g  _zacrs_parsed_reuse_token=""
 typeset -gi _zacrs_parsed_tty_len=0
+# Daemon send helper (set by _zacrs_daemon_send_render on OK)
+typeset -gi _zacrs_send_render_fd=0
 
 # Cycle mode state
 typeset -gi _zacrs_cycle_active=0
@@ -176,6 +178,41 @@ _zacrs_parse_render_header() {
     done
 }
 
+# Connect to daemon, send a render request, and parse the response header.
+# Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional)
+# On OK  (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
+# On EMPTY (return 1): fd already closed.
+# On ERROR/connect failure (return 2): fd already closed, daemon marked unavailable.
+_zacrs_daemon_send_render() {
+    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="$5"
+    local fd
+    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+        _zacrs_mark_daemon_unavailable
+        return 2
+    fi
+    fd=$REPLY
+    local render_cmd="render $_cr $_cc $COLUMNS $LINES"
+    [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
+    print -u $fd -- "$render_cmd"
+    printf '%s\n' "$_pfx" >&$fd
+    printf '%s\n' "$_cands" >&$fd
+    print -u $fd "END"
+    local header
+    IFS= read -r -u $fd header
+    if [[ "$header" == OK* ]]; then
+        _zacrs_parse_render_header "$header"
+        _zacrs_send_render_fd=$fd
+        return 0
+    elif [[ "$header" == EMPTY ]]; then
+        exec {fd}<&-
+        return 1
+    else
+        exec {fd}<&-
+        _zacrs_mark_daemon_unavailable
+        return 2
+    fi
+}
+
 # === Non-blocking render (auto-trigger) ===
 
 _zacrs_render() {
@@ -190,66 +227,46 @@ _zacrs_render() {
 
     # Try zsocket daemon path (no subprocess spawn)
     if (( _zacrs_daemon_available )); then
-        local fd
-        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
-            fd=$REPLY
-            local cols rows
-            cols=$COLUMNS rows=$LINES
-            # Send request: header + prefix line + candidates + END marker
-            local render_cmd="render $cursor_row $cursor_col $cols $rows"
-            [[ -n "$selected" ]] && render_cmd+=" selected=$selected"
-            print -u $fd -- "$render_cmd"
-            printf '%s\n' "$prefix" >&$fd
-            printf '%s\n' "$candidates_str" >&$fd
-            print -u $fd "END"
-            # Read response header
-            local header
-            IFS= read -r -u $fd header
-            if [[ "$header" == OK* ]]; then
-                local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
-                _zacrs_parse_render_header "$header"
-                local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-                # Atomic: clear all old rows + draw new popup (cursor hidden)
-                local tty_ok=1
-                {
-                    printf '\e[?25l'
-                    if (( _prev_vis )); then
-                        printf '\e7'
-                        local _oi
-                        for (( _oi = 0; _oi < _prev_height; _oi++ )); do
-                            printf '\e[%d;1H\e[2K' $(( _prev_row + _oi + 1 ))
-                        done
-                        printf '\e8'
-                    fi
-                    if (( tty_len > 0 )); then
-                        if ! sysread -i $fd -o 1 -c $tty_len; then
-                            tty_ok=0
-                        fi
-                    fi
-                    printf '\e[?25h'
-                } > /dev/tty
-                if (( tty_ok )); then
-                    _zacrs_popup_visible=1
-                    _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
-                else
-                    _zacrs_clear_popup
-                    _zacrs_mark_daemon_unavailable
+        local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$prefix" "$candidates_str" "$selected"
+        local _send_rc=$?
+        if (( _send_rc == 0 )); then
+            local fd=$_zacrs_send_render_fd
+            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
+            # Atomic: clear all old rows + draw new popup (cursor hidden)
+            local tty_ok=1
+            {
+                printf '\e[?25l'
+                if (( _prev_vis )); then
+                    printf '\e7'
+                    local _oi
+                    for (( _oi = 0; _oi < _prev_height; _oi++ )); do
+                        printf '\e[%d;1H\e[2K' $(( _prev_row + _oi + 1 ))
+                    done
+                    printf '\e8'
                 fi
-                exec {fd}<&-
-                return
-            elif [[ "$header" == EMPTY ]]; then
-                _zacrs_clear_popup
-                exec {fd}<&-
-                return
-            elif [[ "$header" == ERROR* ]]; then
+                if (( tty_len > 0 )); then
+                    if ! sysread -i $fd -o 1 -c $tty_len; then
+                        tty_ok=0
+                    fi
+                fi
+                printf '\e[?25h'
+            } > /dev/tty
+            if (( tty_ok )); then
+                _zacrs_popup_visible=1
+                _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
+            else
                 _zacrs_clear_popup
                 _zacrs_mark_daemon_unavailable
             fi
             exec {fd}<&-
+            return
+        elif (( _send_rc == 1 )); then
+            _zacrs_clear_popup
+            return
         fi
-        # Socket connect failed, daemon may have died
+        # _send_rc == 2: daemon unavailable, fall through to subprocess
         _zacrs_clear_popup
-        _zacrs_mark_daemon_unavailable
     fi
 
     # Fallback: subprocess (clear stale popup before spawning)
@@ -617,72 +634,56 @@ _zacrs_cycle_apply_selected() {
 }
 
 # Render popup with the current cycle selection highlighted.
-# Uses daemon zsocket path directly to clear old popup + draw new popup
-# atomically (in one output group) — prevents ghost borders and flicker.
-# NOTE: daemon protocol mirrors _zacrs_render — keep both in sync.
+# Uses daemon path to clear old popup + draw new popup atomically
+# (in one output group) — prevents ghost borders and flicker.
 _zacrs_cycle_render_selected() {
     local cursor_row=$_zacrs_cycle_cursor_row cursor_col=$_zacrs_cycle_cursor_col
 
     local _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height _prev_vis=$_zacrs_popup_visible
 
     if (( _zacrs_daemon_available )); then
-        local fd
-        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
-            fd=$REPLY
-            local render_cmd="render $cursor_row $cursor_col $COLUMNS $LINES selected=$_zacrs_cycle_index"
-            print -u $fd -- "$render_cmd"
-            printf '%s\n' "$_zacrs_cycle_prefix" >&$fd
-            printf '%s\n' "$_zacrs_cycle_candidates" >&$fd
-            print -u $fd "END"
-
-            local header
-            IFS= read -r -u $fd header
-            if [[ "$header" == OK* ]]; then
-                _zacrs_parse_render_header "$header"
-                local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-
-                # Atomic: hide cursor + selective-clear stale rows + draw new popup
-                local tty_ok=1
-                {
-                    printf '\e[?25l'
-                    if (( _prev_vis )); then
-                        printf '\e7'
-                        local _oi _row
-                        for (( _oi = 0; _oi < _prev_height; _oi++ )); do
-                            _row=$(( _prev_row + _oi ))
-                            if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
-                                printf '\e[%d;1H\e[2K' $(( _row + 1 ))
-                            fi
-                        done
-                        printf '\e8'
-                    fi
-                    if (( tty_len > 0 )); then
-                        if ! sysread -i $fd -o 1 -c $tty_len; then
-                            tty_ok=0
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$_zacrs_cycle_prefix" "$_zacrs_cycle_candidates" "$_zacrs_cycle_index"
+        local _send_rc=$?
+        if (( _send_rc == 0 )); then
+            local fd=$_zacrs_send_render_fd
+            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
+            # Atomic: hide cursor + selective-clear stale rows + draw new popup
+            local tty_ok=1
+            {
+                printf '\e[?25l'
+                if (( _prev_vis )); then
+                    printf '\e7'
+                    local _oi _row
+                    for (( _oi = 0; _oi < _prev_height; _oi++ )); do
+                        _row=$(( _prev_row + _oi ))
+                        if (( _row < _zacrs_popup_row || _row >= _zacrs_popup_row + _zacrs_popup_height )); then
+                            printf '\e[%d;1H\e[2K' $(( _row + 1 ))
                         fi
-                    fi
-                    printf '\e[?25h'
-                } > /dev/tty
-
-                if (( tty_ok )); then
-                    _zacrs_popup_visible=1
-                    _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
-                        "$_zacrs_cycle_candidates" "$cursor_col" "$reuse_token" "0"
-                else
-                    _zacrs_clear_popup
-                    _zacrs_mark_daemon_unavailable
+                    done
+                    printf '\e8'
                 fi
-                exec {fd}<&-
-                return
-            elif [[ "$header" == EMPTY ]]; then
-                # No candidates match — exit cycle immediately (no fallback needed)
-                exec {fd}<&-
-                _zacrs_cycle_exit
-                return
+                if (( tty_len > 0 )); then
+                    if ! sysread -i $fd -o 1 -c $tty_len; then
+                        tty_ok=0
+                    fi
+                fi
+                printf '\e[?25h'
+            } > /dev/tty
+            if (( tty_ok )); then
+                _zacrs_popup_visible=1
+                _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
+                    "$_zacrs_cycle_candidates" "$cursor_col" "$reuse_token" "0"
+            else
+                _zacrs_clear_popup
+                _zacrs_mark_daemon_unavailable
             fi
-            # ERROR — fall through to subprocess fallback
             exec {fd}<&-
+            return
+        elif (( _send_rc == 1 )); then
+            _zacrs_cycle_exit
+            return
         fi
+        # _send_rc == 2: daemon unavailable, fall through to subprocess
     fi
 
     # Fallback: general render path (subprocess, may have slight flicker)
