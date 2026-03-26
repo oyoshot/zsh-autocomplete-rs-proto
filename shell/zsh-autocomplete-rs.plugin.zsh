@@ -1132,7 +1132,10 @@ zle -N _zacrs_complete_interactive
 # Default: cycle mode
 bindkey '^I' _zacrs_complete_cycle
 
-# Cycle mode keymap (active only during Tab cycling)
+# Cycle-mode keymap, copied from main.  Unbound keys (including multi-byte
+# input and unrecognized escape sequences) fall through to self-insert,
+# which modifies LBUFFER.  The line-pre-redraw hook detects the LBUFFER
+# change and auto-exits cycle mode — this is intentional.
 bindkey -N _zacrs_cycle main
 bindkey -M _zacrs_cycle '^I'   _zacrs_cycle_next
 bindkey -M _zacrs_cycle '^[[Z' _zacrs_cycle_prev       # Shift-Tab
