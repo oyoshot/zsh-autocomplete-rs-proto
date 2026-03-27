@@ -690,11 +690,12 @@ impl DaemonServer {
                     break;
                 }
 
-                let action = input::parse_raw_bytes_with_shift_tab(
+                let action = input::parse_tty_bytes_with_shift_tab(
                     &key_buf,
                     &self.key_bindings,
                     shift_tab_sequence.as_deref(),
-                );
+                )
+                .unwrap_or(Action::None);
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
@@ -1269,6 +1270,36 @@ mod tests {
         drop(reader);
         drop(writer);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_utf8_key_updates_filter_instead_of_passthrough() {
+        let mut server = test_server();
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY {}", "あ".as_bytes().len()).unwrap();
+        input.extend_from_slice("あ".as_bytes());
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+        );
+
+        let output = String::from_utf8_lossy(&writer);
+        assert!(output.contains("DONE 1 "), "output was: {output}");
+        assert!(output.contains('あ'), "output was: {output}");
+        assert!(!output.contains("DONE 3"), "output was: {output}");
     }
 
     #[test]

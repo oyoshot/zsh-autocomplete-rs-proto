@@ -568,7 +568,7 @@ _zacrs_invoke_daemon() {
                 else
                     (( _i++ ))
                 fi
-                printf 'KEY %d\n%s' "${#_key}" "$_key" >&$fd
+                _zacrs_send_key_input $fd "$_key"
                 IFS= read -r -u $fd header
                 _zacrs_complete_handle_response
                 case "$_f_resp" in
@@ -593,7 +593,7 @@ _zacrs_invoke_daemon() {
             input="$REPLY"
 
             # Send to daemon
-            printf 'KEY %d\n%s' "${#input}" "$input" >&$fd
+            _zacrs_send_key_input $fd "$input"
 
             # Read response
             IFS= read -r -u $fd header
@@ -681,6 +681,39 @@ _zacrs_decode_hex_input() {
     printf '%b' "$escaped"
 }
 
+_zacrs_input_nbytes() {
+    local input="$1"
+    local hex
+    hex="$(_zacrs_encode_hex_input "$input")"
+    REPLY=$(( ${#hex} / 2 ))
+}
+
+_zacrs_utf8_sequence_len() {
+    local input="$1"
+    local hex byte
+    hex="$(_zacrs_encode_hex_input "$input")"
+    [[ ${#hex} -lt 2 ]] && return 1
+    byte=$(( 16#${hex[1,2]} ))
+    if (( byte <= 0x7f )); then
+        REPLY=1
+    elif (( byte >= 0xc0 && byte <= 0xdf )); then
+        REPLY=2
+    elif (( byte >= 0xe0 && byte <= 0xef )); then
+        REPLY=3
+    elif (( byte >= 0xf0 && byte <= 0xf7 )); then
+        REPLY=4
+    else
+        return 1
+    fi
+}
+
+_zacrs_send_key_input() {
+    local fd="$1"
+    local input="$2"
+    _zacrs_input_nbytes "$input"
+    printf 'KEY %d\n%s' "$REPLY" "$input" >&$fd
+}
+
 _zacrs_read_key_input() {
     local fd="$1"
     local input=""
@@ -690,6 +723,17 @@ _zacrs_read_key_input() {
         while sysread -i $fd -c 1 -t 0.02 extra 2>/dev/null; do
             input+="$extra"
             extra=""
+        done
+    elif _zacrs_utf8_sequence_len "$input"; then
+        local expected_len="$REPLY"
+        local input_len=0 extra=""
+        _zacrs_input_nbytes "$input"
+        input_len="$REPLY"
+        while (( input_len < expected_len )) && sysread -i $fd -c 1 -t 0.02 extra 2>/dev/null; do
+            input+="$extra"
+            extra=""
+            _zacrs_input_nbytes "$input"
+            input_len="$REPLY"
         done
     fi
     REPLY="$input"
