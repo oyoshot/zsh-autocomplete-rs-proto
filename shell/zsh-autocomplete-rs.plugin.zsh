@@ -649,10 +649,33 @@ _zacrs_invoke() {
         --cursor-row "$cursor_row" \
         --cursor-col "$cursor_col")
     local exit_code=$?
+    local passthrough_hex=""
+    local passthrough_input=""
+
+    if [[ $exit_code -eq 3 ]]; then
+        passthrough_hex="${output%%$'\t'*}"
+        if [[ "$output" == *$'\t'* ]]; then
+            output="${output#*$'\t'}"
+        else
+            output=""
+        fi
+        passthrough_input="$(_zacrs_decode_hex_input "$passthrough_hex")"
+    fi
 
     unset POSTDISPLAY
     _zacrs_apply_result "$prefix_len" "$exit_code" "$output" 1
+    [[ $exit_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
     [[ $exit_code -ne 0 ]] && zle reset-prompt
+}
+
+_zacrs_decode_hex_input() {
+    local hex="$1"
+    local escaped=""
+    local i
+    for (( i = 1; i <= ${#hex}; i += 2 )); do
+        escaped+="\\x${hex[i,i+1]}"
+    done
+    printf '%b' "$escaped"
 }
 
 # === Shared completion helpers ===

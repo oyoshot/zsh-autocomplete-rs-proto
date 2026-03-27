@@ -33,6 +33,15 @@ impl Candidate {
         format!("{}{}", self.text, suffix)
     }
 
+    pub fn text_for_dismiss_with_space(&self) -> String {
+        let text = self.text_with_suffix();
+        if text.ends_with([' ', '/']) {
+            text
+        } else {
+            format!("{text} ")
+        }
+    }
+
     pub fn parse_line(line: &str) -> Self {
         let mut parts = line.splitn(3, '\t');
         let text = parts.next().unwrap_or("").to_string();
@@ -104,5 +113,17 @@ mod tests {
     fn text_with_suffix_unknown_kind() {
         let c = Candidate::parse_line("foo\t\tother");
         assert_eq!(c.text_with_suffix(), "foo");
+    }
+
+    #[test]
+    fn text_for_dismiss_with_space_unknown_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        assert_eq!(c.text_for_dismiss_with_space(), "git ");
+    }
+
+    #[test]
+    fn text_for_dismiss_with_space_directory_keeps_slash() {
+        let c = Candidate::parse_line("src\t\tdirectory");
+        assert_eq!(c.text_for_dismiss_with_space(), "src/");
     }
 }

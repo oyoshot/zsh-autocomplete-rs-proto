@@ -18,6 +18,12 @@ pub enum Action {
     None,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOutcome {
+    Action(Action),
+    Passthrough(Vec<u8>),
+}
+
 pub fn parse_raw_bytes(bytes: &[u8], bindings: &KeyBindings) -> Action {
     match bytes {
         [0x1b, b'[', b'A'] => Action::MoveUp,
@@ -45,30 +51,49 @@ fn parse_single_byte(byte: u8, bindings: &KeyBindings) -> Action {
 }
 
 pub fn read_action(bindings: &KeyBindings) -> std::io::Result<Action> {
+    Ok(match read_action_with_passthrough(bindings)? {
+        ReadOutcome::Action(action) => action,
+        ReadOutcome::Passthrough(_) => Action::None,
+    })
+}
+
+pub fn read_action_with_passthrough(bindings: &KeyBindings) -> std::io::Result<ReadOutcome> {
     if !event::poll(Duration::from_millis(100))? {
-        return Ok(Action::None);
+        return Ok(ReadOutcome::Action(Action::None));
     }
 
     match event::read()? {
         Event::Key(KeyEvent {
             code, modifiers, ..
-        }) => Ok(match code {
-            KeyCode::BackTab => bindings.shift_tab,
-            KeyCode::Tab => bindings.tab,
-            KeyCode::Char(' ') => bindings.space,
-            KeyCode::PageDown => Action::PageDown,
-            KeyCode::PageUp => Action::PageUp,
-            KeyCode::Down => Action::MoveDown,
-            KeyCode::Up => Action::MoveUp,
-            KeyCode::Enter => bindings.enter,
-            KeyCode::Esc => Action::Cancel,
-            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Action::Cancel,
-            KeyCode::Backspace => Action::Backspace,
-            KeyCode::Char(c) => Action::TypeChar(c),
-            _ => Action::None,
-        }),
-        Event::Resize(cols, rows) => Ok(Action::Resize(cols, rows)),
-        _ => Ok(Action::None),
+        }) => Ok(parse_key_event(code, modifiers, bindings)),
+        Event::Resize(cols, rows) => Ok(ReadOutcome::Action(Action::Resize(cols, rows))),
+        _ => Ok(ReadOutcome::Action(Action::None)),
+    }
+}
+
+fn parse_key_event(code: KeyCode, modifiers: KeyModifiers, bindings: &KeyBindings) -> ReadOutcome {
+    match code {
+        KeyCode::BackTab => ReadOutcome::Action(bindings.shift_tab),
+        KeyCode::Tab => ReadOutcome::Action(bindings.tab),
+        KeyCode::Char(' ') => ReadOutcome::Action(bindings.space),
+        KeyCode::PageDown => ReadOutcome::Action(Action::PageDown),
+        KeyCode::PageUp => ReadOutcome::Action(Action::PageUp),
+        KeyCode::Down => ReadOutcome::Action(Action::MoveDown),
+        KeyCode::Up => ReadOutcome::Action(Action::MoveUp),
+        KeyCode::Enter => ReadOutcome::Action(bindings.enter),
+        KeyCode::Esc => ReadOutcome::Action(Action::Cancel),
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            ReadOutcome::Action(Action::Cancel)
+        }
+        KeyCode::Backspace => ReadOutcome::Action(Action::Backspace),
+        KeyCode::Left => ReadOutcome::Passthrough(b"\x1b[D".to_vec()),
+        KeyCode::Right => ReadOutcome::Passthrough(b"\x1b[C".to_vec()),
+        KeyCode::Home => ReadOutcome::Passthrough(b"\x1b[H".to_vec()),
+        KeyCode::End => ReadOutcome::Passthrough(b"\x1b[F".to_vec()),
+        KeyCode::Delete => ReadOutcome::Passthrough(b"\x1b[3~".to_vec()),
+        KeyCode::Insert => ReadOutcome::Passthrough(b"\x1b[2~".to_vec()),
+        KeyCode::Char(c) => ReadOutcome::Action(Action::TypeChar(c)),
+        _ => ReadOutcome::Action(Action::None),
     }
 }
 
@@ -143,5 +168,26 @@ mod tests {
         };
         assert_eq!(parse_raw_bytes(b"\r", &b), Action::MoveDown);
         assert_eq!(parse_raw_bytes(b"\t", &b), Action::Confirm);
+    }
+
+    #[test]
+    fn parse_key_event_passthroughs_cursor_keys() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_key_event(KeyCode::Left, KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1b[D".to_vec())
+        );
+        assert_eq!(
+            parse_key_event(KeyCode::Right, KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1b[C".to_vec())
+        );
+        assert_eq!(
+            parse_key_event(KeyCode::Home, KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            parse_key_event(KeyCode::End, KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1b[F".to_vec())
+        );
     }
 }

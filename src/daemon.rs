@@ -737,7 +737,8 @@ impl DaemonServer {
                     Action::DismissWithSpace => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ = writeln!(writer, "DONE 2 {}", c.text_with_suffix());
+                                let _ =
+                                    writeln!(writer, "DONE 2 {}", c.text_for_dismiss_with_space());
                             }
                             None => {
                                 let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
@@ -1265,6 +1266,42 @@ mod tests {
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_space_after_empty_kind_selection_appends_space() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
+                "git\tcommand\t\ngizmo\tcommand\t\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b" ");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
 
         drop(reader);
         drop(writer);

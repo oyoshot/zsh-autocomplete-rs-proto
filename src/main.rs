@@ -13,6 +13,16 @@ enum AppResult {
     Selected(String, String),
     DismissedWithSpace(String),
     Cancelled(Option<String>),
+    Passthrough(String, Vec<u8>),
+}
+
+fn encode_passthrough(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 fn run_complete(
@@ -46,44 +56,44 @@ fn run_complete(
     ui::render::draw(&mut guard.tty, &app, theme)?;
 
     let result = loop {
-        match input::read_action(bindings)? {
-            input::Action::MoveDown => {
+        match input::read_action_with_passthrough(bindings)? {
+            input::ReadOutcome::Action(input::Action::MoveDown) => {
                 app.move_down();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::MoveUp => {
+            input::ReadOutcome::Action(input::Action::MoveUp) => {
                 app.move_up();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::PageDown => {
+            input::ReadOutcome::Action(input::Action::PageDown) => {
                 app.page_down();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::PageUp => {
+            input::ReadOutcome::Action(input::Action::PageUp) => {
                 app.page_up();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::Resize(cols, rows) => {
+            input::ReadOutcome::Action(input::Action::Resize(cols, rows)) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 app.set_term_size(cols, rows);
                 ui::render::ensure_space(&mut guard.tty, &mut app)?;
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::Confirm => {
+            input::ReadOutcome::Action(input::Action::Confirm) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 break match app.selected_candidate() {
                     Some(c) => AppResult::Selected(c.text.clone(), c.kind.clone()),
                     None => AppResult::Cancelled(Some(app.filter_text.clone())),
                 };
             }
-            input::Action::DismissWithSpace => {
+            input::ReadOutcome::Action(input::Action::DismissWithSpace) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 break match app.selected_candidate() {
-                    Some(c) => AppResult::DismissedWithSpace(c.text_with_suffix()),
+                    Some(c) => AppResult::DismissedWithSpace(c.text_for_dismiss_with_space()),
                     None => AppResult::DismissedWithSpace(format!("{} ", app.filter_text)),
                 };
             }
-            input::Action::Cancel => {
+            input::ReadOutcome::Action(input::Action::Cancel) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 let text = if app.filter_text != app.prefix {
                     Some(app.filter_text.clone())
@@ -92,7 +102,7 @@ fn run_complete(
                 };
                 break AppResult::Cancelled(text);
             }
-            input::Action::TypeChar(c) => {
+            input::ReadOutcome::Action(input::Action::TypeChar(c)) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 app.type_char(c);
                 if app.filtered_indices.is_empty() {
@@ -100,7 +110,7 @@ fn run_complete(
                 }
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::Backspace => {
+            input::ReadOutcome::Action(input::Action::Backspace) => {
                 ui::render::clear(&mut guard.tty, &app)?;
                 if !app.backspace() {
                     break AppResult::Cancelled(None);
@@ -110,7 +120,11 @@ fn run_complete(
                 }
                 ui::render::draw(&mut guard.tty, &app, theme)?;
             }
-            input::Action::None => {}
+            input::ReadOutcome::Action(input::Action::None) => {}
+            input::ReadOutcome::Passthrough(bytes) => {
+                ui::render::clear(&mut guard.tty, &app)?;
+                break AppResult::Passthrough(app.filter_text.clone(), bytes);
+            }
         }
     };
 
@@ -135,6 +149,10 @@ fn run_complete(
             Ok(1)
         }
         AppResult::Cancelled(None) => Ok(1),
+        AppResult::Passthrough(text, bytes) => {
+            print!("{}\t{}", encode_passthrough(&bytes), text);
+            Ok(3)
+        }
     }
 }
 
