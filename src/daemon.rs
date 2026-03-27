@@ -735,7 +735,14 @@ impl DaemonServer {
                         break;
                     }
                     Action::DismissWithSpace => {
-                        let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ = writeln!(writer, "DONE 2 {}", c.text_with_suffix());
+                            }
+                            None => {
+                                let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                            }
+                        }
                         let _ = writer.flush();
                         break;
                     }
@@ -1223,6 +1230,48 @@ mod tests {
     }
 
     #[test]
+    fn handle_complete_space_after_selection_returns_selected_candidate() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
+                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"a");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b" ");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn handle_complete_unknown_key_passthroughs_filter_text() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
@@ -1313,5 +1362,4 @@ mod tests {
             "DONE 0 cargo ",
         );
     }
-
 }

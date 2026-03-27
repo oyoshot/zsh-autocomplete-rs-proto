@@ -78,7 +78,10 @@ fn run_complete(
             }
             input::Action::DismissWithSpace => {
                 ui::render::clear(&mut guard.tty, &app)?;
-                break AppResult::DismissedWithSpace(format!("{} ", app.filter_text));
+                break match app.selected_candidate() {
+                    Some(c) => AppResult::DismissedWithSpace(c.text_with_suffix()),
+                    None => AppResult::DismissedWithSpace(format!("{} ", app.filter_text)),
+                };
             }
             input::Action::Cancel => {
                 ui::render::clear(&mut guard.tty, &app)?;

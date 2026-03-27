@@ -335,37 +335,49 @@ _zacrs_clear_popup() {
 # === Apply completion result to LBUFFER ===
 
 _zacrs_apply_result() {
-    local prefix_len="$1" result_code="$2" result_text="$3"
+    local prefix_len="$1" result_code="$2" result_text="$3" execute_after_apply="${4:-0}"
     local base
+    local new_lbuffer="$LBUFFER"
     if (( prefix_len > 0 )); then
         base="${LBUFFER[1,-(prefix_len+1)]}"
     else
         base="$LBUFFER"
     fi
 
+    unset POSTDISPLAY
+
     if [[ $result_code -eq 0 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
+        new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
+        new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 3 ]]; then
-        LBUFFER="${base}${result_text}"
+        new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
-        LBUFFER="${base}${result_text}"
+        new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 1 ]]; then
         _zacrs_suppressed=0
     fi
 
+    BUFFER="${new_lbuffer}${RBUFFER}"
+    CURSOR=${#new_lbuffer}
+
     # 補完適用後 (code 0/2) に末尾がスペース/スラッシュなら
     # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
-    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$LBUFFER" == *[\ /] ]]; then
+    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$new_lbuffer" == *[\ /] ]]; then
         _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
-        _zacrs_prev_lbuffer="$LBUFFER"
+        _zacrs_prev_lbuffer="$new_lbuffer"
+    fi
+
+    if (( execute_after_apply )) && [[ $result_code -eq 0 ]]; then
+        _zacrs_reset_cache
+        zle .accept-line
+        return
     fi
 }
 
@@ -600,9 +612,9 @@ _zacrs_invoke_daemon() {
 
     exec {fd}<&-
     _zacrs_clear_popup
-    _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
+    _zacrs_apply_result "$prefix_len" "$result_code" "$result_text" 1
     [[ $result_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
-    zle reset-prompt
+    [[ $result_code -ne 0 ]] && zle reset-prompt
     return 0
 }
 
@@ -632,8 +644,8 @@ _zacrs_invoke() {
     local exit_code=$?
 
     unset POSTDISPLAY
-    _zacrs_apply_result "$prefix_len" "$exit_code" "$output"
-    zle reset-prompt
+    _zacrs_apply_result "$prefix_len" "$exit_code" "$output" 1
+    [[ $exit_code -ne 0 ]] && zle reset-prompt
 }
 
 # === Shared completion helpers ===
@@ -688,6 +700,7 @@ _zacrs_apply_single_candidate() {
     local text="${cand_line%%	*}"
     local kind="${cand_line##*	}"
     local base
+    local new_lbuffer
     local is_cmd_pos=0
     if (( prefix_len > 0 )); then
         base="${LBUFFER[1,-(prefix_len+1)]}"
@@ -695,22 +708,24 @@ _zacrs_apply_single_candidate() {
         base="$LBUFFER"
     fi
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
-    LBUFFER="${base}${text}"
+    unset POSTDISPLAY
+    new_lbuffer="${base}${text}"
     case "$kind" in
-        directory) [[ "$text" != */ ]] && LBUFFER+="/" ;;
-        command|alias|builtin|function|file) LBUFFER+=" " ;;
+        directory) [[ "$text" != */ ]] && new_lbuffer+="/" ;;
+        command|alias|builtin|function|file) new_lbuffer+=" " ;;
         "")
             if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
-                LBUFFER+=" "
+                new_lbuffer+=" "
             fi
             ;;
     esac
-    unset POSTDISPLAY
-    if [[ "$LBUFFER" == *[\ /] ]]; then
+    BUFFER="${new_lbuffer}${RBUFFER}"
+    CURSOR=${#new_lbuffer}
+    if [[ "$new_lbuffer" == *[\ /] ]]; then
         _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
-        _zacrs_prev_lbuffer="$LBUFFER"
+        _zacrs_prev_lbuffer="$new_lbuffer"
     fi
     zle reset-prompt
 }
