@@ -7,7 +7,9 @@ use termwiz::input::{InputEvent, InputParser, KeyCode, KeyEvent, Modifiers};
 use crate::config::KeyBindings;
 
 const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
-const ESC_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(20);
+// Give split ESC-prefixed sequences a bit more headroom so slower schedulers
+// don't misclassify arrow keys as a standalone Escape.
+const ESC_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(50);
 const MAX_KEY_BYTES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,7 +407,7 @@ mod tests {
         let (mut reader, mut writer) = UnixStream::pair().unwrap();
         let sender = thread::spawn(move || {
             writer.write_all(b"\x1b").unwrap();
-            thread::sleep(Duration::from_millis(5));
+            thread::sleep(ESC_SEQUENCE_TIMEOUT / 4);
             writer.write_all(b"[A").unwrap();
         });
 
