@@ -445,6 +445,7 @@ _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}"
     local passthrough_input=""
+    local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -460,7 +461,9 @@ _zacrs_invoke_daemon() {
 
     # Send complete request
     local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
+    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
     (( reuse_visible )) && [[ -n "$reuse_token" ]] && req+=" reuse_token=$reuse_token"
+    [[ -n "$shift_tab_hex" ]] && req+=" shift_tab_hex=$shift_tab_hex"
     print -u $fd -- "$req"
     printf '%s\n' "$prefix" >&$fd
     printf '%s\n' "$candidates_str" >&$fd
@@ -676,6 +679,12 @@ _zacrs_decode_hex_input() {
         escaped+="\\x${hex[i,i+1]}"
     done
     printf '%b' "$escaped"
+}
+
+_zacrs_encode_hex_input() {
+    local input="$1"
+    [[ -z "$input" ]] && return 0
+    print -rn -- "$input" | od -An -tx1 -v | tr -d ' \n'
 }
 
 # === Shared completion helpers ===

@@ -25,6 +25,18 @@ pub enum ReadOutcome {
 }
 
 pub fn parse_raw_bytes(bytes: &[u8], bindings: &KeyBindings) -> Action {
+    parse_raw_bytes_with_shift_tab(bytes, bindings, None)
+}
+
+pub fn parse_raw_bytes_with_shift_tab(
+    bytes: &[u8],
+    bindings: &KeyBindings,
+    extra_shift_tab_sequence: Option<&[u8]>,
+) -> Action {
+    if extra_shift_tab_sequence == Some(bytes) {
+        return bindings.shift_tab;
+    }
+
     match bytes {
         [0x1b, b'[', b'A'] => Action::MoveUp,
         [0x1b, b'[', b'B'] => Action::MoveDown,
@@ -254,6 +266,15 @@ mod tests {
     fn shift_tab() {
         let b = default_bindings();
         assert_eq!(parse_raw_bytes(b"\x1b[Z", &b), Action::MoveUp);
+    }
+
+    #[test]
+    fn extra_shift_tab_sequence() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_raw_bytes_with_shift_tab(b"\x1b[27;2;9~", &b, Some(b"\x1b[27;2;9~")),
+            Action::MoveUp
+        );
     }
 
     #[test]

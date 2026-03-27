@@ -32,6 +32,7 @@ struct CompleteParams {
     term_cols: u16,
     term_rows: u16,
     reuse_popup: bool,
+    shift_tab_sequence: Option<Vec<u8>>,
 }
 
 struct DaemonServer {
@@ -275,7 +276,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>]\n
+    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>] [shift_tab_hex=<hex>]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -377,6 +378,10 @@ impl DaemonServer {
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
+                let shift_tab_sequence = parts[5..]
+                    .iter()
+                    .find_map(|part| part.strip_prefix("shift_tab_hex="))
+                    .and_then(decode_hex_bytes);
                 let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "complete") {
                     Ok(v) => v,
                     Err(()) => return false,
@@ -410,6 +415,7 @@ impl DaemonServer {
                         term_cols,
                         term_rows,
                         reuse_popup,
+                        shift_tab_sequence,
                     },
                     &tsv,
                 );
@@ -646,6 +652,7 @@ impl DaemonServer {
             term_cols,
             term_rows,
             reuse_popup,
+            shift_tab_sequence,
         } = params;
 
         let (mut app, scroll_bytes) = match self.setup_session(
@@ -683,7 +690,11 @@ impl DaemonServer {
                     break;
                 }
 
-                let action = input::parse_raw_bytes(&key_buf, &self.key_bindings);
+                let action = input::parse_raw_bytes_with_shift_tab(
+                    &key_buf,
+                    &self.key_bindings,
+                    shift_tab_sequence.as_deref(),
+                );
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
@@ -800,6 +811,21 @@ fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
     let term_cols: u16 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(80);
     let term_rows: u16 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(24);
     (cursor_row, cursor_col, term_cols, term_rows)
+}
+
+fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.is_empty() || hex.len() % 2 != 0 {
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let mut index = 0;
+    while index < hex.len() {
+        let byte = u8::from_str_radix(&hex[index..index + 2], 16).ok()?;
+        bytes.push(byte);
+        index += 2;
+    }
+    Some(bytes)
 }
 
 fn read_prefix_and_tsv(
@@ -932,7 +958,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompleteParams, DaemonServer, RenderParams, read_text_line};
+    use super::{CompleteParams, DaemonServer, RenderParams, decode_hex_bytes, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -973,6 +999,16 @@ mod tests {
             socket_path: PathBuf::from("/tmp/zacrs-test.sock"),
             fuzzy: Some(FuzzyMatcher::new()),
         }
+    }
+
+    #[test]
+    fn decode_hex_bytes_parses_escape_sequences() {
+        assert_eq!(decode_hex_bytes("1b5b5a"), Some(b"\x1b[Z".to_vec()));
+        assert_eq!(
+            decode_hex_bytes("1b5b32373b323b397e"),
+            Some(b"\x1b[27;2;9~".to_vec())
+        );
+        assert_eq!(decode_hex_bytes("1b5"), None);
     }
 
     #[test]
@@ -1059,6 +1095,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
@@ -1091,6 +1128,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: true,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
@@ -1123,6 +1161,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\n",
             );
@@ -1166,6 +1205,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
@@ -1208,6 +1248,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
@@ -1247,6 +1288,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
@@ -1289,6 +1331,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\t\ngizmo\tcommand\t\n",
             );
@@ -1325,6 +1368,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
@@ -1363,6 +1407,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 &candidates_tsv,
             );
