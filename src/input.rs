@@ -10,7 +10,6 @@ const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 // Give split ESC-prefixed sequences a bit more headroom so slower schedulers
 // don't misclassify arrow keys as a standalone Escape.
 const ESC_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(50);
-const MAX_KEY_BYTES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -190,7 +189,7 @@ fn read_until_quiet<R: Read + AsRawFd>(
     bytes: &mut Vec<u8>,
     timeout: Duration,
 ) -> io::Result<()> {
-    while bytes.len() < MAX_KEY_BYTES && poll_reader(reader, timeout)? {
+    while poll_reader(reader, timeout)? {
         let Some(next) = read_single_byte(reader)? else {
             break;
         };
@@ -400,6 +399,21 @@ mod tests {
         writer.write_all(b"\x1bOH").unwrap();
 
         assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1bOH".to_vec());
+    }
+
+    #[test]
+    fn read_key_bytes_preserves_long_escape_passthrough() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let paste = b"\x1b[200~git status --short\x1b[201~";
+        assert!(paste.len() > 16);
+        let sender = thread::spawn(move || {
+            writer.write_all(b"\x1b").unwrap();
+            thread::sleep(ESC_SEQUENCE_TIMEOUT / 4);
+            writer.write_all(&paste[1..])
+        });
+
+        assert_eq!(read_key_bytes(&mut reader).unwrap(), paste.to_vec());
+        sender.join().unwrap().unwrap();
     }
 
     #[test]
