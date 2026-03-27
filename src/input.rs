@@ -43,7 +43,7 @@ fn parse_single_byte(byte: u8, bindings: &KeyBindings) -> Action {
         0x03 => Action::Cancel,
         0x08 | 0x7f => Action::Backspace,
         0x09 => bindings.tab,
-        0x0a | 0x0d => bindings.enter,
+        0x0d => bindings.enter,
         b' ' => bindings.space,
         b if b.is_ascii_graphic() => Action::TypeChar(b as char),
         _ => Action::None,
@@ -243,7 +243,7 @@ mod tests {
     fn enter_tab_space_backspace() {
         let b = default_bindings();
         assert_eq!(parse_raw_bytes(b"\r", &b), Action::Confirm);
-        assert_eq!(parse_raw_bytes(b"\n", &b), Action::Confirm);
+        assert_eq!(parse_raw_bytes(b"\n", &b), Action::None);
         assert_eq!(parse_raw_bytes(b"\t", &b), Action::MoveDown);
         assert_eq!(parse_raw_bytes(b" ", &b), Action::DismissWithSpace);
         assert_eq!(parse_raw_bytes(b"\x7f", &b), Action::Backspace);
