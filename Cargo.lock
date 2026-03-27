@@ -1223,6 +1223,7 @@ dependencies = [
  "criterion",
  "crossterm",
  "dirs",
+ "libc",
  "nucleo-matcher",
  "serde",
  "toml",

@@ -589,14 +589,8 @@ _zacrs_invoke_daemon() {
         while true; do
             # Read key bytes from /dev/tty
             local input=""
-            sysread -i $tty_rfd -c 1 input || break
-            if [[ "$input" = $'\e' ]]; then
-                local extra=""
-                while sysread -i $tty_rfd -c 1 -t 0 extra 2>/dev/null; do
-                    input+="$extra"
-                    extra=""
-                done
-            fi
+            _zacrs_read_key_input $tty_rfd || break
+            input="$REPLY"
 
             # Send to daemon
             printf 'KEY %d\n%s' "${#input}" "$input" >&$fd
@@ -679,6 +673,20 @@ _zacrs_decode_hex_input() {
         escaped+="\\x${hex[i,i+1]}"
     done
     printf '%b' "$escaped"
+}
+
+_zacrs_read_key_input() {
+    local fd="$1"
+    local input=""
+    sysread -i $fd -c 1 input || return 1
+    if [[ "$input" = $'\e' ]]; then
+        local extra=""
+        while sysread -i $fd -c 1 -t 0.02 extra 2>/dev/null; do
+            input+="$extra"
+            extra=""
+        done
+    fi
+    REPLY="$input"
 }
 
 _zacrs_encode_hex_input() {

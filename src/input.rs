@@ -1,7 +1,13 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal;
+use std::io::{self, Read};
+use std::os::fd::AsRawFd;
 use std::time::Duration;
 
 use crate::config::KeyBindings;
+
+const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
+const ESC_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(20);
+const MAX_KEY_BYTES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -22,6 +28,40 @@ pub enum Action {
 pub enum ReadOutcome {
     Action(Action),
     Passthrough(Vec<u8>),
+}
+
+pub struct TtyInputReader {
+    last_size: (u16, u16),
+}
+
+impl TtyInputReader {
+    pub fn new() -> io::Result<Self> {
+        Ok(Self {
+            last_size: terminal::size()?,
+        })
+    }
+
+    pub fn read<R: Read + AsRawFd>(
+        &mut self,
+        reader: &mut R,
+        bindings: &KeyBindings,
+    ) -> io::Result<ReadOutcome> {
+        if poll_reader(reader, INPUT_POLL_TIMEOUT)? {
+            let bytes = read_key_bytes(reader)?;
+            self.last_size = terminal::size()?;
+            return Ok(parse_tty_bytes(&bytes, bindings)
+                .map(ReadOutcome::Action)
+                .unwrap_or(ReadOutcome::Passthrough(bytes)));
+        }
+
+        match terminal::size()? {
+            size if size != self.last_size => {
+                self.last_size = size;
+                Ok(ReadOutcome::Action(Action::Resize(size.0, size.1)))
+            }
+            _ => Ok(ReadOutcome::Action(Action::None)),
+        }
+    }
 }
 
 pub fn parse_raw_bytes(bytes: &[u8], bindings: &KeyBindings) -> Action {
@@ -62,169 +102,105 @@ fn parse_single_byte(byte: u8, bindings: &KeyBindings) -> Action {
     }
 }
 
-pub fn read_action(bindings: &KeyBindings) -> std::io::Result<Action> {
-    Ok(match read_action_with_passthrough(bindings)? {
-        ReadOutcome::Action(action) => action,
-        ReadOutcome::Passthrough(_) => Action::None,
-    })
-}
-
-pub fn read_action_with_passthrough(bindings: &KeyBindings) -> std::io::Result<ReadOutcome> {
-    if !event::poll(Duration::from_millis(100))? {
-        return Ok(ReadOutcome::Action(Action::None));
-    }
-
-    match event::read()? {
-        Event::Key(KeyEvent {
-            code, modifiers, ..
-        }) => Ok(parse_key_event(code, modifiers, bindings)),
-        Event::Resize(cols, rows) => Ok(ReadOutcome::Action(Action::Resize(cols, rows))),
-        _ => Ok(ReadOutcome::Action(Action::None)),
+fn parse_tty_bytes(bytes: &[u8], bindings: &KeyBindings) -> Option<Action> {
+    match parse_raw_bytes(bytes, bindings) {
+        Action::None => parse_utf8_char(bytes).map(Action::TypeChar),
+        action => Some(action),
     }
 }
 
-fn parse_key_event(code: KeyCode, modifiers: KeyModifiers, bindings: &KeyBindings) -> ReadOutcome {
-    match code {
-        KeyCode::BackTab => ReadOutcome::Action(bindings.shift_tab),
-        KeyCode::Tab if modifiers.is_empty() => ReadOutcome::Action(bindings.tab),
-        KeyCode::Char(' ') if modifiers.is_empty() => ReadOutcome::Action(bindings.space),
-        KeyCode::PageDown if modifiers.is_empty() => ReadOutcome::Action(Action::PageDown),
-        KeyCode::PageUp if modifiers.is_empty() => ReadOutcome::Action(Action::PageUp),
-        KeyCode::Down if modifiers.is_empty() => ReadOutcome::Action(Action::MoveDown),
-        KeyCode::Up if modifiers.is_empty() => ReadOutcome::Action(Action::MoveUp),
-        KeyCode::Enter if modifiers.is_empty() => ReadOutcome::Action(bindings.enter),
-        KeyCode::Esc if modifiers.is_empty() => ReadOutcome::Action(Action::Cancel),
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            ReadOutcome::Action(Action::Cancel)
-        }
-        KeyCode::Backspace if modifiers.is_empty() => ReadOutcome::Action(Action::Backspace),
-        KeyCode::Char(c) if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT => {
-            ReadOutcome::Action(Action::TypeChar(c))
-        }
-        _ => passthrough_key_event(code, modifiers)
-            .map(ReadOutcome::Passthrough)
-            .unwrap_or(ReadOutcome::Action(Action::None)),
-    }
-}
-
-fn passthrough_key_event(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
-    match code {
-        KeyCode::Left => Some(special_key_bytes('D', 1, modifiers)),
-        KeyCode::Right => Some(special_key_bytes('C', 1, modifiers)),
-        KeyCode::Home => Some(special_key_bytes('H', 1, modifiers)),
-        KeyCode::End => Some(special_key_bytes('F', 1, modifiers)),
-        KeyCode::Delete => Some(tilde_key_bytes(3, modifiers)),
-        KeyCode::Insert => Some(tilde_key_bytes(2, modifiers)),
-        KeyCode::PageUp => Some(tilde_key_bytes(5, modifiers)),
-        KeyCode::PageDown => Some(tilde_key_bytes(6, modifiers)),
-        KeyCode::F(n) => function_key_bytes(n, modifiers),
-        KeyCode::Enter => Some(prefix_alt(b"\r".to_vec(), modifiers)),
-        KeyCode::Backspace => Some(prefix_alt(vec![0x7f], modifiers)),
-        KeyCode::Tab => Some(prefix_alt(vec![b'\t'], modifiers)),
-        KeyCode::Char(c) => char_key_bytes(c, modifiers),
-        _ => None,
-    }
-}
-
-fn char_key_bytes(c: char, modifiers: KeyModifiers) -> Option<Vec<u8>> {
-    let mut bytes = if modifiers.contains(KeyModifiers::CONTROL) {
-        vec![control_byte(c)?]
+fn parse_utf8_char(bytes: &[u8]) -> Option<char> {
+    let mut chars = std::str::from_utf8(bytes).ok()?.chars();
+    let ch = chars.next()?;
+    if chars.next().is_none() {
+        Some(ch)
     } else {
-        let mut encoded = [0u8; 4];
-        c.encode_utf8(&mut encoded).as_bytes().to_vec()
-    };
-
-    if modifiers.contains(KeyModifiers::ALT) {
-        bytes.insert(0, 0x1b);
+        None
     }
-
-    Some(bytes)
 }
 
-fn control_byte(c: char) -> Option<u8> {
-    match c {
-        '@' | ' ' => Some(0x00),
-        'a'..='z' => Some((c as u8) - b'a' + 1),
-        'A'..='Z' => Some((c as u8) - b'A' + 1),
-        '[' => Some(0x1b),
-        '\\' => Some(0x1c),
-        ']' => Some(0x1d),
-        '^' => Some(0x1e),
-        '_' => Some(0x1f),
-        '?' => Some(0x7f),
+fn read_key_bytes<R: Read + AsRawFd>(reader: &mut R) -> io::Result<Vec<u8>> {
+    let first = read_single_byte(reader)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "expected at least one key byte",
+        )
+    })?;
+
+    let mut bytes = vec![first];
+    if first == 0x1b {
+        read_until_quiet(reader, &mut bytes, ESC_SEQUENCE_TIMEOUT)?;
+    } else if let Some(expected_len) = utf8_sequence_len(first) {
+        while bytes.len() < expected_len {
+            if !poll_reader(reader, ESC_SEQUENCE_TIMEOUT)? {
+                break;
+            }
+            let Some(next) = read_single_byte(reader)? else {
+                break;
+            };
+            bytes.push(next);
+        }
+    }
+
+    Ok(bytes)
+}
+
+fn read_until_quiet<R: Read + AsRawFd>(
+    reader: &mut R,
+    bytes: &mut Vec<u8>,
+    timeout: Duration,
+) -> io::Result<()> {
+    while bytes.len() < MAX_KEY_BYTES && poll_reader(reader, timeout)? {
+        let Some(next) = read_single_byte(reader)? else {
+            break;
+        };
+        bytes.push(next);
+    }
+
+    Ok(())
+}
+
+fn read_single_byte<R: Read>(reader: &mut R) -> io::Result<Option<u8>> {
+    let mut next = [0u8; 1];
+    match reader.read(&mut next)? {
+        0 => Ok(None),
+        _ => Ok(Some(next[0])),
+    }
+}
+
+fn utf8_sequence_len(first: u8) -> Option<usize> {
+    match first {
+        0x00..=0x7f => None,
+        0xc0..=0xdf => Some(2),
+        0xe0..=0xef => Some(3),
+        0xf0..=0xf7 => Some(4),
         _ => None,
     }
 }
 
-fn prefix_alt(mut bytes: Vec<u8>, modifiers: KeyModifiers) -> Vec<u8> {
-    if modifiers.contains(KeyModifiers::ALT) {
-        bytes.insert(0, 0x1b);
-    }
-    bytes
-}
-
-fn modifier_param(modifiers: KeyModifiers) -> Option<u8> {
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
-    let alt = modifiers.contains(KeyModifiers::ALT);
-    let control = modifiers.contains(KeyModifiers::CONTROL);
-
-    match (shift, alt, control) {
-        (false, false, false) => None,
-        (true, false, false) => Some(2),
-        (false, true, false) => Some(3),
-        (true, true, false) => Some(4),
-        (false, false, true) => Some(5),
-        (true, false, true) => Some(6),
-        (false, true, true) => Some(7),
-        (true, true, true) => Some(8),
-    }
-}
-
-fn special_key_bytes(final_byte: char, base: u8, modifiers: KeyModifiers) -> Vec<u8> {
-    match modifier_param(modifiers) {
-        Some(param) => format!("\x1b[{base};{param}{final_byte}").into_bytes(),
-        None => format!("\x1b[{final_byte}").into_bytes(),
-    }
-}
-
-fn tilde_key_bytes(base: u8, modifiers: KeyModifiers) -> Vec<u8> {
-    match modifier_param(modifiers) {
-        Some(param) => format!("\x1b[{base};{param}~").into_bytes(),
-        None => format!("\x1b[{base}~").into_bytes(),
-    }
-}
-
-fn function_key_bytes(key: u8, modifiers: KeyModifiers) -> Option<Vec<u8>> {
-    let base = match key {
-        1 => ("OP", None),
-        2 => ("OQ", None),
-        3 => ("OR", None),
-        4 => ("OS", None),
-        5 => ("15", Some('~')),
-        6 => ("17", Some('~')),
-        7 => ("18", Some('~')),
-        8 => ("19", Some('~')),
-        9 => ("20", Some('~')),
-        10 => ("21", Some('~')),
-        11 => ("23", Some('~')),
-        12 => ("24", Some('~')),
-        _ => return None,
+fn poll_reader<R: AsRawFd>(reader: &R, timeout: Duration) -> io::Result<bool> {
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    let mut pollfd = libc::pollfd {
+        fd: reader.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
     };
 
-    let bytes = match (base.1, modifier_param(modifiers)) {
-        (None, None) => format!("\x1b{}", base.0),
-        (None, Some(param)) => format!("\x1b[1;{param}{}", &base.0[1..]),
-        (Some(final_byte), None) => format!("\x1b[{}{final_byte}", base.0),
-        (Some(final_byte), Some(param)) => format!("\x1b[{};{param}{final_byte}", base.0),
-    };
+    let ready = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+    if ready < 0 {
+        return Err(io::Error::last_os_error());
+    }
 
-    Some(bytes.into_bytes())
+    Ok(ready > 0 && (pollfd.revents & libc::POLLIN) != 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::KeyBindings;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    use std::thread;
 
     fn default_bindings() -> KeyBindings {
         KeyBindings::default()
@@ -304,58 +280,40 @@ mod tests {
     }
 
     #[test]
-    fn parse_key_event_passthroughs_cursor_keys() {
+    fn parse_tty_bytes_handles_utf8_chars() {
         let b = default_bindings();
         assert_eq!(
-            parse_key_event(KeyCode::Left, KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1b[D".to_vec())
-        );
-        assert_eq!(
-            parse_key_event(KeyCode::Right, KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1b[C".to_vec())
-        );
-        assert_eq!(
-            parse_key_event(KeyCode::Home, KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1b[H".to_vec())
-        );
-        assert_eq!(
-            parse_key_event(KeyCode::End, KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1b[F".to_vec())
+            parse_tty_bytes("あ".as_bytes(), &b),
+            Some(Action::TypeChar('あ'))
         );
     }
 
     #[test]
-    fn parse_key_event_passthroughs_control_chars() {
-        let b = default_bindings();
-        assert_eq!(
-            parse_key_event(KeyCode::Char('a'), KeyModifiers::CONTROL, &b),
-            ReadOutcome::Passthrough(vec![0x01])
-        );
-        assert_eq!(
-            parse_key_event(KeyCode::Char('e'), KeyModifiers::CONTROL, &b),
-            ReadOutcome::Passthrough(vec![0x05])
-        );
+    fn read_key_bytes_preserves_terminal_escape_sequences() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"\x1bOH").unwrap();
+
+        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1bOH".to_vec());
     }
 
     #[test]
-    fn parse_key_event_passthroughs_alt_chars() {
-        let b = default_bindings();
-        assert_eq!(
-            parse_key_event(KeyCode::Char('f'), KeyModifiers::ALT, &b),
-            ReadOutcome::Passthrough(b"\x1bf".to_vec())
-        );
+    fn read_key_bytes_waits_for_split_escape_sequences() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let sender = thread::spawn(move || {
+            writer.write_all(b"\x1b").unwrap();
+            thread::sleep(Duration::from_millis(5));
+            writer.write_all(b"[A").unwrap();
+        });
+
+        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1b[A".to_vec());
+        sender.join().unwrap();
     }
 
     #[test]
-    fn parse_key_event_passthroughs_function_keys() {
-        let b = default_bindings();
-        assert_eq!(
-            parse_key_event(KeyCode::F(1), KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1bOP".to_vec())
-        );
-        assert_eq!(
-            parse_key_event(KeyCode::F(5), KeyModifiers::NONE, &b),
-            ReadOutcome::Passthrough(b"\x1b[15~".to_vec())
-        );
+    fn read_key_bytes_keeps_standalone_escape() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"\x1b").unwrap();
+
+        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1b".to_vec());
     }
 }

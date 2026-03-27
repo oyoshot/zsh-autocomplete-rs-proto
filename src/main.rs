@@ -54,9 +54,10 @@ fn run_complete(
     ui::render::ensure_space(&mut guard.tty, &mut app)?;
     app.select_first();
     ui::render::draw(&mut guard.tty, &app, theme)?;
+    let mut input_reader = input::TtyInputReader::new()?;
 
     let result = loop {
-        match input::read_action_with_passthrough(bindings)? {
+        match input_reader.read(&mut guard.tty, bindings)? {
             input::ReadOutcome::Action(input::Action::MoveDown) => {
                 app.move_down();
                 ui::render::draw(&mut guard.tty, &app, theme)?;
