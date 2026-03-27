@@ -970,7 +970,7 @@ mod tests {
     fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
+        assert!(header.starts_with("FRAME "), "header was: {header:?}");
 
         let tty_len = header
             .split_whitespace()
@@ -1000,6 +1000,44 @@ mod tests {
             socket_path: PathBuf::from("/tmp/zacrs-test.sock"),
             fuzzy: Some(FuzzyMatcher::new()),
         }
+    }
+
+    fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let prefix = prefix.to_string();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix,
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, key);
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
     }
 
     #[test]
@@ -1384,6 +1422,18 @@ mod tests {
 
     #[test]
     fn handle_complete_unknown_key_passthroughs_filter_text() {
+        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 gi");
+    }
+
+    #[test]
+    fn handle_complete_ctrl_bindings_passthrough_filter_text() {
+        for key in [b"\x01".as_slice(), b"\x05", b"\x0b"] {
+            assert_passthrough_key("gi", key, "DONE 3 gi");
+        }
+    }
+
+    #[test]
+    fn handle_complete_ctrl_j_passthrough_does_not_inject_newline() {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut server = test_server();
@@ -1409,11 +1459,18 @@ mod tests {
         let mut reader = BufReader::new(client_stream);
 
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"\x1b[D");
+        send_key(&mut writer, b"\n");
 
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
-        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 3 gi");
+        assert_eq!(done, "DONE 3 gi\n");
+
+        let mut extra = String::new();
+        reader.read_line(&mut extra).unwrap();
+        assert!(
+            extra.is_empty(),
+            "unexpected extra protocol line: {extra:?}"
+        );
 
         drop(reader);
         drop(writer);
