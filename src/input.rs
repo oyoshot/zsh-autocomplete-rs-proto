@@ -114,6 +114,7 @@ fn parse_input_event(bytes: &[u8]) -> Option<InputEvent> {
 fn map_input_event_to_action(event: InputEvent, bindings: &KeyBindings) -> Option<Action> {
     match event {
         InputEvent::Key(key) => map_key_event_to_action(key, bindings),
+        // Let paste and other non-key events fall back to zsh unchanged.
         _ => None,
     }
 }
@@ -344,6 +345,27 @@ mod tests {
     fn parse_tty_bytes_leaves_ctrl_j_for_passthrough() {
         let b = default_bindings();
         assert_eq!(parse_tty_bytes_with_shift_tab(b"\n", &b, None), None);
+    }
+
+    #[test]
+    fn alt_modified_chars_passthrough() {
+        let b = default_bindings();
+        let event = InputEvent::Key(KeyEvent {
+            key: KeyCode::Char('f'),
+            modifiers: Modifiers::ALT,
+        });
+
+        assert_eq!(map_input_event_to_action(event, &b), None);
+    }
+
+    #[test]
+    fn paste_events_passthrough() {
+        let b = default_bindings();
+
+        assert_eq!(
+            map_input_event_to_action(InputEvent::Paste("git status".to_string()), &b),
+            None
+        );
     }
 
     #[test]
