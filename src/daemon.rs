@@ -814,7 +814,7 @@ fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
 }
 
 fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || hex.len() % 2 != 0 {
+    if hex.is_empty() || !hex.len().is_multiple_of(2) {
         return None;
     }
 
