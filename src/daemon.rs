@@ -1314,7 +1314,7 @@ mod tests {
     fn handle_complete_utf8_key_updates_filter_instead_of_passthrough() {
         let mut server = test_server();
         let mut input = Vec::new();
-        writeln!(&mut input, "KEY {}", "あ".as_bytes().len()).unwrap();
+        writeln!(&mut input, "KEY {}", "あ".len()).unwrap();
         input.extend_from_slice("あ".as_bytes());
 
         let mut reader = BufReader::new(Cursor::new(input));
