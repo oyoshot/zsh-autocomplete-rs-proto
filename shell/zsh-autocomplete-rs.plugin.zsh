@@ -48,16 +48,12 @@ typeset -gi _zacrs_send_render_fd=0
 
 # Cycle mode state
 typeset -gi _zacrs_cycle_active=0
-typeset -gi _zacrs_cycle_index=0
 typeset -g  _zacrs_cycle_original_lbuffer=""
 typeset -g  _zacrs_cycle_prefix=""
 typeset -gi _zacrs_cycle_prefix_len=0
 typeset -g  _zacrs_cycle_candidates=""
 typeset -g  _zacrs_cycle_prev_keymap=""
-typeset -gi _zacrs_cycle_filtered_count=0
-typeset -gi _zacrs_cycle_selected_original_idx=-1
-typeset -gi _zacrs_cycle_cursor_row=0
-typeset -gi _zacrs_cycle_cursor_col=0
+typeset -gi _zacrs_cycle_fd=0
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_lbuffer=""
@@ -156,14 +152,11 @@ fi
 
 # Parse an "OK key=val ... <tty_len>" header into globals.
 # Sets: _zacrs_popup_row, _zacrs_popup_height, _zacrs_popup_cursor_row,
-#        _zacrs_cycle_filtered_count, _zacrs_cycle_selected_original_idx,
 #        _zacrs_parsed_reuse_token, _zacrs_parsed_tty_len
 _zacrs_parse_render_header() {
     local header="$1"
     _zacrs_parsed_reuse_token=""
     _zacrs_parsed_tty_len=0
-    _zacrs_cycle_filtered_count=0
-    _zacrs_cycle_selected_original_idx=-1
     local token
     for token in ${(s: :)header}; do
         local key="${token%%=*}" val="${token#*=}"
@@ -173,8 +166,6 @@ _zacrs_parse_render_header() {
             popup_height)           _zacrs_popup_height=$val ;;
             cursor_row)             _zacrs_popup_cursor_row=$val ;;
             reuse_token)            _zacrs_parsed_reuse_token=$val ;;
-            filtered_count)         _zacrs_cycle_filtered_count=$val ;;
-            selected_original_idx)  _zacrs_cycle_selected_original_idx=$val ;;
             tty_len)                _zacrs_parsed_tty_len=$val ;;
         esac
     done
@@ -642,126 +633,130 @@ _zacrs_invoke() {
     zle reset-prompt
 }
 
-# === Cycle mode helpers ===
+# === Cycle mode helpers (daemon-driven) ===
 
-# Exit cycle mode and restore normal keymap
-_zacrs_cycle_exit() {
+# Force-exit cycle mode: close daemon fd, restore keymap and LBUFFER.
+# Used on daemon read failure or unexpected responses.
+_zacrs_cycle_force_exit() {
+    exec {_zacrs_cycle_fd}<&- 2>/dev/null
     _zacrs_cycle_active=0
     zle -K "$_zacrs_cycle_prev_keymap"
+    LBUFFER="$_zacrs_cycle_original_lbuffer"
     _zacrs_clear_popup
     unset POSTDISPLAY
     _zacrs_prev_lbuffer="$LBUFFER"
-    # Release potentially large strings
     _zacrs_cycle_candidates=""
     _zacrs_cycle_prefix=""
     _zacrs_cycle_original_lbuffer=""
 }
 
-# Apply the selected candidate text to LBUFFER.
-# NOTE: selected_original_idx is the Rust-side index into all_candidates[],
-# which corresponds 1:1 with the shell cands array (same order, same content).
-_zacrs_cycle_apply_selected() {
-    if (( _zacrs_cycle_selected_original_idx >= 0 )); then
-        local -a cands
-        cands=( ${(f)_zacrs_cycle_candidates} )
-        cands=( ${cands:#} )
-        local sel_line="${cands[$((_zacrs_cycle_selected_original_idx + 1))]}"
-        [[ -z "$sel_line" ]] && return
-        local sel_text="${sel_line%%	*}"
-        local base
-        if (( _zacrs_cycle_prefix_len > 0 )); then
-            base="${_zacrs_cycle_original_lbuffer[1,-(${_zacrs_cycle_prefix_len}+1)]}"
-        else
-            base="$_zacrs_cycle_original_lbuffer"
-        fi
-        LBUFFER="${base}${sel_text}"
+# Apply daemon-provided completion text to LBUFFER.
+# The daemon returns text_with_suffix() directly, so no candidate parsing needed.
+_zacrs_cycle_apply_text() {
+    local text="$1"
+    [[ -z "$text" ]] && return
+    local base
+    if (( _zacrs_cycle_prefix_len > 0 )); then
+        base="${_zacrs_cycle_original_lbuffer[1,-(${_zacrs_cycle_prefix_len}+1)]}"
+    else
+        base="$_zacrs_cycle_original_lbuffer"
     fi
+    LBUFFER="${base}${text}"
 }
 
-# Render popup with the current cycle selection highlighted.
-# Uses daemon path to clear old popup + draw new popup atomically
-# (in one output group) — prevents ghost borders and flicker.
-_zacrs_cycle_render_selected() {
-    local cursor_row=$_zacrs_cycle_cursor_row cursor_col=$_zacrs_cycle_cursor_col
+# Handle DONE response from daemon.
+# Format: "DONE <code> <text>" where code is 0-3.
+_zacrs_cycle_handle_done() {
+    local _header="$1"
 
-    local _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height _prev_vis=$_zacrs_popup_visible
+    # Parse exit code and text
+    local _rest="${_header#DONE }"
+    local _code="${_rest%%[[:space:]]*}"
+    local _text="${_rest#[0-9]## }"
+    # If no text after code (e.g. "DONE 1 "), _text equals _rest after strip
+    [[ "$_text" == "$_code" || "$_text" == "$_code " ]] && _text=""
+    # Trim trailing space from text (daemon sends "DONE 1 " with trailing space)
+    _text="${_text% }"
 
-    if (( _zacrs_daemon_available )); then
-        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$_zacrs_cycle_prefix" "$_zacrs_cycle_candidates" "$_zacrs_cycle_index"
-        local _send_rc=$?
-        if (( _send_rc == 0 )); then
-            local fd=$_zacrs_send_render_fd
-            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
-            local tty_ok=1
-            _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 1 || tty_ok=0
-            if (( tty_ok )); then
-                _zacrs_popup_visible=1
-                _zacrs_record_popup_snapshot "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
-                    "$_zacrs_cycle_candidates" "$cursor_col" "$reuse_token" "0"
-            else
-                _zacrs_clear_popup
-                _zacrs_mark_daemon_unavailable
+    # Close daemon fd and exit cycle mode
+    exec {_zacrs_cycle_fd}<&-
+    _zacrs_cycle_active=0
+    zle -K "$_zacrs_cycle_prev_keymap"
+    _zacrs_clear_popup
+    unset POSTDISPLAY
+
+    case "$_code" in
+        0)  # Confirm (accept-line)
+            _zacrs_cycle_apply_text "$_text"
+            _zacrs_reset_cache
+            zle .accept-line
+            ;;
+        1)  # Cancel
+            LBUFFER="$_zacrs_cycle_original_lbuffer"
+            _zacrs_prev_lbuffer="$LBUFFER"
+            zle reset-prompt
+            ;;
+        2)  # DismissWithSpace
+            _zacrs_cycle_apply_text "$_text"
+            LBUFFER+=" "
+            _zacrs_prev_lbuffer=""
+            _zacrs_chain_retry=1
+            zle reset-prompt
+            ;;
+        3)  # Passthrough
+            _zacrs_cycle_apply_text "$_text"
+            LBUFFER+="$KEYS"
+            _zacrs_prev_lbuffer=""
+            zle reset-prompt
+            ;;
+    esac
+    _zacrs_cycle_candidates=""
+    _zacrs_cycle_prefix=""
+    _zacrs_cycle_original_lbuffer=""
+}
+
+# === Cycle mode widget (single handler for all keys) ===
+
+# All ASCII bytes are routed here by the _zacrs_cycle keymap.
+# Sends the raw key byte(s) to the daemon and dispatches the response.
+_zacrs_cycle_handle() {
+    local _keys="$KEYS"
+    local _fd=$_zacrs_cycle_fd
+
+    # Send key to daemon
+    printf 'KEY %d\n%s' "${#_keys}" "$_keys" >&$_fd
+
+    # Read response
+    local _header
+    IFS= read -r -u $_fd _header || {
+        _zacrs_cycle_force_exit
+        return
+    }
+
+    case "$_header" in
+        FRAME*)
+            local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len
+            _zacrs_complete_parse_frame "$_header"
+            local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
+            _zacrs_popup_row=$_f_popup_row
+            _zacrs_popup_height=$_f_popup_height
+            _zacrs_daemon_draw_atomic $_fd $_f_tty_len $_prev_vis $_prev_row $_prev_height 1
+            if (( $? != 0 )); then
+                _zacrs_cycle_force_exit
+                return
             fi
-            exec {fd}<&-
-            return
-        elif (( _send_rc == 1 )); then
-            _zacrs_cycle_exit
-            return
-        fi
-        # _send_rc == 2: daemon unavailable, fall through to subprocess
-    fi
-
-    # Fallback: general render path (subprocess)
-    _zacrs_render "$_zacrs_cycle_prefix" "$_zacrs_cycle_prefix_len" \
-        "$_zacrs_cycle_candidates" "0" "$_zacrs_cycle_index"
-    if (( ! _zacrs_popup_visible )); then
-        _zacrs_cycle_exit
-    fi
-}
-
-# === Cycle mode widgets ===
-
-_zacrs_cycle_next() {
-    (( _zacrs_cycle_filtered_count <= 0 )) && return
-    _zacrs_cycle_index=$(( (_zacrs_cycle_index + 1) % _zacrs_cycle_filtered_count ))
-    _zacrs_cycle_render_selected
-}
-
-_zacrs_cycle_prev() {
-    (( _zacrs_cycle_filtered_count <= 0 )) && return
-    _zacrs_cycle_index=$(( (_zacrs_cycle_index - 1 + _zacrs_cycle_filtered_count) % _zacrs_cycle_filtered_count ))
-    _zacrs_cycle_render_selected
-}
-
-_zacrs_cycle_accept() {
-    _zacrs_cycle_apply_selected
-    _zacrs_cycle_exit
-    _zacrs_reset_cache
-    zle .accept-line
-}
-
-_zacrs_cycle_accept_space() {
-    _zacrs_cycle_apply_selected
-    LBUFFER+=" "
-    _zacrs_cycle_exit
-    # Chain: override _zacrs_cycle_exit の prev_lbuffer で line-pre-redraw に変化を検知させる
-    _zacrs_prev_lbuffer=""
-    _zacrs_chain_retry=1
-    zle reset-prompt
-}
-
-_zacrs_cycle_cancel() {
-    LBUFFER="$_zacrs_cycle_original_lbuffer"
-    _zacrs_cycle_exit
-    zle reset-prompt
-}
-
-_zacrs_cycle_passthrough() {
-    _zacrs_cycle_apply_selected
-    _zacrs_cycle_exit
-    LBUFFER+="$KEYS"
-    _zacrs_prev_lbuffer=""
-    zle reset-prompt
+            _zacrs_popup_visible=1
+            ;;
+        DONE*)
+            _zacrs_cycle_handle_done "$_header"
+            ;;
+        NONE)
+            # Assembler buffering (e.g. ESC sequence in progress); no change.
+            ;;
+        *)
+            _zacrs_cycle_force_exit
+            ;;
+    esac
 }
 
 # === Shared completion helpers ===
@@ -846,8 +841,9 @@ _zacrs_apply_single_candidate() {
 # === Tab-cycle completion widget (new default) ===
 
 _zacrs_complete_cycle() {
+    # Already in cycle mode: forward Tab as a key event to daemon
     if (( _zacrs_cycle_active )); then
-        _zacrs_cycle_next
+        _zacrs_cycle_handle
         return
     fi
 
@@ -888,30 +884,85 @@ _zacrs_complete_cycle() {
         return
     fi
 
-    # Initialize cycle mode
-    _zacrs_suppressed=0
-    _zacrs_cycle_active=1
-    _zacrs_cycle_index=0
-    _zacrs_cycle_original_lbuffer="$LBUFFER"
-    _zacrs_cycle_prefix="$prefix"
-    _zacrs_cycle_prefix_len=$prefix_len
-    _zacrs_cycle_candidates="$candidates_str"
-    _zacrs_cycle_prev_keymap="$KEYMAP"
-
-    # Cache cursor position for all cycle renders (avoids DSR flicker on Tab)
+    # Determine cursor position (reuse snapshot or query terminal)
+    local cursor_row=0 cursor_col=0
     if (( _zacrs_popup_visible )); then
-        _zacrs_cycle_cursor_row=$_zacrs_popup_snapshot_cursor_row
-        _zacrs_cycle_cursor_col=$_zacrs_popup_snapshot_cursor_col
+        cursor_row=$_zacrs_popup_snapshot_cursor_row
+        cursor_col=$_zacrs_popup_snapshot_cursor_col
     else
-        local cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
         _zacrs_cursor_stale=""
-        _zacrs_cycle_cursor_row=$cursor_row
-        _zacrs_cycle_cursor_col=$cursor_col
     fi
 
-    zle -K _zacrs_cycle
-    _zacrs_cycle_render_selected
+    # Try daemon cycle_start path
+    if (( _zacrs_daemon_available )); then
+        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
+            local fd=$REPLY
+
+            # Send cycle_start command
+            print -u $fd -- "cycle_start $cursor_row $cursor_col $COLUMNS $LINES"
+            printf '%s\n' "$prefix" >&$fd
+            printf '%s\n' "$candidates_str" >&$fd
+            print -u $fd "END"
+
+            # Read initial response
+            local header
+            IFS= read -r -u $fd header || {
+                exec {fd}<&-
+                _zacrs_mark_daemon_unavailable
+                # Fall through to interactive fallback
+                _zacrs_complete_interactive
+                return
+            }
+
+            case "$header" in
+                FRAME*)
+                    local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len
+                    _zacrs_complete_parse_frame "$header"
+                    local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
+
+                    # Enter cycle mode BEFORE drawing: the keymap switch
+                    # triggers a ZSH prompt redraw that would erase a popup
+                    # drawn earlier in the same widget.  By switching first
+                    # and forcing reset-prompt, we absorb that redraw, then
+                    # draw the popup so it is the last thing written.
+                    _zacrs_suppressed=0
+                    _zacrs_cycle_fd=$fd
+                    _zacrs_cycle_active=1
+                    _zacrs_cycle_original_lbuffer="$LBUFFER"
+                    _zacrs_cycle_prefix="$prefix"
+                    _zacrs_cycle_prefix_len=$prefix_len
+                    _zacrs_cycle_candidates="$candidates_str"
+                    _zacrs_cycle_prev_keymap="$KEYMAP"
+                    zle -K _zacrs_cycle
+                    zle reset-prompt
+
+                    # Now draw the initial popup (after redraw absorbed)
+                    _zacrs_daemon_draw_atomic $fd $_f_tty_len $_prev_vis $_prev_row $_prev_height 0
+                    if (( $? != 0 )); then
+                        _zacrs_cycle_force_exit
+                        return
+                    fi
+                    _zacrs_popup_row=$_f_popup_row
+                    _zacrs_popup_height=$_f_popup_height
+                    _zacrs_popup_visible=1
+                    return
+                    ;;
+                DONE*)
+                    # Immediate DONE (e.g. empty candidates after filter)
+                    exec {fd}<&-
+                    ;;
+                *)
+                    exec {fd}<&-
+                    ;;
+            esac
+        else
+            _zacrs_mark_daemon_unavailable
+        fi
+    fi
+
+    # Fallback: use interactive mode
+    _zacrs_complete_interactive
 }
 
 # === Interactive completion widget (blocking mode, legacy) ===
@@ -978,7 +1029,7 @@ _zacrs_line_pre_redraw() {
     if (( _zacrs_cycle_active )); then
         # 未処理キーで LBUFFER が変わった場合、サイクルモードを強制終了
         if [[ "$LBUFFER" != "$_zacrs_cycle_original_lbuffer" ]]; then
-            _zacrs_cycle_exit
+            _zacrs_cycle_force_exit
             # fall through to normal auto-trigger flow
         else
             return
@@ -1107,7 +1158,7 @@ _zacrs_line_pre_redraw() {
 
 _zacrs_accept_line() {
     if (( _zacrs_cycle_active )); then
-        _zacrs_cycle_exit
+        _zacrs_cycle_force_exit
     else
         _zacrs_clear_popup
         _zacrs_prev_lbuffer="$LBUFFER"
@@ -1119,8 +1170,7 @@ zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
     if (( _zacrs_cycle_active )); then
-        LBUFFER="$_zacrs_cycle_original_lbuffer"
-        _zacrs_cycle_exit
+        _zacrs_cycle_force_exit
     else
         _zacrs_clear_popup
     fi
@@ -1134,8 +1184,7 @@ zle -N send-break _zacrs_send_break
 
 TRAPWINCH() {
     if (( _zacrs_cycle_active )); then
-        LBUFFER="$_zacrs_cycle_original_lbuffer"
-        _zacrs_cycle_exit
+        _zacrs_cycle_force_exit
     else
         _zacrs_clear_popup
     fi
@@ -1145,12 +1194,7 @@ TRAPWINCH() {
 
 # Cycle mode widgets
 zle -N _zacrs_complete_cycle
-zle -N _zacrs_cycle_next
-zle -N _zacrs_cycle_prev
-zle -N _zacrs_cycle_accept
-zle -N _zacrs_cycle_accept_space
-zle -N _zacrs_cycle_cancel
-zle -N _zacrs_cycle_passthrough
+zle -N _zacrs_cycle_handle
 
 # Interactive mode widget (legacy blocking mode)
 zle -N _zacrs_complete_interactive
@@ -1158,25 +1202,14 @@ zle -N _zacrs_complete_interactive
 # Default: cycle mode
 bindkey '^I' _zacrs_complete_cycle
 
-# Cycle-mode keymap, copied from main.  Unbound keys (including multi-byte
-# input and unrecognized escape sequences) fall through to self-insert,
-# which modifies LBUFFER.  The line-pre-redraw hook detects the LBUFFER
-# change and auto-exits cycle mode — this is intentional.
-bindkey -N _zacrs_cycle main
-bindkey -M _zacrs_cycle '^I'   _zacrs_cycle_next
-bindkey -M _zacrs_cycle '^[[Z' _zacrs_cycle_prev       # Shift-Tab
-bindkey -M _zacrs_cycle '^[[B' _zacrs_cycle_next       # Down arrow
-bindkey -M _zacrs_cycle '^[[A' _zacrs_cycle_prev       # Up arrow
-bindkey -M _zacrs_cycle '^M'   _zacrs_cycle_accept     # Enter
-bindkey -M _zacrs_cycle ' '    _zacrs_cycle_accept_space
-bindkey -M _zacrs_cycle '^['   _zacrs_cycle_cancel     # Escape
-bindkey -M _zacrs_cycle '^C'   _zacrs_cycle_cancel
-bindkey -M _zacrs_cycle '^?'   _zacrs_cycle_cancel     # DEL (Backspace)
-bindkey -M _zacrs_cycle '^H'   _zacrs_cycle_cancel     # BS (Backspace alt)
-# Printable ASCII: accept current completion and insert the character
-bindkey -M _zacrs_cycle -R '!'-'~' _zacrs_cycle_passthrough
-# Shift-Tab via terminfo (if available)
-[[ -n "$terminfo[kcbt]" ]] && bindkey -M _zacrs_cycle "$terminfo[kcbt]" _zacrs_cycle_prev
+# Cycle-mode keymap: all ASCII bytes routed to a single handler that
+# forwards raw key bytes to the daemon.  The daemon's KeyAssembler
+# reassembles multi-byte escape sequences and interprets key bindings.
+# Bytes 0x80-0xFF are NOT bound — UTF-8 continuation bytes trigger ZLE's
+# default self-insert, which changes LBUFFER.  The line-pre-redraw hook
+# detects the LBUFFER change and auto-exits cycle mode.
+bindkey -N _zacrs_cycle
+bindkey -M _zacrs_cycle -R '^@'-'^?' _zacrs_cycle_handle
 
 # Register line-pre-redraw hook (auto-trigger without key rebinding)
 autoload -Uz add-zle-hook-widget

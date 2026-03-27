@@ -275,6 +275,12 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
+    ///   cycle_start <row> <col> <cols> <rows>\n
+    ///   <prefix>\n
+    ///   <candidates_tsv lines...>\n
+    ///   END\n
+    ///   (then on the same connection: KEY <byte_count>\n<raw_key_bytes>)
+    ///
     ///   clear <popup_row> <popup_height> <cursor_row>\n
     ///   ping\n
     ///   shutdown\n
@@ -286,6 +292,12 @@ impl DaemonServer {
     /// Response format (empty/error):
     ///   EMPTY\n
     ///   ERROR <message>\n
+    ///
+    /// Cycle responses (on the persistent connection):
+    ///   FRAME popup_row=<N> popup_height=<N> cursor_row=<N> <tty_len>\n<tty_bytes>
+    ///   DONE <exit_code> <text>\n
+    ///     exit_code: 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
+    ///   NONE\n
     fn handle_text_connection(
         &mut self,
         reader: &mut BufReader<&UnixStream>,
@@ -400,6 +412,40 @@ impl DaemonServer {
                         term_rows,
                         reuse_popup,
                     },
+                    &tsv,
+                );
+                false
+            }
+            "cycle_start" if parts.len() >= 5 => {
+                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
+                let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "cycle_start") {
+                    Ok(v) => v,
+                    Err(()) => return false,
+                };
+
+                let _span = info_span!(
+                    "cycle_start",
+                    protocol = "text",
+                    prefix_len = prefix.len(),
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    payload_bytes = tsv.len()
+                )
+                .entered();
+
+                use std::time::Duration;
+                stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
+
+                self.handle_cycle(
+                    reader,
+                    &mut writer,
+                    prefix,
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
                     &tsv,
                 );
                 false
@@ -568,6 +614,59 @@ impl DaemonServer {
         }
     }
 
+    /// Common session initialization for `handle_complete` and `handle_cycle`.
+    ///
+    /// Parses candidates, creates `App`, filters, caps viewport, and calls `select_first()`.
+    /// Returns `None` if an early exit was needed (empty candidates, no matches, etc.),
+    /// in which case a `DONE 1` response has already been sent.
+    #[allow(clippy::too_many_arguments)]
+    fn setup_session(
+        &mut self,
+        writer: &mut io::BufWriter<&UnixStream>,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        tsv: &str,
+    ) -> Option<(App, Vec<u8>)> {
+        let candidates: Vec<Candidate> = tsv
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(Candidate::parse_line)
+            .collect();
+
+        if candidates.is_empty() {
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return None;
+        }
+
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let mut app = App::new_with_matcher(
+            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
+        );
+
+        if app.filtered_indices.is_empty() {
+            self.fuzzy = Some(app.take_fuzzy());
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return None;
+        }
+
+        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+
+        if app.max_visible == 0 {
+            self.fuzzy = Some(app.take_fuzzy());
+            let _ = writeln!(writer, "DONE 1 ");
+            let _ = writer.flush();
+            return None;
+        }
+
+        app.select_first();
+        Some((app, scroll_bytes))
+    }
+
     fn handle_complete(
         &mut self,
         reader: &mut BufReader<&UnixStream>,
@@ -584,45 +683,18 @@ impl DaemonServer {
             reuse_popup,
         } = params;
 
-        let candidates: Vec<Candidate> = tsv
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(Candidate::parse_line)
-            .collect();
-
-        if candidates.is_empty() {
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
-            return;
-        }
-
-        let fuzzy = self.fuzzy.take().unwrap_or_default();
-        let mut app = App::new_with_matcher(
-            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
-        );
-
-        if app.filtered_indices.is_empty() {
-            self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
-            return;
-        }
-
-        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
-
-        if app.max_visible == 0 {
-            self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
-            return;
-        }
-
-        app.select_first();
+        let (mut app, scroll_bytes) = match self.setup_session(
+            writer, prefix, cursor_row, cursor_col, term_cols, term_rows, tsv,
+        ) {
+            Some(v) => v,
+            None => return,
+        };
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
-        let initial_frame_result = self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
-
-        if initial_frame_result.is_err() {
+        if self
+            .send_frame(writer, &app, &scroll_bytes, reuse_fast_path)
+            .is_err()
+        {
             self.fuzzy = Some(app.take_fuzzy());
             return;
         }
@@ -650,13 +722,7 @@ impl DaemonServer {
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
-                        match action {
-                            Action::MoveDown => app.move_down(),
-                            Action::MoveUp => app.move_up(),
-                            Action::PageDown => app.page_down(),
-                            Action::PageUp => app.page_up(),
-                            _ => unreachable!(),
-                        }
+                        apply_navigation(&mut app, action);
                         if self.send_frame(writer, &app, &[], false).is_err() {
                             break;
                         }
@@ -733,6 +799,148 @@ impl DaemonServer {
         self.fuzzy = Some(app.take_fuzzy());
     }
 
+    /// Cycle-mode session: the daemon owns selection state and interprets keys
+    /// byte-by-byte via [`input::KeyAssembler`].
+    ///
+    /// Unlike `handle_complete`, cycle mode does NOT support inline typing to
+    /// narrow candidates. Printable characters trigger a "passthrough" exit
+    /// (`DONE 3`) so the shell can insert the character after applying the
+    /// current selection.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_cycle(
+        &mut self,
+        reader: &mut BufReader<&UnixStream>,
+        writer: &mut io::BufWriter<&UnixStream>,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        tsv: &str,
+    ) {
+        let (mut app, scroll_bytes) = match self.setup_session(
+            writer, prefix, cursor_row, cursor_col, term_cols, term_rows, tsv,
+        ) {
+            Some(v) => v,
+            None => return,
+        };
+
+        if self.send_frame(writer, &app, &scroll_bytes, false).is_err() {
+            self.fuzzy = Some(app.take_fuzzy());
+            return;
+        }
+
+        let mut assembler = input::KeyAssembler::new();
+        let mut msg_line = String::new();
+        let mut key_buf = Vec::with_capacity(16);
+        let mut pending_actions: Vec<Action> = Vec::with_capacity(2);
+
+        'outer: loop {
+            msg_line.clear();
+            if reader.read_line(&mut msg_line).is_err() || msg_line.is_empty() {
+                break;
+            }
+            let msg_line = msg_line.trim_end();
+
+            if let Some(len_str) = msg_line.strip_prefix("KEY ") {
+                let byte_count: usize = len_str.parse().unwrap_or(0);
+                if byte_count == 0 || byte_count > 16 {
+                    let _ = writeln!(writer, "NONE");
+                    let _ = writer.flush();
+                    continue;
+                }
+                key_buf.resize(byte_count, 0);
+                if io::Read::read_exact(reader, &mut key_buf).is_err() {
+                    break;
+                }
+
+                // ESC resolution can produce 2 actions from a single byte.
+                pending_actions.clear();
+                for &byte in &key_buf {
+                    match assembler.feed(byte, &self.key_bindings) {
+                        input::FeedResult::None => {}
+                        input::FeedResult::One(a) => pending_actions.push(a),
+                        input::FeedResult::Two(a, b) => {
+                            pending_actions.push(a);
+                            pending_actions.push(b);
+                        }
+                    }
+                }
+
+                if pending_actions.is_empty() {
+                    // Assembler is buffering (e.g. ESC or CSI prefix).
+                    // Must respond so the shell's blocking read unblocks.
+                    let _ = writeln!(writer, "NONE");
+                    let _ = writer.flush();
+                    continue;
+                }
+
+                for action in &pending_actions {
+                    match action {
+                        Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+                            apply_navigation(&mut app, *action);
+                            if self.send_frame(writer, &app, &[], false).is_err() {
+                                break 'outer;
+                            }
+                        }
+                        Action::Confirm => {
+                            match app.selected_candidate() {
+                                Some(c) => {
+                                    let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                                }
+                                None => {
+                                    let _ = writeln!(writer, "DONE 1 ");
+                                }
+                            }
+                            let _ = writer.flush();
+                            break 'outer;
+                        }
+                        Action::DismissWithSpace => {
+                            match app.selected_candidate() {
+                                Some(c) => {
+                                    let _ = writeln!(writer, "DONE 2 {}", c.text_with_suffix());
+                                }
+                                None => {
+                                    let _ = writeln!(writer, "DONE 2 {}", app.filter_text);
+                                }
+                            }
+                            let _ = writer.flush();
+                            break 'outer;
+                        }
+                        Action::Cancel | Action::Backspace => {
+                            let _ = writeln!(writer, "DONE 1 ");
+                            let _ = writer.flush();
+                            break 'outer;
+                        }
+                        Action::TypeChar(_) => {
+                            // Passthrough: confirm current selection, let shell
+                            // append the typed character.
+                            match app.selected_candidate() {
+                                Some(c) => {
+                                    let _ = writeln!(writer, "DONE 3 {}", c.text_with_suffix());
+                                }
+                                None => {
+                                    let _ = writeln!(writer, "DONE 3 ");
+                                }
+                            }
+                            let _ = writer.flush();
+                            break 'outer;
+                        }
+                        Action::Resize(_, _) | Action::None => {
+                            let _ = writeln!(writer, "NONE");
+                            let _ = writer.flush();
+                        }
+                    }
+                }
+            } else {
+                let _ = writeln!(writer, "NONE");
+                let _ = writer.flush();
+            }
+        }
+
+        self.fuzzy = Some(app.take_fuzzy());
+    }
+
     fn handle_clear(&self, popup_row: u16, popup_height: u16, cursor_row: u16) -> Response {
         match ui::render::clear_rect_to_bytes(popup_row, popup_height, cursor_row) {
             Ok(tty_bytes) => {
@@ -785,6 +993,16 @@ fn read_prefix_and_tsv(
 
 /// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
 /// bytes needed to make room for the popup below the cursor.
+fn apply_navigation(app: &mut App, action: Action) {
+    match action {
+        Action::MoveDown => app.move_down(),
+        Action::MoveUp => app.move_up(),
+        Action::PageDown => app.page_down(),
+        Action::PageUp => app.page_up(),
+        _ => {}
+    }
+}
+
 fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
     let max_popup_height = term_rows.saturating_sub(1);
     if app.max_visible as u16 + 2 > max_popup_height {
@@ -1229,5 +1447,198 @@ mod tests {
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
         );
+    }
+
+    // --- handle_cycle tests ---
+
+    /// Spawn handle_cycle on the server side and return (writer, reader) for the client.
+    fn spawn_cycle(
+        prefix: &str,
+        candidates_tsv: &str,
+    ) -> (UnixStream, BufReader<UnixStream>, thread::JoinHandle<()>) {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let prefix = prefix.to_string();
+        let tsv = candidates_tsv.to_string();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_cycle(&mut reader, &mut writer, prefix, 5, 2, 80, 24, &tsv);
+        });
+        let writer = client_stream.try_clone().unwrap();
+        let reader = BufReader::new(client_stream);
+        (writer, reader, handle)
+    }
+
+    fn read_done_line(reader: &mut BufReader<UnixStream>) -> String {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        line.trim_end_matches('\n').to_string()
+    }
+
+    #[test]
+    fn handle_cycle_sends_initial_frame() {
+        let (writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let (header, _) = read_frame(&mut reader);
+        assert!(header.starts_with("FRAME "));
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_tab_moves_selection() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader); // initial
+        send_key(&mut writer, b"\t");
+        let (header, _) = read_frame(&mut reader);
+        assert!(header.starts_with("FRAME "));
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_enter_confirms() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\r");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 0 git ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_escape_cancels() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        // ESC alone: assembler buffers, daemon responds NONE
+        send_key(&mut writer, b"\x1b");
+        let none = read_done_line(&mut reader);
+        assert_eq!(none, "NONE");
+
+        // Next non-bracket byte resolves ESC as Cancel + TypeChar.
+        // Cancel is processed first, ending the session.
+        send_key(&mut writer, b"x");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 1 ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_space_dismisses() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b" ");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 2 git ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_printable_passthrough() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"a");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 3 git ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_backspace_cancels() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\x7f");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 1 ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_arrow_up_moves_selection() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        // Arrow Up = ESC [ A as three separate KEY messages (single byte each)
+        send_key(&mut writer, b"\x1b");
+        // Assembler buffers ESC, daemon responds NONE
+        let mut none_line = String::new();
+        reader.read_line(&mut none_line).unwrap();
+        assert_eq!(none_line.trim(), "NONE");
+
+        send_key(&mut writer, b"[");
+        let mut none_line2 = String::new();
+        reader.read_line(&mut none_line2).unwrap();
+        assert_eq!(none_line2.trim(), "NONE");
+
+        send_key(&mut writer, b"A");
+        let (header, _) = read_frame(&mut reader);
+        assert!(header.starts_with("FRAME "));
+
+        // Now confirm to verify selection moved (should be gizmo, wrapped from first)
+        send_key(&mut writer, b"\r");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 0 gizmo ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_esc_then_non_bracket_cancels() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        // ESC alone
+        send_key(&mut writer, b"\x1b");
+        let mut none_line = String::new();
+        reader.read_line(&mut none_line).unwrap();
+        assert_eq!(none_line.trim(), "NONE");
+
+        // Non-bracket: assembler produces Two(Cancel, TypeChar('O'))
+        // Cancel is processed first, session ends.
+        send_key(&mut writer, b"O");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 1 ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_cycle_wraps_around() {
+        let (mut writer, mut reader, handle) =
+            spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
+        let _ = read_frame(&mut reader);
+        // Tab twice to wrap (2 candidates: index 0 -> 1 -> 0)
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
+        // Should be back at first candidate (git)
+        send_key(&mut writer, b"\r");
+        let done = read_done_line(&mut reader);
+        assert_eq!(done, "DONE 0 git ");
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
     }
 }
