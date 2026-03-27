@@ -23,7 +23,7 @@ pub enum Request {
         term_cols: u16,
         term_rows: u16,
         candidates_tsv: Vec<u8>,
-        /// Pre-select the N-th filtered candidate (for Tab-cycle mode).
+        /// Pre-select the N-th filtered candidate before rendering.
         selected: Option<u16>,
     },
     Clear {
