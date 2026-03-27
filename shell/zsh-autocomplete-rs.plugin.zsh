@@ -338,6 +338,7 @@ _zacrs_apply_result() {
     local prefix_len="$1" result_code="$2" result_text="$3" execute_after_apply="${4:-0}"
     local base
     local new_lbuffer="$LBUFFER"
+    local should_chain=0
     if (( prefix_len > 0 )); then
         base="${LBUFFER[1,-(prefix_len+1)]}"
     else
@@ -365,19 +366,24 @@ _zacrs_apply_result() {
     BUFFER="${new_lbuffer}${RBUFFER}"
     CURSOR=${#new_lbuffer}
 
+    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$new_lbuffer" == *[\ /] ]]; then
+        should_chain=1
+    fi
+
+    if (( execute_after_apply )) && [[ $result_code -eq 0 ]]; then
+        _zacrs_prev_lbuffer="$new_lbuffer"
+        _zacrs_chain_retry=0
+        zle accept-line
+        return
+    fi
+
     # 補完適用後 (code 0/2) に末尾がスペース/スラッシュなら
     # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
-    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$new_lbuffer" == *[\ /] ]]; then
+    if (( should_chain )); then
         _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
         _zacrs_prev_lbuffer="$new_lbuffer"
-    fi
-
-    if (( execute_after_apply )) && [[ $result_code -eq 0 ]]; then
-        _zacrs_reset_cache
-        zle .accept-line
-        return
     fi
 }
 
@@ -914,6 +920,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_chain_retry=0
     _zacrs_reset_cache
     zle .accept-line
 }
