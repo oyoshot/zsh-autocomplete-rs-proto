@@ -373,6 +373,7 @@ _zacrs_apply_result() {
     if (( execute_after_apply )) && [[ $result_code -eq 0 ]]; then
         _zacrs_prev_lbuffer="$new_lbuffer"
         _zacrs_chain_retry=0
+        zle reset-prompt
         zle accept-line
         return
     fi
@@ -922,6 +923,7 @@ _zacrs_accept_line() {
     _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
+    zle reset-prompt
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
