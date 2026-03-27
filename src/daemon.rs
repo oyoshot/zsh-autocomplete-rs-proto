@@ -16,6 +16,8 @@ use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+const MAX_INLINE_KEY_BYTES: usize = 16;
+
 struct RenderParams {
     prefix: String,
     cursor_row: u16,
@@ -680,10 +682,18 @@ impl DaemonServer {
 
             if let Some(len_str) = msg_line.strip_prefix("KEY ") {
                 let byte_count: usize = len_str.parse().unwrap_or(0);
-                if byte_count == 0 || byte_count > 16 {
+                if byte_count == 0 {
                     let _ = writeln!(writer, "NONE");
                     let _ = writer.flush();
                     continue;
+                }
+                if byte_count > MAX_INLINE_KEY_BYTES {
+                    if drain_key_payload(reader, byte_count).is_err() {
+                        break;
+                    }
+                    let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                    let _ = writer.flush();
+                    break;
                 }
                 let mut key_buf = vec![0u8; byte_count];
                 if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
@@ -804,6 +814,25 @@ impl DaemonServer {
             }
         }
     }
+}
+
+fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<()> {
+    let mut remaining = byte_count;
+    let mut buf = [0u8; 256];
+
+    while remaining > 0 {
+        let chunk_len = remaining.min(buf.len());
+        let read = reader.read(&mut buf[..chunk_len])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short KEY payload while draining passthrough bytes",
+            ));
+        }
+        remaining -= read;
+    }
+
+    Ok(())
 }
 
 fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
@@ -1475,6 +1504,11 @@ mod tests {
         drop(reader);
         drop(writer);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_oversized_key_drains_payload_and_passthroughs() {
+        assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
     }
 
     fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
