@@ -844,8 +844,8 @@ impl DaemonServer {
         self.fuzzy = Some(app.take_fuzzy());
     }
 
-    /// Cycle-mode session: the daemon owns selection state and interprets keys
-    /// byte-by-byte via [`input::KeyAssembler`].
+    /// Cycle-mode session: the daemon owns selection state and interprets raw
+    /// key sequences via [`input::parse_raw_bytes`].
     ///
     /// Unlike `handle_complete`, cycle mode does NOT support inline typing to
     /// narrow candidates. Printable characters trigger a "passthrough" exit
@@ -875,10 +875,8 @@ impl DaemonServer {
             return;
         }
 
-        let mut assembler = input::KeyAssembler::new();
         let mut msg_line = String::new();
         let mut key_buf = Vec::with_capacity(16);
-        let mut pending_actions: Vec<Action> = Vec::with_capacity(2);
 
         'outer: loop {
             msg_line.clear();
@@ -899,82 +897,61 @@ impl DaemonServer {
                     break;
                 }
 
-                // ESC resolution can produce 2 actions from a single byte.
-                pending_actions.clear();
-                for &byte in &key_buf {
-                    match assembler.feed(byte, &self.key_bindings) {
-                        input::FeedResult::None => {}
-                        input::FeedResult::One(a) => pending_actions.push(a),
-                        input::FeedResult::Two(a, b) => {
-                            pending_actions.push(a);
-                            pending_actions.push(b);
+                let action = input::parse_raw_bytes(&key_buf, &self.key_bindings);
+
+                match action {
+                    Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+                        apply_navigation(&mut app, action);
+                        if self.send_frame(writer, &app, &[], false).is_err() {
+                            break 'outer;
                         }
                     }
-                }
-
-                if pending_actions.is_empty() {
-                    // Assembler is buffering (e.g. ESC or CSI prefix).
-                    // Must respond so the shell's blocking read unblocks.
-                    let _ = writeln!(writer, "NONE");
-                    let _ = writer.flush();
-                    continue;
-                }
-
-                for action in &pending_actions {
-                    match action {
-                        Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
-                            apply_navigation(&mut app, *action);
-                            if self.send_frame(writer, &app, &[], false).is_err() {
-                                break 'outer;
+                    Action::Confirm => {
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                            }
+                            None => {
+                                let _ = writeln!(writer, "DONE 1 ");
                             }
                         }
-                        Action::Confirm => {
-                            match app.selected_candidate() {
-                                Some(c) => {
-                                    let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
-                                }
-                                None => {
-                                    let _ = writeln!(writer, "DONE 1 ");
-                                }
+                        let _ = writer.flush();
+                        break 'outer;
+                    }
+                    Action::DismissWithSpace => {
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ = writeln!(writer, "DONE 2 {}", c.text_with_suffix());
                             }
-                            let _ = writer.flush();
-                            break 'outer;
-                        }
-                        Action::DismissWithSpace => {
-                            match app.selected_candidate() {
-                                Some(c) => {
-                                    let _ = writeln!(writer, "DONE 2 {}", c.text_with_suffix());
-                                }
-                                None => {
-                                    let _ = writeln!(writer, "DONE 2 {}", app.filter_text);
-                                }
+                            None => {
+                                let _ = writeln!(writer, "DONE 2 {}", app.filter_text);
                             }
-                            let _ = writer.flush();
-                            break 'outer;
                         }
-                        Action::Cancel | Action::Backspace => {
-                            let _ = writeln!(writer, "DONE 1 ");
-                            let _ = writer.flush();
-                            break 'outer;
-                        }
-                        Action::TypeChar(_) => {
-                            // Passthrough: confirm current selection, let shell
-                            // append the typed character.
-                            match app.selected_candidate() {
-                                Some(c) => {
-                                    let _ = writeln!(writer, "DONE 3 {}", c.text_with_suffix());
-                                }
-                                None => {
-                                    let _ = writeln!(writer, "DONE 3 ");
-                                }
+                        let _ = writer.flush();
+                        break 'outer;
+                    }
+                    Action::Cancel | Action::Backspace => {
+                        let _ = writeln!(writer, "DONE 1 ");
+                        let _ = writer.flush();
+                        break 'outer;
+                    }
+                    Action::TypeChar(_) => {
+                        // Passthrough: confirm current selection, let shell
+                        // append the typed character.
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ = writeln!(writer, "DONE 3 {}", c.text_with_suffix());
                             }
-                            let _ = writer.flush();
-                            break 'outer;
+                            None => {
+                                let _ = writeln!(writer, "DONE 3 ");
+                            }
                         }
-                        Action::Resize(_, _) | Action::None => {
-                            let _ = writeln!(writer, "NONE");
-                            let _ = writer.flush();
-                        }
+                        let _ = writer.flush();
+                        break 'outer;
+                    }
+                    Action::Resize(_, _) | Action::None => {
+                        let _ = writeln!(writer, "NONE");
+                        let _ = writer.flush();
                     }
                 }
             } else {
@@ -1563,14 +1540,7 @@ mod tests {
         let (mut writer, mut reader, handle) =
             spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
         let _ = read_frame(&mut reader);
-        // ESC alone: assembler buffers, daemon responds NONE
         send_key(&mut writer, b"\x1b");
-        let none = read_done_line(&mut reader);
-        assert_eq!(none, "NONE");
-
-        // Next non-bracket byte resolves ESC as Cancel + TypeChar.
-        // Cancel is processed first, ending the session.
-        send_key(&mut writer, b"x");
         let done = read_done_line(&mut reader);
         assert_eq!(done, "DONE 1 ");
         drop(reader);
@@ -1622,19 +1592,7 @@ mod tests {
         let (mut writer, mut reader, handle) =
             spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
         let _ = read_frame(&mut reader);
-        // Arrow Up = ESC [ A as three separate KEY messages (single byte each)
-        send_key(&mut writer, b"\x1b");
-        // Assembler buffers ESC, daemon responds NONE
-        let mut none_line = String::new();
-        reader.read_line(&mut none_line).unwrap();
-        assert_eq!(none_line.trim(), "NONE");
-
-        send_key(&mut writer, b"[");
-        let mut none_line2 = String::new();
-        reader.read_line(&mut none_line2).unwrap();
-        assert_eq!(none_line2.trim(), "NONE");
-
-        send_key(&mut writer, b"A");
+        send_key(&mut writer, b"\x1b[A");
         let (header, _) = read_frame(&mut reader);
         assert!(header.starts_with("FRAME "));
 
@@ -1652,15 +1610,7 @@ mod tests {
         let (mut writer, mut reader, handle) =
             spawn_cycle("gi", "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n");
         let _ = read_frame(&mut reader);
-        // ESC alone
         send_key(&mut writer, b"\x1b");
-        let mut none_line = String::new();
-        reader.read_line(&mut none_line).unwrap();
-        assert_eq!(none_line.trim(), "NONE");
-
-        // Non-bracket: assembler produces Two(Cancel, TypeChar('O'))
-        // Cancel is processed first, session ends.
-        send_key(&mut writer, b"O");
         let done = read_done_line(&mut reader);
         assert_eq!(done, "DONE 1 ");
         drop(reader);

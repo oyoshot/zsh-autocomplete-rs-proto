@@ -1271,14 +1271,27 @@ zle -N _zacrs_complete_interactive
 # Default: cycle mode
 bindkey '^I' _zacrs_complete_cycle
 
-# Cycle-mode keymap: all ASCII bytes routed to a single handler that
-# forwards raw key bytes to the daemon.  The daemon's KeyAssembler
-# reassembles multi-byte escape sequences and interprets key bindings.
-# Bytes 0x80-0xFF are NOT bound — UTF-8 continuation bytes trigger ZLE's
-# default self-insert, which changes LBUFFER.  The line-pre-redraw hook
-# detects the LBUFFER change and auto-exits cycle mode.
-bindkey -N _zacrs_cycle
-bindkey -M _zacrs_cycle -R '^@'-'^?' _zacrs_cycle_handle
+# Cycle-mode keymap: forward known key sequences to Rust unchanged.
+# shell 側は sequence を配送するだけで、意味解釈は Rust が行う。
+bindkey -N _zacrs_cycle main
+bindkey -M _zacrs_cycle '^I' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^M' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle ' ' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^C' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^?' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^H' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[[A' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[[B' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[[5~' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[[6~' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle '^[[Z' _zacrs_cycle_handle
+bindkey -M _zacrs_cycle -R '!'-'~' _zacrs_cycle_handle
+[[ -n "$terminfo[kcuu1]" ]] && bindkey -M _zacrs_cycle "$terminfo[kcuu1]" _zacrs_cycle_handle
+[[ -n "$terminfo[kcud1]" ]] && bindkey -M _zacrs_cycle "$terminfo[kcud1]" _zacrs_cycle_handle
+[[ -n "$terminfo[kpp]" ]] && bindkey -M _zacrs_cycle "$terminfo[kpp]" _zacrs_cycle_handle
+[[ -n "$terminfo[knp]" ]] && bindkey -M _zacrs_cycle "$terminfo[knp]" _zacrs_cycle_handle
+[[ -n "$terminfo[kcbt]" ]] && bindkey -M _zacrs_cycle "$terminfo[kcbt]" _zacrs_cycle_handle
 
 # Register line-pre-redraw hook (auto-trigger without key rebinding)
 autoload -Uz add-zle-hook-widget
