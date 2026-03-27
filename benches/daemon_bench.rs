@@ -21,7 +21,7 @@ impl BenchDaemon {
 
         let socket_path = runtime_dir.join("zacrs.sock");
         let socket_path_str = socket_path.to_string_lossy().into_owned();
-        let child = Command::new(release_daemon_binary())
+        let mut child = Command::new(release_daemon_binary())
             .env("XDG_RUNTIME_DIR", &runtime_dir)
             .arg("daemon")
             .arg("start")
@@ -41,6 +41,8 @@ impl BenchDaemon {
             std::thread::sleep(Duration::from_millis(10));
         }
 
+        let _ = child.kill();
+        let _ = child.wait();
         panic!(
             "bench daemon did not start listening on {}",
             socket_path.display()
@@ -152,7 +154,7 @@ fn daemon_ping(c: &mut Criterion) {
     let sock = &daemon.socket_path;
 
     c.bench_function("daemon_ping_roundtrip", |b| {
-        b.iter(|| text_ping(&sock));
+        b.iter(|| text_ping(sock));
     });
 }
 
@@ -165,7 +167,7 @@ fn daemon_render(c: &mut Criterion) {
         let candidates = helpers::generate_candidates(size);
         let request = build_request("render", &candidates);
         group.bench_with_input(BenchmarkId::from_parameter(size), &request, |b, req| {
-            b.iter(|| text_render(&sock, req));
+            b.iter(|| text_render(sock, req));
         });
     }
     group.finish();
@@ -202,7 +204,7 @@ fn daemon_complete_session(c: &mut Criterion) {
 
     c.bench_function("daemon_complete_session", |b| {
         b.iter(|| {
-            let stream = UnixStream::connect(&sock).unwrap();
+            let stream = UnixStream::connect(sock).unwrap();
             let mut writer = &stream;
             let mut reader = BufReader::new(&stream);
 
