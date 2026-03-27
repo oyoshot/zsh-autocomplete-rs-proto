@@ -43,6 +43,23 @@ struct DaemonServer {
     fuzzy: Option<FuzzyMatcher>,
 }
 
+impl DaemonServer {
+    fn new(socket_path: PathBuf) -> Self {
+        let config = Config::load();
+        let config_mtime = config_file_mtime();
+        let theme = config.theme();
+        let key_bindings = config.key_bindings();
+        Self {
+            config,
+            theme,
+            key_bindings,
+            config_mtime,
+            socket_path,
+            fuzzy: Some(FuzzyMatcher::new()),
+        }
+    }
+}
+
 pub fn start() -> io::Result<()> {
     init_tracing();
 
@@ -69,19 +86,7 @@ pub fn start() -> io::Result<()> {
 
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
-    let config = Config::load();
-    let config_mtime = config_file_mtime();
-    let theme = config.theme();
-    let key_bindings = config.key_bindings();
-
-    let mut server = DaemonServer {
-        config,
-        theme,
-        key_bindings,
-        config_mtime,
-        socket_path,
-        fuzzy: Some(FuzzyMatcher::new()),
-    };
+    let mut server = DaemonServer::new(socket_path);
 
     for stream in listener.incoming() {
         match stream {
@@ -102,6 +107,46 @@ pub fn start() -> io::Result<()> {
     let _ = fs::remove_file(&server.socket_path);
     info!(socket_path = %server.socket_path.display(), "daemon stopped");
     Ok(())
+}
+
+pub fn run_cycle_stdio() -> io::Result<()> {
+    init_tracing();
+
+    let mut server = DaemonServer::new(protocol::socket_path());
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut writer = io::BufWriter::new(stdout.lock());
+    run_cycle_text_session(&mut server, &mut reader, &mut writer)
+}
+
+fn run_cycle_text_session<R: BufRead, W: Write>(
+    server: &mut DaemonServer,
+    reader: &mut R,
+    writer: &mut W,
+) -> io::Result<()> {
+    let mut header = String::new();
+    reader.read_line(&mut header)?;
+    if header.is_empty() {
+        return Ok(());
+    }
+    let header = header.trim_end();
+    let parts: Vec<&str> = header.split_whitespace().collect();
+    match parts.first().copied() {
+        Some("cycle_start") if parts.len() >= 5 => {
+            let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
+            let (prefix, tsv) = read_prefix_and_tsv(reader, writer, "cycle_start")
+                .map_err(|()| io::Error::new(io::ErrorKind::InvalidInput, "invalid cycle_start"))?;
+            server.handle_cycle(
+                reader, writer, prefix, cursor_row, cursor_col, term_cols, term_rows, &tsv,
+            );
+            Ok(())
+        }
+        _ => {
+            writeln!(writer, "ERROR unsupported command")?;
+            writer.flush()
+        }
+    }
 }
 
 pub fn stop() -> io::Result<()> {
@@ -495,9 +540,9 @@ impl DaemonServer {
         }
     }
 
-    fn send_frame(
+    fn send_frame<W: Write>(
         &self,
-        writer: &mut io::BufWriter<&UnixStream>,
+        writer: &mut W,
         app: &App,
         extra_prefix: &[u8],
         popup_only: bool,
@@ -620,9 +665,9 @@ impl DaemonServer {
     /// Returns `None` if an early exit was needed (empty candidates, no matches, etc.),
     /// in which case a `DONE 1` response has already been sent.
     #[allow(clippy::too_many_arguments)]
-    fn setup_session(
+    fn setup_session<W: Write>(
         &mut self,
-        writer: &mut io::BufWriter<&UnixStream>,
+        writer: &mut W,
         prefix: String,
         cursor_row: u16,
         cursor_col: u16,
@@ -667,10 +712,10 @@ impl DaemonServer {
         Some((app, scroll_bytes))
     }
 
-    fn handle_complete(
+    fn handle_complete<R: BufRead, W: Write>(
         &mut self,
-        reader: &mut BufReader<&UnixStream>,
-        writer: &mut io::BufWriter<&UnixStream>,
+        reader: &mut R,
+        writer: &mut W,
         params: CompleteParams,
         tsv: &str,
     ) {
@@ -714,7 +759,7 @@ impl DaemonServer {
                     continue;
                 }
                 let mut key_buf = vec![0u8; byte_count];
-                if io::Read::read_exact(reader, &mut key_buf).is_err() {
+                if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
                     break;
                 }
 
@@ -807,10 +852,10 @@ impl DaemonServer {
     /// (`DONE 3`) so the shell can insert the character after applying the
     /// current selection.
     #[allow(clippy::too_many_arguments)]
-    fn handle_cycle(
+    fn handle_cycle<R: BufRead, W: Write>(
         &mut self,
-        reader: &mut BufReader<&UnixStream>,
-        writer: &mut io::BufWriter<&UnixStream>,
+        reader: &mut R,
+        writer: &mut W,
         prefix: String,
         cursor_row: u16,
         cursor_col: u16,
@@ -850,7 +895,7 @@ impl DaemonServer {
                     continue;
                 }
                 key_buf.resize(byte_count, 0);
-                if io::Read::read_exact(reader, &mut key_buf).is_err() {
+                if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
                     break;
                 }
 
@@ -1640,5 +1685,19 @@ mod tests {
         drop(reader);
         drop(writer);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn run_cycle_text_session_emits_initial_frame() {
+        let input =
+            b"cycle_start 5 2 80 24\ngi\ngit\tcommand\tcommand\ngizmo\tcommand\tcommand\nEND\n";
+        let mut reader = std::io::Cursor::new(&input[..]);
+        let mut writer = Vec::new();
+        let mut server = test_server();
+
+        super::run_cycle_text_session(&mut server, &mut reader, &mut writer).unwrap();
+
+        let output = String::from_utf8_lossy(&writer);
+        assert!(output.starts_with("FRAME "));
     }
 }

@@ -46,6 +46,8 @@ pub enum Command {
         #[arg(long)]
         cursor_row: u16,
     },
+    /// Run a single cycle-mode text session on stdin/stdout
+    Cycle,
     /// Daemon management
     Daemon {
         #[command(subcommand)]
