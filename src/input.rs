@@ -32,12 +32,14 @@ pub enum ReadOutcome {
 
 pub struct TtyInputReader {
     last_size: (u16, u16),
+    extra_shift_tab_sequence: Option<Vec<u8>>,
 }
 
 impl TtyInputReader {
-    pub fn new() -> io::Result<Self> {
+    pub fn new(extra_shift_tab_sequence: Option<Vec<u8>>) -> io::Result<Self> {
         Ok(Self {
             last_size: terminal::size()?,
+            extra_shift_tab_sequence,
         })
     }
 
@@ -49,7 +51,11 @@ impl TtyInputReader {
         if poll_reader(reader, INPUT_POLL_TIMEOUT)? {
             let bytes = read_key_bytes(reader)?;
             self.last_size = terminal::size()?;
-            return Ok(parse_tty_bytes(&bytes, bindings)
+            return Ok(parse_tty_bytes_with_shift_tab(
+                &bytes,
+                bindings,
+                self.extra_shift_tab_sequence.as_deref(),
+            )
                 .map(ReadOutcome::Action)
                 .unwrap_or(ReadOutcome::Passthrough(bytes)));
         }
@@ -102,8 +108,12 @@ fn parse_single_byte(byte: u8, bindings: &KeyBindings) -> Action {
     }
 }
 
-fn parse_tty_bytes(bytes: &[u8], bindings: &KeyBindings) -> Option<Action> {
-    match parse_raw_bytes(bytes, bindings) {
+pub fn parse_tty_bytes_with_shift_tab(
+    bytes: &[u8],
+    bindings: &KeyBindings,
+    extra_shift_tab_sequence: Option<&[u8]>,
+) -> Option<Action> {
+    match parse_raw_bytes_with_shift_tab(bytes, bindings, extra_shift_tab_sequence) {
         Action::None => parse_utf8_char(bytes).map(Action::TypeChar),
         action => Some(action),
     }
@@ -283,8 +293,17 @@ mod tests {
     fn parse_tty_bytes_handles_utf8_chars() {
         let b = default_bindings();
         assert_eq!(
-            parse_tty_bytes("あ".as_bytes(), &b),
+            parse_tty_bytes_with_shift_tab("あ".as_bytes(), &b, None),
             Some(Action::TypeChar('あ'))
+        );
+    }
+
+    #[test]
+    fn parse_tty_bytes_supports_extra_shift_tab_sequence() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_tty_bytes_with_shift_tab(b"\x1b[27;2;9~", &b, Some(b"\x1b[27;2;9~")),
+            Some(Action::MoveUp)
         );
     }
 

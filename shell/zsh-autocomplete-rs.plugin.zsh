@@ -628,6 +628,8 @@ _zacrs_invoke() {
     local prefix="$1"
     local prefix_len="$2"
     local candidates_str="$3"
+    local shift_tab_hex=""
+    local -a complete_args
 
     local cursor_row="${4:-}" cursor_col="${5:-}"
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
@@ -638,13 +640,17 @@ _zacrs_invoke() {
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
     fi
+    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
+    complete_args=(
+        complete
+        --prefix "$prefix"
+        --cursor-row "$cursor_row"
+        --cursor-col "$cursor_col"
+    )
+    [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
 
     local output
-    output=$(printf '%s' "$candidates_str" | \
-        "$ZACRS_BIN" complete \
-        --prefix "$prefix" \
-        --cursor-row "$cursor_row" \
-        --cursor-col "$cursor_col")
+    output=$(printf '%s' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}")
     local exit_code=$?
     local passthrough_hex=""
     local passthrough_input=""

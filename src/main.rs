@@ -29,6 +29,7 @@ fn run_complete(
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
+    shift_tab_sequence: Option<Vec<u8>>,
     bindings: &config::KeyBindings,
     theme: &config::Theme,
 ) -> io::Result<i32> {
@@ -54,7 +55,7 @@ fn run_complete(
     ui::render::ensure_space(&mut guard.tty, &mut app)?;
     app.select_first();
     ui::render::draw(&mut guard.tty, &app, theme)?;
-    let mut input_reader = input::TtyInputReader::new()?;
+    let mut input_reader = input::TtyInputReader::new(shift_tab_sequence)?;
 
     let result = loop {
         match input_reader.read(&mut guard.tty, bindings)? {
@@ -245,6 +246,17 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
     Ok(0)
 }
 
+fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.is_empty() || !hex.len().is_multiple_of(2) {
+        return None;
+    }
+
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
 fn main() {
     let cli = Cli::parse();
     let cfg = config::Config::load();
@@ -255,7 +267,15 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
-        } => match run_complete(prefix, cursor_row, cursor_col, &bindings, &theme) {
+            shift_tab_hex,
+        } => match run_complete(
+            prefix,
+            cursor_row,
+            cursor_col,
+            shift_tab_hex.as_deref().and_then(decode_hex_bytes),
+            &bindings,
+            &theme,
+        ) {
             Ok(code) => process::exit(code),
             Err(e) => {
                 let _ = crossterm::terminal::disable_raw_mode();

@@ -19,6 +19,9 @@ pub enum Command {
 
         #[arg(long, default_value_t = 0)]
         cursor_col: u16,
+
+        #[arg(long)]
+        shift_tab_hex: Option<String>,
     },
     /// Draw popup and exit immediately (non-blocking) — 自動トリガー用
     Render {
@@ -51,6 +54,28 @@ pub enum Command {
         #[command(subcommand)]
         action: DaemonAction,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_accepts_shift_tab_hex() {
+        let cli = Cli::parse_from([
+            "zsh-autocomplete-rs",
+            "complete",
+            "--shift-tab-hex",
+            "1b5b32373b323b397e",
+        ]);
+
+        match cli.command {
+            Command::Complete { shift_tab_hex, .. } => {
+                assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
