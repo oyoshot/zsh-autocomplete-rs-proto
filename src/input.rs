@@ -369,6 +369,30 @@ mod tests {
     }
 
     #[test]
+    fn home_end_delete_keys_passthrough() {
+        let b = default_bindings();
+
+        for key in [KeyCode::Home, KeyCode::End, KeyCode::Delete] {
+            let event = InputEvent::Key(KeyEvent {
+                key,
+                modifiers: Modifiers::NONE,
+            });
+            assert_eq!(map_input_event_to_action(event, &b), None);
+        }
+    }
+
+    #[test]
+    fn function_keys_passthrough() {
+        let b = default_bindings();
+        let event = InputEvent::Key(KeyEvent {
+            key: KeyCode::Function(5),
+            modifiers: Modifiers::NONE,
+        });
+
+        assert_eq!(map_input_event_to_action(event, &b), None);
+    }
+
+    #[test]
     fn read_key_bytes_preserves_terminal_escape_sequences() {
         let (mut reader, mut writer) = UnixStream::pair().unwrap();
         writer.write_all(b"\x1bOH").unwrap();
