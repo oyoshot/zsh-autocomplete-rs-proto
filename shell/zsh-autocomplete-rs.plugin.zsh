@@ -348,7 +348,7 @@ _zacrs_apply_result() {
         _zacrs_suppressed=0
     elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
         LBUFFER="${base}${result_text}"
-        _zacrs_suppressed=1
+        _zacrs_suppressed=0
     elif [[ $result_code -eq 3 ]]; then
         LBUFFER="${base}${result_text}"
         _zacrs_suppressed=0
@@ -359,9 +359,9 @@ _zacrs_apply_result() {
         _zacrs_suppressed=0
     fi
 
-    # Confirm (code 0) で末尾がスペース/スラッシュなら
+    # 補完適用後 (code 0/2) に末尾がスペース/スラッシュなら
     # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
-    if [[ $result_code -eq 0 && "$LBUFFER" == *[\ /] ]]; then
+    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$LBUFFER" == *[\ /] ]]; then
         _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
