@@ -2,6 +2,7 @@ use crossterm::terminal;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
+use termwiz::input::{InputEvent, InputParser, KeyCode, KeyEvent, Modifiers};
 
 use crate::config::KeyBindings;
 
@@ -56,8 +57,8 @@ impl TtyInputReader {
                 bindings,
                 self.extra_shift_tab_sequence.as_deref(),
             )
-                .map(ReadOutcome::Action)
-                .unwrap_or(ReadOutcome::Passthrough(bytes)));
+            .map(ReadOutcome::Action)
+            .unwrap_or(ReadOutcome::Passthrough(bytes)));
         }
 
         match terminal::size()? {
@@ -79,33 +80,8 @@ pub fn parse_raw_bytes_with_shift_tab(
     bindings: &KeyBindings,
     extra_shift_tab_sequence: Option<&[u8]>,
 ) -> Action {
-    if extra_shift_tab_sequence == Some(bytes) {
-        return bindings.shift_tab;
-    }
-
-    match bytes {
-        [0x1b, b'[', b'A'] => Action::MoveUp,
-        [0x1b, b'[', b'B'] => Action::MoveDown,
-        [0x1b, b'[', b'5', b'~'] => Action::PageUp,
-        [0x1b, b'[', b'6', b'~'] => Action::PageDown,
-        [0x1b, b'[', b'Z'] => bindings.shift_tab,
-        [0x1b] => Action::Cancel,
-        [b] => parse_single_byte(*b, bindings),
-        _ => Action::None,
-    }
-}
-
-/// Map a single non-ESC byte to an Action.
-fn parse_single_byte(byte: u8, bindings: &KeyBindings) -> Action {
-    match byte {
-        0x03 => Action::Cancel,
-        0x08 | 0x7f => Action::Backspace,
-        0x09 => bindings.tab,
-        0x0d => bindings.enter,
-        b' ' => bindings.space,
-        b if b.is_ascii_graphic() => Action::TypeChar(b as char),
-        _ => Action::None,
-    }
+    parse_tty_bytes_with_shift_tab(bytes, bindings, extra_shift_tab_sequence)
+        .unwrap_or(Action::None)
 }
 
 pub fn parse_tty_bytes_with_shift_tab(
@@ -113,20 +89,71 @@ pub fn parse_tty_bytes_with_shift_tab(
     bindings: &KeyBindings,
     extra_shift_tab_sequence: Option<&[u8]>,
 ) -> Option<Action> {
-    match parse_raw_bytes_with_shift_tab(bytes, bindings, extra_shift_tab_sequence) {
-        Action::None => parse_utf8_char(bytes).map(Action::TypeChar),
-        action => Some(action),
+    if bytes == b"\n" {
+        return None;
     }
+
+    if extra_shift_tab_sequence == Some(bytes) {
+        return Some(bindings.shift_tab);
+    }
+
+    let event = parse_input_event(bytes)?;
+    map_input_event_to_action(event, bindings)
 }
 
-fn parse_utf8_char(bytes: &[u8]) -> Option<char> {
-    let mut chars = std::str::from_utf8(bytes).ok()?.chars();
-    let ch = chars.next()?;
-    if chars.next().is_none() {
-        Some(ch)
+fn parse_input_event(bytes: &[u8]) -> Option<InputEvent> {
+    let mut parser = InputParser::new();
+    let mut events = parser.parse_as_vec(bytes, false);
+    if events.len() == 1 {
+        events.pop()
     } else {
         None
     }
+}
+
+fn map_input_event_to_action(event: InputEvent, bindings: &KeyBindings) -> Option<Action> {
+    match event {
+        InputEvent::Key(key) => map_key_event_to_action(key, bindings),
+        _ => None,
+    }
+}
+
+fn map_key_event_to_action(key: KeyEvent, bindings: &KeyBindings) -> Option<Action> {
+    let modifiers = normalize_modifiers(key.modifiers);
+
+    match (key.key, modifiers) {
+        (KeyCode::UpArrow | KeyCode::ApplicationUpArrow, Modifiers::NONE) => Some(Action::MoveUp),
+        (KeyCode::DownArrow | KeyCode::ApplicationDownArrow, Modifiers::NONE) => {
+            Some(Action::MoveDown)
+        }
+        (KeyCode::PageUp | KeyCode::KeyPadPageUp, Modifiers::NONE) => Some(Action::PageUp),
+        (KeyCode::PageDown | KeyCode::KeyPadPageDown, Modifiers::NONE) => Some(Action::PageDown),
+        (KeyCode::Escape, Modifiers::NONE) => Some(Action::Cancel),
+        (KeyCode::Backspace, Modifiers::NONE) => Some(Action::Backspace),
+        (KeyCode::Tab, Modifiers::NONE) => Some(bindings.tab),
+        (KeyCode::Tab, Modifiers::SHIFT) => Some(bindings.shift_tab),
+        (KeyCode::Enter, Modifiers::NONE) => Some(bindings.enter),
+        (KeyCode::Char('c'), Modifiers::CTRL) => Some(Action::Cancel),
+        (KeyCode::Char(' '), Modifiers::NONE) => Some(bindings.space),
+        (KeyCode::Char(c), Modifiers::NONE) if !c.is_control() => Some(Action::TypeChar(c)),
+        _ => None,
+    }
+}
+
+fn normalize_modifiers(modifiers: Modifiers) -> Modifiers {
+    let mut normalized = Modifiers::NONE;
+
+    if modifiers.intersects(Modifiers::SHIFT | Modifiers::LEFT_SHIFT | Modifiers::RIGHT_SHIFT) {
+        normalized |= Modifiers::SHIFT;
+    }
+    if modifiers.intersects(Modifiers::CTRL | Modifiers::LEFT_CTRL | Modifiers::RIGHT_CTRL) {
+        normalized |= Modifiers::CTRL;
+    }
+    if modifiers.intersects(Modifiers::ALT | Modifiers::LEFT_ALT | Modifiers::RIGHT_ALT) {
+        normalized |= Modifiers::ALT;
+    }
+
+    normalized
 }
 
 fn read_key_bytes<R: Read + AsRawFd>(reader: &mut R) -> io::Result<Vec<u8>> {
@@ -305,6 +332,18 @@ mod tests {
             parse_tty_bytes_with_shift_tab(b"\x1b[27;2;9~", &b, Some(b"\x1b[27;2;9~")),
             Some(Action::MoveUp)
         );
+    }
+
+    #[test]
+    fn parse_tty_bytes_leaves_ctrl_a_for_passthrough() {
+        let b = default_bindings();
+        assert_eq!(parse_tty_bytes_with_shift_tab(b"\x01", &b, None), None);
+    }
+
+    #[test]
+    fn parse_tty_bytes_leaves_ctrl_j_for_passthrough() {
+        let b = default_bindings();
+        assert_eq!(parse_tty_bytes_with_shift_tab(b"\n", &b, None), None);
     }
 
     #[test]
