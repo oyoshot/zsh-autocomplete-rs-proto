@@ -264,13 +264,6 @@ fn main() {
                 process::exit(1);
             }
         },
-        Command::Cycle => match daemon::run_cycle_stdio() {
-            Ok(()) => process::exit(0),
-            Err(e) => {
-                eprintln!("error: {}", e);
-                process::exit(1);
-            }
-        },
         Command::Daemon { action } => match action {
             DaemonAction::Start => match daemon::start() {
                 Ok(()) => process::exit(0),

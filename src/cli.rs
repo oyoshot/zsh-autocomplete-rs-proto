@@ -9,7 +9,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Interactive popup (blocking) — Tab で起動
+    /// Popup session — Tab で起動
     Complete {
         #[arg(long, default_value = "", allow_hyphen_values = true)]
         prefix: String,
@@ -31,7 +31,7 @@ pub enum Command {
         #[arg(long, default_value_t = 0)]
         cursor_col: u16,
 
-        /// Pre-select the N-th filtered candidate (0-indexed, for Tab-cycle mode)
+        /// Pre-select the N-th filtered candidate (0-indexed)
         #[arg(long)]
         selected: Option<usize>,
     },
@@ -46,8 +46,6 @@ pub enum Command {
         #[arg(long)]
         cursor_row: u16,
     },
-    /// Run a single cycle-mode text session on stdin/stdout
-    Cycle,
     /// Daemon management
     Daemon {
         #[command(subcommand)]

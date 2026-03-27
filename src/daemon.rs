@@ -829,9 +829,14 @@ impl DaemonServer {
                         let _ = writer.flush();
                         break;
                     }
-                    Action::Resize(_, _) | Action::None => {
+                    Action::Resize(_, _) => {
                         let _ = writeln!(writer, "NONE");
                         let _ = writer.flush();
+                    }
+                    Action::None => {
+                        let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                        let _ = writer.flush();
+                        break;
                     }
                 }
             } else {
@@ -1410,6 +1415,43 @@ mod tests {
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_unknown_key_passthroughs_filter_text() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                },
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\x1b[D");
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 3 gi");
 
         drop(reader);
         drop(writer);
