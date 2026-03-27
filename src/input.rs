@@ -74,27 +74,139 @@ pub fn read_action_with_passthrough(bindings: &KeyBindings) -> std::io::Result<R
 fn parse_key_event(code: KeyCode, modifiers: KeyModifiers, bindings: &KeyBindings) -> ReadOutcome {
     match code {
         KeyCode::BackTab => ReadOutcome::Action(bindings.shift_tab),
-        KeyCode::Tab => ReadOutcome::Action(bindings.tab),
-        KeyCode::Char(' ') => ReadOutcome::Action(bindings.space),
-        KeyCode::PageDown => ReadOutcome::Action(Action::PageDown),
-        KeyCode::PageUp => ReadOutcome::Action(Action::PageUp),
-        KeyCode::Down => ReadOutcome::Action(Action::MoveDown),
-        KeyCode::Up => ReadOutcome::Action(Action::MoveUp),
-        KeyCode::Enter => ReadOutcome::Action(bindings.enter),
-        KeyCode::Esc => ReadOutcome::Action(Action::Cancel),
+        KeyCode::Tab if modifiers.is_empty() => ReadOutcome::Action(bindings.tab),
+        KeyCode::Char(' ') if modifiers.is_empty() => ReadOutcome::Action(bindings.space),
+        KeyCode::PageDown if modifiers.is_empty() => ReadOutcome::Action(Action::PageDown),
+        KeyCode::PageUp if modifiers.is_empty() => ReadOutcome::Action(Action::PageUp),
+        KeyCode::Down if modifiers.is_empty() => ReadOutcome::Action(Action::MoveDown),
+        KeyCode::Up if modifiers.is_empty() => ReadOutcome::Action(Action::MoveUp),
+        KeyCode::Enter if modifiers.is_empty() => ReadOutcome::Action(bindings.enter),
+        KeyCode::Esc if modifiers.is_empty() => ReadOutcome::Action(Action::Cancel),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
             ReadOutcome::Action(Action::Cancel)
         }
-        KeyCode::Backspace => ReadOutcome::Action(Action::Backspace),
-        KeyCode::Left => ReadOutcome::Passthrough(b"\x1b[D".to_vec()),
-        KeyCode::Right => ReadOutcome::Passthrough(b"\x1b[C".to_vec()),
-        KeyCode::Home => ReadOutcome::Passthrough(b"\x1b[H".to_vec()),
-        KeyCode::End => ReadOutcome::Passthrough(b"\x1b[F".to_vec()),
-        KeyCode::Delete => ReadOutcome::Passthrough(b"\x1b[3~".to_vec()),
-        KeyCode::Insert => ReadOutcome::Passthrough(b"\x1b[2~".to_vec()),
-        KeyCode::Char(c) => ReadOutcome::Action(Action::TypeChar(c)),
-        _ => ReadOutcome::Action(Action::None),
+        KeyCode::Backspace if modifiers.is_empty() => ReadOutcome::Action(Action::Backspace),
+        KeyCode::Char(c) if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT => {
+            ReadOutcome::Action(Action::TypeChar(c))
+        }
+        _ => passthrough_key_event(code, modifiers)
+            .map(ReadOutcome::Passthrough)
+            .unwrap_or(ReadOutcome::Action(Action::None)),
     }
+}
+
+fn passthrough_key_event(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    match code {
+        KeyCode::Left => Some(special_key_bytes('D', 1, modifiers)),
+        KeyCode::Right => Some(special_key_bytes('C', 1, modifiers)),
+        KeyCode::Home => Some(special_key_bytes('H', 1, modifiers)),
+        KeyCode::End => Some(special_key_bytes('F', 1, modifiers)),
+        KeyCode::Delete => Some(tilde_key_bytes(3, modifiers)),
+        KeyCode::Insert => Some(tilde_key_bytes(2, modifiers)),
+        KeyCode::PageUp => Some(tilde_key_bytes(5, modifiers)),
+        KeyCode::PageDown => Some(tilde_key_bytes(6, modifiers)),
+        KeyCode::F(n) => function_key_bytes(n, modifiers),
+        KeyCode::Enter => Some(prefix_alt(b"\r".to_vec(), modifiers)),
+        KeyCode::Backspace => Some(prefix_alt(vec![0x7f], modifiers)),
+        KeyCode::Tab => Some(prefix_alt(vec![b'\t'], modifiers)),
+        KeyCode::Char(c) => char_key_bytes(c, modifiers),
+        _ => None,
+    }
+}
+
+fn char_key_bytes(c: char, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    let mut bytes = if modifiers.contains(KeyModifiers::CONTROL) {
+        vec![control_byte(c)?]
+    } else {
+        let mut encoded = [0u8; 4];
+        c.encode_utf8(&mut encoded).as_bytes().to_vec()
+    };
+
+    if modifiers.contains(KeyModifiers::ALT) {
+        bytes.insert(0, 0x1b);
+    }
+
+    Some(bytes)
+}
+
+fn control_byte(c: char) -> Option<u8> {
+    match c {
+        '@' | ' ' => Some(0x00),
+        'a'..='z' => Some((c as u8) - b'a' + 1),
+        'A'..='Z' => Some((c as u8) - b'A' + 1),
+        '[' => Some(0x1b),
+        '\\' => Some(0x1c),
+        ']' => Some(0x1d),
+        '^' => Some(0x1e),
+        '_' => Some(0x1f),
+        '?' => Some(0x7f),
+        _ => None,
+    }
+}
+
+fn prefix_alt(mut bytes: Vec<u8>, modifiers: KeyModifiers) -> Vec<u8> {
+    if modifiers.contains(KeyModifiers::ALT) {
+        bytes.insert(0, 0x1b);
+    }
+    bytes
+}
+
+fn modifier_param(modifiers: KeyModifiers) -> Option<u8> {
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    let control = modifiers.contains(KeyModifiers::CONTROL);
+
+    match (shift, alt, control) {
+        (false, false, false) => None,
+        (true, false, false) => Some(2),
+        (false, true, false) => Some(3),
+        (true, true, false) => Some(4),
+        (false, false, true) => Some(5),
+        (true, false, true) => Some(6),
+        (false, true, true) => Some(7),
+        (true, true, true) => Some(8),
+    }
+}
+
+fn special_key_bytes(final_byte: char, base: u8, modifiers: KeyModifiers) -> Vec<u8> {
+    match modifier_param(modifiers) {
+        Some(param) => format!("\x1b[{base};{param}{final_byte}").into_bytes(),
+        None => format!("\x1b[{final_byte}").into_bytes(),
+    }
+}
+
+fn tilde_key_bytes(base: u8, modifiers: KeyModifiers) -> Vec<u8> {
+    match modifier_param(modifiers) {
+        Some(param) => format!("\x1b[{base};{param}~").into_bytes(),
+        None => format!("\x1b[{base}~").into_bytes(),
+    }
+}
+
+fn function_key_bytes(key: u8, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    let base = match key {
+        1 => ("OP", None),
+        2 => ("OQ", None),
+        3 => ("OR", None),
+        4 => ("OS", None),
+        5 => ("15", Some('~')),
+        6 => ("17", Some('~')),
+        7 => ("18", Some('~')),
+        8 => ("19", Some('~')),
+        9 => ("20", Some('~')),
+        10 => ("21", Some('~')),
+        11 => ("23", Some('~')),
+        12 => ("24", Some('~')),
+        _ => return None,
+    };
+
+    let bytes = match (base.1, modifier_param(modifiers)) {
+        (None, None) => format!("\x1b{}", base.0),
+        (None, Some(param)) => format!("\x1b[1;{param}{}", &base.0[1..]),
+        (Some(final_byte), None) => format!("\x1b[{}{final_byte}", base.0),
+        (Some(final_byte), Some(param)) => format!("\x1b[{};{param}{final_byte}", base.0),
+    };
+
+    Some(bytes.into_bytes())
 }
 
 #[cfg(test)]
@@ -188,6 +300,41 @@ mod tests {
         assert_eq!(
             parse_key_event(KeyCode::End, KeyModifiers::NONE, &b),
             ReadOutcome::Passthrough(b"\x1b[F".to_vec())
+        );
+    }
+
+    #[test]
+    fn parse_key_event_passthroughs_control_chars() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_key_event(KeyCode::Char('a'), KeyModifiers::CONTROL, &b),
+            ReadOutcome::Passthrough(vec![0x01])
+        );
+        assert_eq!(
+            parse_key_event(KeyCode::Char('e'), KeyModifiers::CONTROL, &b),
+            ReadOutcome::Passthrough(vec![0x05])
+        );
+    }
+
+    #[test]
+    fn parse_key_event_passthroughs_alt_chars() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_key_event(KeyCode::Char('f'), KeyModifiers::ALT, &b),
+            ReadOutcome::Passthrough(b"\x1bf".to_vec())
+        );
+    }
+
+    #[test]
+    fn parse_key_event_passthroughs_function_keys() {
+        let b = default_bindings();
+        assert_eq!(
+            parse_key_event(KeyCode::F(1), KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1bOP".to_vec())
+        );
+        assert_eq!(
+            parse_key_event(KeyCode::F(5), KeyModifiers::NONE, &b),
+            ReadOutcome::Passthrough(b"\x1b[15~".to_vec())
         );
     }
 }
