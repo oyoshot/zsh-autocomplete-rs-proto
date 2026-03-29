@@ -127,8 +127,6 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
 
 fn main() {
     let cli = Cli::parse();
-    let cfg = config::Config::load();
-    let theme = cfg.theme();
     match cli.command {
         Command::Complete {
             prefix,
@@ -158,13 +156,16 @@ fn main() {
             cursor_row,
             cursor_col,
             selected,
-        } => match run_render(prefix, cursor_row, cursor_col, selected, &theme) {
-            Ok(code) => process::exit(code),
-            Err(e) => {
-                eprintln!("error: {}", e);
-                process::exit(1);
+        } => {
+            let theme = config::Config::load().theme();
+            match run_render(prefix, cursor_row, cursor_col, selected, &theme) {
+                Ok(code) => process::exit(code),
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    process::exit(1);
+                }
             }
-        },
+        }
         Command::Clear {
             popup_row,
             popup_height,
