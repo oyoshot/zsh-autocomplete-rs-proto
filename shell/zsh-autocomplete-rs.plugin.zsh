@@ -720,7 +720,7 @@ _zacrs_read_key_input() {
     sysread -i $fd -c 1 input || return 1
     if [[ "$input" = $'\e' ]]; then
         local extra=""
-        while sysread -i $fd -c 1 -t 0.02 extra 2>/dev/null; do
+        while sysread -i $fd -c 1 -t 0.05 extra 2>/dev/null; do
             input+="$extra"
             extra=""
         done
@@ -729,7 +729,7 @@ _zacrs_read_key_input() {
         local input_len=0 extra=""
         _zacrs_input_nbytes "$input"
         input_len="$REPLY"
-        while (( input_len < expected_len )) && sysread -i $fd -c 1 -t 0.02 extra 2>/dev/null; do
+        while (( input_len < expected_len )) && sysread -i $fd -c 1 -t 0.05 extra 2>/dev/null; do
             input+="$extra"
             extra=""
             _zacrs_input_nbytes "$input"
