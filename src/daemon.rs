@@ -868,8 +868,6 @@ fn read_prefix_and_tsv(
     Ok((prefix, tsv))
 }
 
-/// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
-/// bytes needed to make room for the popup below the cursor.
 fn apply_navigation(app: &mut App, action: Action) {
     match action {
         Action::MoveDown => app.move_down(),
@@ -880,6 +878,8 @@ fn apply_navigation(app: &mut App, action: Action) {
     }
 }
 
+/// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
+/// bytes needed to make room for the popup below the cursor.
 fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
     let max_popup_height = term_rows.saturating_sub(1);
     if app.max_visible as u16 + 2 > max_popup_height {
