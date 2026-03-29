@@ -2,7 +2,7 @@ use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
-use zsh_autocomplete_rs::{client, config, daemon, input, tty, ui};
+use zsh_autocomplete_rs::{client, config, daemon, input, protocol, tty, ui};
 
 use clap::Parser;
 use std::io::{self, BufRead, Read, Write};
@@ -246,17 +246,6 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
     Ok(0)
 }
 
-fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || !hex.len().is_multiple_of(2) {
-        return None;
-    }
-
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect()
-}
-
 fn main() {
     let cli = Cli::parse();
     let cfg = config::Config::load();
@@ -272,7 +261,9 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
-            shift_tab_hex.as_deref().and_then(decode_hex_bytes),
+            shift_tab_hex
+                .as_deref()
+                .and_then(protocol::decode_hex_bytes),
             &bindings,
             &theme,
         ) {

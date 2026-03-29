@@ -383,7 +383,7 @@ impl DaemonServer {
                 let shift_tab_sequence = parts[5..]
                     .iter()
                     .find_map(|part| part.strip_prefix("shift_tab_hex="))
-                    .and_then(decode_hex_bytes);
+                    .and_then(crate::protocol::decode_hex_bytes);
                 let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "complete") {
                     Ok(v) => v,
                     Err(()) => return false,
@@ -843,21 +843,6 @@ fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
     (cursor_row, cursor_col, term_cols, term_rows)
 }
 
-fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || !hex.len().is_multiple_of(2) {
-        return None;
-    }
-
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    let mut index = 0;
-    while index < hex.len() {
-        let byte = u8::from_str_radix(&hex[index..index + 2], 16).ok()?;
-        bytes.push(byte);
-        index += 2;
-    }
-    Some(bytes)
-}
-
 fn read_prefix_and_tsv(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
@@ -988,7 +973,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompleteParams, DaemonServer, RenderParams, decode_hex_bytes, read_text_line};
+    use super::{CompleteParams, DaemonServer, RenderParams, read_text_line};
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -1067,16 +1052,6 @@ mod tests {
         drop(reader);
         drop(writer);
         handle.join().unwrap();
-    }
-
-    #[test]
-    fn decode_hex_bytes_parses_escape_sequences() {
-        assert_eq!(decode_hex_bytes("1b5b5a"), Some(b"\x1b[Z".to_vec()));
-        assert_eq!(
-            decode_hex_bytes("1b5b32373b323b397e"),
-            Some(b"\x1b[27;2;9~".to_vec())
-        );
-        assert_eq!(decode_hex_bytes("1b5"), None);
     }
 
     #[test]
