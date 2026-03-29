@@ -1,15 +1,6 @@
-use crossterm::terminal;
-use std::io::{self, Read};
-use std::os::fd::AsRawFd;
-use std::time::Duration;
 use termwiz::input::{InputEvent, InputParser, KeyCode, KeyEvent, Modifiers};
 
 use crate::config::KeyBindings;
-
-const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(100);
-// Give split ESC-prefixed sequences a bit more headroom so slower schedulers
-// don't misclassify arrow keys as a standalone Escape.
-const ESC_SEQUENCE_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -24,52 +15,6 @@ pub enum Action {
     TypeChar(char),
     Backspace,
     None,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadOutcome {
-    Action(Action),
-    Passthrough(Vec<u8>),
-}
-
-pub struct TtyInputReader {
-    last_size: (u16, u16),
-    extra_shift_tab_sequence: Option<Vec<u8>>,
-}
-
-impl TtyInputReader {
-    pub fn new(extra_shift_tab_sequence: Option<Vec<u8>>) -> io::Result<Self> {
-        Ok(Self {
-            last_size: terminal::size()?,
-            extra_shift_tab_sequence,
-        })
-    }
-
-    pub fn read<R: Read + AsRawFd>(
-        &mut self,
-        reader: &mut R,
-        bindings: &KeyBindings,
-    ) -> io::Result<ReadOutcome> {
-        if poll_reader(reader, INPUT_POLL_TIMEOUT)? {
-            let bytes = read_key_bytes(reader)?;
-            self.last_size = terminal::size()?;
-            return Ok(parse_tty_bytes_with_shift_tab(
-                &bytes,
-                bindings,
-                self.extra_shift_tab_sequence.as_deref(),
-            )
-            .map(ReadOutcome::Action)
-            .unwrap_or(ReadOutcome::Passthrough(bytes)));
-        }
-
-        match terminal::size()? {
-            size if size != self.last_size => {
-                self.last_size = size;
-                Ok(ReadOutcome::Action(Action::Resize(size.0, size.1)))
-            }
-            _ => Ok(ReadOutcome::Action(Action::None)),
-        }
-    }
 }
 
 pub fn parse_raw_bytes(bytes: &[u8], bindings: &KeyBindings) -> Action {
@@ -158,88 +103,10 @@ fn normalize_modifiers(modifiers: Modifiers) -> Modifiers {
     normalized
 }
 
-fn read_key_bytes<R: Read + AsRawFd>(reader: &mut R) -> io::Result<Vec<u8>> {
-    let first = read_single_byte(reader)?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "expected at least one key byte",
-        )
-    })?;
-
-    let mut bytes = vec![first];
-    if first == 0x1b {
-        read_until_quiet(reader, &mut bytes, ESC_SEQUENCE_TIMEOUT)?;
-    } else if let Some(expected_len) = utf8_sequence_len(first) {
-        while bytes.len() < expected_len {
-            if !poll_reader(reader, ESC_SEQUENCE_TIMEOUT)? {
-                break;
-            }
-            let Some(next) = read_single_byte(reader)? else {
-                break;
-            };
-            bytes.push(next);
-        }
-    }
-
-    Ok(bytes)
-}
-
-fn read_until_quiet<R: Read + AsRawFd>(
-    reader: &mut R,
-    bytes: &mut Vec<u8>,
-    timeout: Duration,
-) -> io::Result<()> {
-    while poll_reader(reader, timeout)? {
-        let Some(next) = read_single_byte(reader)? else {
-            break;
-        };
-        bytes.push(next);
-    }
-
-    Ok(())
-}
-
-fn read_single_byte<R: Read>(reader: &mut R) -> io::Result<Option<u8>> {
-    let mut next = [0u8; 1];
-    match reader.read(&mut next)? {
-        0 => Ok(None),
-        _ => Ok(Some(next[0])),
-    }
-}
-
-fn utf8_sequence_len(first: u8) -> Option<usize> {
-    match first {
-        0x00..=0x7f => None,
-        0xc0..=0xdf => Some(2),
-        0xe0..=0xef => Some(3),
-        0xf0..=0xf7 => Some(4),
-        _ => None,
-    }
-}
-
-fn poll_reader<R: AsRawFd>(reader: &R, timeout: Duration) -> io::Result<bool> {
-    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
-    let mut pollfd = libc::pollfd {
-        fd: reader.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-
-    let ready = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-    if ready < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok(ready > 0 && (pollfd.revents & libc::POLLIN) != 0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::KeyBindings;
-    use std::io::Write;
-    use std::os::unix::net::UnixStream;
-    use std::thread;
 
     fn default_bindings() -> KeyBindings {
         KeyBindings::default()
@@ -391,49 +258,5 @@ mod tests {
         });
 
         assert_eq!(map_input_event_to_action(event, &b), None);
-    }
-
-    #[test]
-    fn read_key_bytes_preserves_terminal_escape_sequences() {
-        let (mut reader, mut writer) = UnixStream::pair().unwrap();
-        writer.write_all(b"\x1bOH").unwrap();
-
-        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1bOH".to_vec());
-    }
-
-    #[test]
-    fn read_key_bytes_preserves_long_escape_passthrough() {
-        let (mut reader, mut writer) = UnixStream::pair().unwrap();
-        let paste = b"\x1b[200~git status --short\x1b[201~";
-        assert!(paste.len() > 16);
-        let sender = thread::spawn(move || {
-            writer.write_all(b"\x1b").unwrap();
-            thread::sleep(Duration::from_millis(2));
-            writer.write_all(&paste[1..])
-        });
-
-        assert_eq!(read_key_bytes(&mut reader).unwrap(), paste.to_vec());
-        sender.join().unwrap().unwrap();
-    }
-
-    #[test]
-    fn read_key_bytes_waits_for_split_escape_sequences() {
-        let (mut reader, mut writer) = UnixStream::pair().unwrap();
-        let sender = thread::spawn(move || {
-            writer.write_all(b"\x1b").unwrap();
-            thread::sleep(ESC_SEQUENCE_TIMEOUT / 4);
-            writer.write_all(b"[A").unwrap();
-        });
-
-        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1b[A".to_vec());
-        sender.join().unwrap();
-    }
-
-    #[test]
-    fn read_key_bytes_keeps_standalone_escape() {
-        let (mut reader, mut writer) = UnixStream::pair().unwrap();
-        writer.write_all(b"\x1b").unwrap();
-
-        assert_eq!(read_key_bytes(&mut reader).unwrap(), b"\x1b".to_vec());
     }
 }

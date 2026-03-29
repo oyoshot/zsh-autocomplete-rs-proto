@@ -2,160 +2,39 @@ use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
-use zsh_autocomplete_rs::{client, config, daemon, input, protocol, tty, ui};
+use zsh_autocomplete_rs::{client, config, daemon, protocol, tty, ui};
 
 use clap::Parser;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::process;
-use tty::TtyGuard;
-
-enum AppResult {
-    Selected(String, String),
-    DismissedWithSpace(String),
-    Cancelled(Option<String>),
-    Passthrough(String, Vec<u8>),
-}
-
-fn encode_passthrough(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    encoded
-}
 
 fn run_complete(
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
+    cols: u16,
+    rows: u16,
     shift_tab_sequence: Option<Vec<u8>>,
-    bindings: &config::KeyBindings,
-    theme: &config::Theme,
-) -> io::Result<i32> {
-    let candidates: Vec<Candidate> = io::stdin()
-        .lock()
-        .lines()
-        .map_while(Result::ok)
-        .filter(|line| !line.is_empty())
-        .map(|line| Candidate::parse_line(&line))
-        .collect();
+) -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+    let tsv = daemon::read_tsv(&mut reader).map_err(io::Error::other)?;
 
-    if candidates.is_empty() {
-        return Ok(1);
-    }
+    let stdout = io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
 
-    let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
-    if app.filtered_indices.is_empty() {
-        return Ok(1);
-    }
-    let mut guard = TtyGuard::new()?;
-
-    // Scroll terminal to ensure blank space below cursor for popup
-    ui::render::ensure_space(&mut guard.tty, &mut app)?;
-    app.select_first();
-    ui::render::draw(&mut guard.tty, &app, theme)?;
-    let mut input_reader = input::TtyInputReader::new(shift_tab_sequence)?;
-
-    let result = loop {
-        match input_reader.read(&mut guard.tty, bindings)? {
-            input::ReadOutcome::Action(input::Action::MoveDown) => {
-                app.move_down();
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::MoveUp) => {
-                app.move_up();
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::PageDown) => {
-                app.page_down();
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::PageUp) => {
-                app.page_up();
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::Resize(cols, rows)) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                app.set_term_size(cols, rows);
-                ui::render::ensure_space(&mut guard.tty, &mut app)?;
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::Confirm) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                break match app.selected_candidate() {
-                    Some(c) => AppResult::Selected(c.text.clone(), c.kind.clone()),
-                    None => AppResult::Cancelled(Some(app.filter_text.clone())),
-                };
-            }
-            input::ReadOutcome::Action(input::Action::DismissWithSpace) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                break match app.selected_candidate() {
-                    Some(c) => AppResult::DismissedWithSpace(c.text_for_dismiss_with_space()),
-                    None => AppResult::DismissedWithSpace(format!("{} ", app.filter_text)),
-                };
-            }
-            input::ReadOutcome::Action(input::Action::Cancel) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                let text = if app.filter_text != app.prefix {
-                    Some(app.filter_text.clone())
-                } else {
-                    None
-                };
-                break AppResult::Cancelled(text);
-            }
-            input::ReadOutcome::Action(input::Action::TypeChar(c)) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                app.type_char(c);
-                if app.filtered_indices.is_empty() {
-                    break AppResult::Cancelled(Some(app.filter_text.clone()));
-                }
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::Backspace) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                if !app.backspace() {
-                    break AppResult::Cancelled(None);
-                }
-                if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
-                    break AppResult::Cancelled(Some(app.filter_text.clone()));
-                }
-                ui::render::draw(&mut guard.tty, &app, theme)?;
-            }
-            input::ReadOutcome::Action(input::Action::None) => {}
-            input::ReadOutcome::Passthrough(bytes) => {
-                ui::render::clear(&mut guard.tty, &app)?;
-                break AppResult::Passthrough(app.filter_text.clone(), bytes);
-            }
-        }
-    };
-
-    drop(guard);
-
-    match result {
-        AppResult::Selected(text, kind) => {
-            let c = Candidate {
-                text,
-                description: String::new(),
-                kind,
-            };
-            print!("{}", c.text_with_suffix());
-            Ok(0)
-        }
-        AppResult::DismissedWithSpace(text) => {
-            print!("{}", text);
-            Ok(2)
-        }
-        AppResult::Cancelled(Some(text)) => {
-            print!("{}", text);
-            Ok(1)
-        }
-        AppResult::Cancelled(None) => Ok(1),
-        AppResult::Passthrough(text, bytes) => {
-            print!("{}\t{}", encode_passthrough(&bytes), text);
-            Ok(3)
-        }
-    }
+    daemon::run_stdio_complete(
+        &mut reader,
+        &mut writer,
+        prefix,
+        cursor_row,
+        cursor_col,
+        cols,
+        rows,
+        shift_tab_sequence,
+        &tsv,
+    );
+    Ok(())
 }
 
 fn run_render(
@@ -249,7 +128,6 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
 fn main() {
     let cli = Cli::parse();
     let cfg = config::Config::load();
-    let bindings = cfg.key_bindings();
     let theme = cfg.theme();
     match cli.command {
         Command::Complete {
@@ -257,19 +135,20 @@ fn main() {
             cursor_row,
             cursor_col,
             shift_tab_hex,
+            cols,
+            rows,
         } => match run_complete(
             prefix,
             cursor_row,
             cursor_col,
+            cols,
+            rows,
             shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
-            &bindings,
-            &theme,
         ) {
-            Ok(code) => process::exit(code),
+            Ok(()) => process::exit(0),
             Err(e) => {
-                let _ = crossterm::terminal::disable_raw_mode();
                 eprintln!("error: {}", e);
                 process::exit(1);
             }

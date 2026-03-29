@@ -22,6 +22,12 @@ pub enum Command {
 
         #[arg(long)]
         shift_tab_hex: Option<String>,
+
+        #[arg(long, default_value_t = 80)]
+        cols: u16,
+
+        #[arg(long, default_value_t = 24)]
+        rows: u16,
     },
     /// Draw popup and exit immediately (non-blocking) — 自動トリガー用
     Render {

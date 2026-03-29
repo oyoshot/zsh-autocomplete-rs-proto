@@ -63,6 +63,49 @@ impl DaemonServer {
     }
 }
 
+/// Run a single complete session over arbitrary Read/Write streams.
+///
+/// Used by the subprocess fallback path where the shell communicates
+/// via stdin/stdout using the same text protocol as the daemon.
+#[allow(clippy::too_many_arguments)]
+pub fn run_stdio_complete<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    shift_tab_sequence: Option<Vec<u8>>,
+    tsv: &str,
+) {
+    let config = Config::load();
+    let theme = config.theme();
+    let key_bindings = config.key_bindings();
+    let mut server = DaemonServer {
+        config,
+        theme,
+        key_bindings,
+        config_mtime: None,
+        socket_path: PathBuf::new(),
+        fuzzy: Some(FuzzyMatcher::new()),
+    };
+    let params = CompleteParams {
+        prefix,
+        cursor_row,
+        cursor_col,
+        term_cols,
+        term_rows,
+        reuse_popup: false,
+        shift_tab_sequence,
+    };
+    server.handle_complete(reader, writer, params, tsv);
+}
+
+pub fn read_tsv(reader: &mut impl BufRead) -> Result<String, String> {
+    read_tsv_payload(reader)
+}
+
 pub fn start() -> io::Result<()> {
     init_tracing();
 
