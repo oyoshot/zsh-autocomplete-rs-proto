@@ -408,7 +408,7 @@ mod tests {
         assert!(paste.len() > 16);
         let sender = thread::spawn(move || {
             writer.write_all(b"\x1b").unwrap();
-            thread::sleep(ESC_SEQUENCE_TIMEOUT / 4);
+            thread::sleep(Duration::from_millis(2));
             writer.write_all(&paste[1..])
         });
 
