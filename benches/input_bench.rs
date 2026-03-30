@@ -29,9 +29,7 @@ fn parse_raw_bytes_bench(c: &mut Criterion) {
         b.iter(|| parse_raw_bytes(black_box(concat.as_slice()), &bindings));
     });
 
-    let keystrokes: &[&[u8]] = &[
-        b"g", b"i", b"t", b" ", b"s", b"t", b"a", b"t", b"u", b"s",
-    ];
+    let keystrokes: &[&[u8]] = &[b"g", b"i", b"t", b" ", b"s", b"t", b"a", b"t", b"u", b"s"];
     group.bench_function("batch_10_sequential", |b| {
         b.iter(|| {
             for &event in keystrokes {
@@ -95,5 +93,9 @@ fn map_key_event_to_action_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, parse_raw_bytes_bench, map_key_event_to_action_bench);
+criterion_group!(
+    benches,
+    parse_raw_bytes_bench,
+    map_key_event_to_action_bench
+);
 criterion_main!(benches);
