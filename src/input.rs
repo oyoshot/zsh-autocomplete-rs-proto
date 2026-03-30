@@ -17,6 +17,10 @@ pub enum Action {
     None,
 }
 
+/// Parse raw key bytes into an `Action`.
+///
+/// Returns `Action::None` for unrecognized input.  Used by the render
+/// path where unrecognized keys are simply ignored.
 pub fn parse_raw_bytes(bytes: &[u8], bindings: &KeyBindings) -> Action {
     parse_raw_bytes_with_shift_tab(bytes, bindings, None)
 }
@@ -30,6 +34,10 @@ pub fn parse_raw_bytes_with_shift_tab(
         .unwrap_or(Action::None)
 }
 
+/// Parse raw key bytes, returning `None` for unrecognized input.
+///
+/// `None` signals that the caller should pass the key through to the
+/// shell unchanged (the popup-session `DONE 3` / passthrough path).
 pub fn parse_tty_bytes_with_shift_tab(
     bytes: &[u8],
     bindings: &KeyBindings,
