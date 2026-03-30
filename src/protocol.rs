@@ -23,7 +23,7 @@ pub enum Request {
         term_cols: u16,
         term_rows: u16,
         candidates_tsv: Vec<u8>,
-        /// Pre-select the N-th filtered candidate (for Tab-cycle mode).
+        /// Pre-select the N-th filtered candidate before rendering.
         selected: Option<u16>,
     },
     Clear {
@@ -287,6 +287,17 @@ impl Response {
     }
 }
 
+pub fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.is_empty() || !hex.len().is_multiple_of(2) {
+        return None;
+    }
+
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
 pub fn socket_path() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
         std::path::PathBuf::from(dir).join("zacrs.sock")
@@ -527,5 +538,15 @@ mod tests {
         let err = Response::deserialize(&mut &fake_len[..]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("payload too large"));
+    }
+
+    #[test]
+    fn decode_hex_bytes_parses_escape_sequences() {
+        assert_eq!(decode_hex_bytes("1b5b5a"), Some(b"\x1b[Z".to_vec()));
+        assert_eq!(
+            decode_hex_bytes("1b5b32373b323b397e"),
+            Some(b"\x1b[27;2;9~".to_vec())
+        );
+        assert_eq!(decode_hex_bytes("1b5"), None);
     }
 }

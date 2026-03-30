@@ -1,16 +1,110 @@
 mod helpers;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-fn socket_path() -> String {
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-        format!("{}/zacrs.sock", dir)
-    } else {
-        let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-        format!("/tmp/zacrs-{}.sock", user)
+struct BenchDaemon {
+    socket_path: String,
+    runtime_dir: std::path::PathBuf,
+    child: Child,
+}
+
+impl BenchDaemon {
+    fn start() -> Self {
+        let runtime_dir = bench_runtime_dir();
+        fs::create_dir_all(&runtime_dir).expect("failed to create bench runtime dir");
+
+        let socket_path = runtime_dir.join("zacrs.sock");
+        let socket_path_str = socket_path.to_string_lossy().into_owned();
+        let mut child = Command::new(release_daemon_binary())
+            .env("XDG_RUNTIME_DIR", &runtime_dir)
+            .arg("daemon")
+            .arg("start")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn bench daemon");
+
+        for _ in 0..100 {
+            if text_ping(&socket_path_str) {
+                return Self {
+                    socket_path: socket_path_str,
+                    runtime_dir,
+                    child,
+                };
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "bench daemon did not start listening on {}",
+            socket_path.display()
+        );
     }
+}
+
+impl Drop for BenchDaemon {
+    fn drop(&mut self) {
+        if let Ok(stream) = UnixStream::connect(&self.socket_path) {
+            let mut writer = &stream;
+            let _ = writer.write_all(&zsh_autocomplete_rs::protocol::Request::Shutdown.serialize());
+            let mut reader = BufReader::new(&stream);
+            let _ = zsh_autocomplete_rs::protocol::Response::deserialize(&mut reader);
+        }
+
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+
+        let _ = fs::remove_dir_all(&self.runtime_dir);
+    }
+}
+
+fn bench_runtime_dir() -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("zacrs-bench-{}-{nonce}", std::process::id()))
+}
+
+fn release_daemon_binary() -> &'static std::path::PathBuf {
+    static RELEASE_BIN: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+    RELEASE_BIN.get_or_init(|| {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| manifest_dir.join("target"));
+        let target_dir = if target_dir.is_relative() {
+            manifest_dir.join(target_dir)
+        } else {
+            target_dir
+        };
+
+        let status = Command::new("cargo")
+            .current_dir(&manifest_dir)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .arg("build")
+            .arg("--release")
+            .arg("--bin")
+            .arg("zsh-autocomplete-rs")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("failed to build release daemon binary");
+        assert!(status.success(), "release daemon build failed");
+
+        target_dir.join("release").join("zsh-autocomplete-rs")
+    })
 }
 
 fn text_ping(sock: &str) -> bool {
@@ -56,30 +150,24 @@ fn build_request(
 }
 
 fn daemon_ping(c: &mut Criterion) {
-    let sock = socket_path();
-    if !text_ping(&sock) {
-        eprintln!("WARNING: daemon not running, skipping daemon benchmarks");
-        eprintln!("Start with: cargo run --release -- daemon start &");
-        return;
-    }
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
 
     c.bench_function("daemon_ping_roundtrip", |b| {
-        b.iter(|| text_ping(&sock));
+        b.iter(|| text_ping(sock));
     });
 }
 
 fn daemon_render(c: &mut Criterion) {
-    let sock = socket_path();
-    if !text_ping(&sock) {
-        return;
-    }
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
 
     let mut group = c.benchmark_group("daemon_render");
     for size in [50, 200, 1_000] {
         let candidates = helpers::generate_candidates(size);
         let request = build_request("render", &candidates);
         group.bench_with_input(BenchmarkId::from_parameter(size), &request, |b, req| {
-            b.iter(|| text_render(&sock, req));
+            b.iter(|| text_render(sock, req));
         });
     }
     group.finish();
@@ -105,10 +193,8 @@ fn read_frame(reader: &mut BufReader<&UnixStream>) -> Option<usize> {
 /// 3. Send KEY ↓ twice, receive FRAME each time
 /// 4. Send KEY Enter, receive DONE
 fn daemon_complete_session(c: &mut Criterion) {
-    let sock = socket_path();
-    if !text_ping(&sock) {
-        return;
-    }
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
 
     let candidates = helpers::generate_candidates(50);
     let request = build_request("complete", &candidates);
@@ -118,7 +204,7 @@ fn daemon_complete_session(c: &mut Criterion) {
 
     c.bench_function("daemon_complete_session", |b| {
         b.iter(|| {
-            let stream = UnixStream::connect(&sock).unwrap();
+            let stream = UnixStream::connect(sock).unwrap();
             let mut writer = &stream;
             let mut reader = BufReader::new(&stream);
 

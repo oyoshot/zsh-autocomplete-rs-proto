@@ -16,6 +16,8 @@ use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
+const MAX_INLINE_KEY_BYTES: usize = 16;
+
 struct RenderParams {
     prefix: String,
     cursor_row: u16,
@@ -32,6 +34,7 @@ struct CompleteParams {
     term_cols: u16,
     term_rows: u16,
     reuse_popup: bool,
+    shift_tab_sequence: Option<Vec<u8>>,
 }
 
 struct DaemonServer {
@@ -41,6 +44,62 @@ struct DaemonServer {
     config_mtime: Option<SystemTime>,
     socket_path: PathBuf,
     fuzzy: Option<FuzzyMatcher>,
+}
+
+impl DaemonServer {
+    fn new(socket_path: PathBuf) -> Self {
+        let config = Config::load();
+        let config_mtime = config_file_mtime();
+        let theme = config.theme();
+        let key_bindings = config.key_bindings();
+        Self {
+            config,
+            theme,
+            key_bindings,
+            config_mtime,
+            socket_path,
+            fuzzy: Some(FuzzyMatcher::new()),
+        }
+    }
+}
+
+/// Run a single complete session over arbitrary Read/Write streams.
+///
+/// Used by the subprocess fallback path where the shell communicates
+/// via stdin/stdout using the same text protocol as the daemon.
+#[allow(clippy::too_many_arguments)]
+pub fn run_stdio_complete<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    shift_tab_sequence: Option<Vec<u8>>,
+    tsv: &str,
+) {
+    let config = Config::load();
+    let theme = config.theme();
+    let key_bindings = config.key_bindings();
+    let mut server = DaemonServer {
+        config,
+        theme,
+        key_bindings,
+        config_mtime: None,
+        socket_path: PathBuf::new(),
+        fuzzy: Some(FuzzyMatcher::new()),
+    };
+    let params = CompleteParams {
+        prefix,
+        cursor_row,
+        cursor_col,
+        term_cols,
+        term_rows,
+        reuse_popup: false,
+        shift_tab_sequence,
+    };
+    server.handle_complete(reader, writer, params, tsv);
 }
 
 pub fn start() -> io::Result<()> {
@@ -69,19 +128,7 @@ pub fn start() -> io::Result<()> {
 
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
-    let config = Config::load();
-    let config_mtime = config_file_mtime();
-    let theme = config.theme();
-    let key_bindings = config.key_bindings();
-
-    let mut server = DaemonServer {
-        config,
-        theme,
-        key_bindings,
-        config_mtime,
-        socket_path,
-        fuzzy: Some(FuzzyMatcher::new()),
-    };
+    let mut server = DaemonServer::new(socket_path);
 
     for stream in listener.incoming() {
         match stream {
@@ -270,7 +317,7 @@ impl DaemonServer {
     ///   <candidates_tsv lines...>\n
     ///   END\n
     ///
-    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>]\n
+    ///   complete <row> <col> <cols> <rows> [reuse_token=<id>] [shift_tab_hex=<hex>]\n
     ///   <prefix>\n
     ///   <candidates_tsv lines...>\n
     ///   END\n
@@ -286,6 +333,12 @@ impl DaemonServer {
     /// Response format (empty/error):
     ///   EMPTY\n
     ///   ERROR <message>\n
+    ///
+    /// Popup-session responses (on the persistent connection):
+    ///   FRAME popup_row=<N> popup_height=<N> cursor_row=<N> <tty_len>\n<tty_bytes>
+    ///   DONE <exit_code> <text>\n
+    ///     exit_code: 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
+    ///   NONE\n
     fn handle_text_connection(
         &mut self,
         reader: &mut BufReader<&UnixStream>,
@@ -366,6 +419,10 @@ impl DaemonServer {
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
+                let shift_tab_sequence = parts[5..]
+                    .iter()
+                    .find_map(|part| part.strip_prefix("shift_tab_hex="))
+                    .and_then(crate::protocol::decode_hex_bytes);
                 let (prefix, tsv) = match read_prefix_and_tsv(reader, &mut writer, "complete") {
                     Ok(v) => v,
                     Err(()) => return false,
@@ -399,6 +456,7 @@ impl DaemonServer {
                         term_cols,
                         term_rows,
                         reuse_popup,
+                        shift_tab_sequence,
                     },
                     &tsv,
                 );
@@ -449,9 +507,9 @@ impl DaemonServer {
         }
     }
 
-    fn send_frame(
+    fn send_frame<W: Write>(
         &self,
-        writer: &mut io::BufWriter<&UnixStream>,
+        writer: &mut W,
         app: &App,
         extra_prefix: &[u8],
         popup_only: bool,
@@ -568,22 +626,22 @@ impl DaemonServer {
         }
     }
 
-    fn handle_complete(
+    /// Common session initialization for popup sessions.
+    ///
+    /// Parses candidates, creates `App`, filters, caps viewport, and calls `select_first()`.
+    /// Returns `None` if an early exit was needed (empty candidates, no matches, etc.),
+    /// in which case a `DONE 1` response has already been sent.
+    #[allow(clippy::too_many_arguments)]
+    fn setup_session<W: Write>(
         &mut self,
-        reader: &mut BufReader<&UnixStream>,
-        writer: &mut io::BufWriter<&UnixStream>,
-        params: CompleteParams,
+        writer: &mut W,
+        prefix: String,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
         tsv: &str,
-    ) {
-        let CompleteParams {
-            prefix,
-            cursor_row,
-            cursor_col,
-            term_cols,
-            term_rows,
-            reuse_popup,
-        } = params;
-
+    ) -> Option<(App, Vec<u8>)> {
         let candidates: Vec<Candidate> = tsv
             .lines()
             .filter(|line| !line.is_empty())
@@ -593,7 +651,7 @@ impl DaemonServer {
         if candidates.is_empty() {
             let _ = writeln!(writer, "DONE 1 ");
             let _ = writer.flush();
-            return;
+            return None;
         }
 
         let fuzzy = self.fuzzy.take().unwrap_or_default();
@@ -605,7 +663,7 @@ impl DaemonServer {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = writeln!(writer, "DONE 1 ");
             let _ = writer.flush();
-            return;
+            return None;
         }
 
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
@@ -614,15 +672,42 @@ impl DaemonServer {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = writeln!(writer, "DONE 1 ");
             let _ = writer.flush();
-            return;
+            return None;
         }
 
         app.select_first();
+        Some((app, scroll_bytes))
+    }
+
+    fn handle_complete<R: BufRead, W: Write>(
+        &mut self,
+        reader: &mut R,
+        writer: &mut W,
+        params: CompleteParams,
+        tsv: &str,
+    ) {
+        let CompleteParams {
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            reuse_popup,
+            shift_tab_sequence,
+        } = params;
+
+        let (mut app, scroll_bytes) = match self.setup_session(
+            writer, prefix, cursor_row, cursor_col, term_cols, term_rows, tsv,
+        ) {
+            Some(v) => v,
+            None => return,
+        };
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
-        let initial_frame_result = self.send_frame(writer, &app, &scroll_bytes, reuse_fast_path);
-
-        if initial_frame_result.is_err() {
+        if self
+            .send_frame(writer, &app, &scroll_bytes, reuse_fast_path)
+            .is_err()
+        {
             self.fuzzy = Some(app.take_fuzzy());
             return;
         }
@@ -636,27 +721,34 @@ impl DaemonServer {
 
             if let Some(len_str) = msg_line.strip_prefix("KEY ") {
                 let byte_count: usize = len_str.parse().unwrap_or(0);
-                if byte_count == 0 || byte_count > 16 {
+                if byte_count == 0 {
                     let _ = writeln!(writer, "NONE");
                     let _ = writer.flush();
                     continue;
                 }
+                if byte_count > MAX_INLINE_KEY_BYTES {
+                    if drain_key_payload(reader, byte_count).is_err() {
+                        break;
+                    }
+                    let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                    let _ = writer.flush();
+                    break;
+                }
                 let mut key_buf = vec![0u8; byte_count];
-                if io::Read::read_exact(reader, &mut key_buf).is_err() {
+                if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
                     break;
                 }
 
-                let action = input::parse_raw_bytes(&key_buf, &self.key_bindings);
+                let action = input::parse_tty_bytes_with_shift_tab(
+                    &key_buf,
+                    &self.key_bindings,
+                    shift_tab_sequence.as_deref(),
+                )
+                .unwrap_or(Action::None);
 
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
-                        match action {
-                            Action::MoveDown => app.move_down(),
-                            Action::MoveUp => app.move_up(),
-                            Action::PageDown => app.page_down(),
-                            Action::PageUp => app.page_up(),
-                            _ => unreachable!(),
-                        }
+                        apply_navigation(&mut app, action);
                         if self.send_frame(writer, &app, &[], false).is_err() {
                             break;
                         }
@@ -704,7 +796,15 @@ impl DaemonServer {
                         break;
                     }
                     Action::DismissWithSpace => {
-                        let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                        match app.selected_candidate() {
+                            Some(c) => {
+                                let _ =
+                                    writeln!(writer, "DONE 2 {}", c.text_for_dismiss_with_space());
+                            }
+                            None => {
+                                let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                            }
+                        }
                         let _ = writer.flush();
                         break;
                     }
@@ -718,9 +818,14 @@ impl DaemonServer {
                         let _ = writer.flush();
                         break;
                     }
-                    Action::Resize(_, _) | Action::None => {
+                    Action::Resize(_, _) => {
                         let _ = writeln!(writer, "NONE");
                         let _ = writer.flush();
+                    }
+                    Action::None => {
+                        let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                        let _ = writer.flush();
+                        break;
                     }
                 }
             } else {
@@ -748,6 +853,25 @@ impl DaemonServer {
             }
         }
     }
+}
+
+fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<()> {
+    let mut remaining = byte_count;
+    let mut buf = [0u8; 256];
+
+    while remaining > 0 {
+        let chunk_len = remaining.min(buf.len());
+        let read = reader.read(&mut buf[..chunk_len])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short KEY payload while draining passthrough bytes",
+            ));
+        }
+        remaining -= read;
+    }
+
+    Ok(())
 }
 
 fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
@@ -781,6 +905,16 @@ fn read_prefix_and_tsv(
         }
     };
     Ok((prefix, tsv))
+}
+
+fn apply_navigation(app: &mut App, action: Action) {
+    match action {
+        Action::MoveDown => app.move_down(),
+        Action::MoveUp => app.move_up(),
+        Action::PageDown => app.page_down(),
+        Action::PageUp => app.page_up(),
+        _ => {}
+    }
 }
 
 /// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
@@ -835,7 +969,7 @@ fn config_file_mtime() -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
-fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
+pub fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
     const MAX_TSV_BYTES: usize = 1_048_576;
     let mut tsv = String::new();
     loop {
@@ -889,7 +1023,7 @@ mod tests {
     fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
-        assert!(header.starts_with("FRAME "));
+        assert!(header.starts_with("FRAME "), "header was: {header:?}");
 
         let tty_len = header
             .split_whitespace()
@@ -919,6 +1053,44 @@ mod tests {
             socket_path: PathBuf::from("/tmp/zacrs-test.sock"),
             fuzzy: Some(FuzzyMatcher::new()),
         }
+    }
+
+    fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let prefix = prefix.to_string();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix,
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, key);
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
     }
 
     #[test]
@@ -1005,6 +1177,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
@@ -1037,6 +1210,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: true,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
             );
@@ -1069,6 +1243,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "git\tcommand\tcommand\n",
             );
@@ -1112,6 +1287,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
@@ -1154,6 +1330,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
             );
@@ -1176,6 +1353,178 @@ mod tests {
         handle.join().unwrap();
     }
 
+    #[test]
+    fn handle_complete_utf8_key_updates_filter_instead_of_passthrough() {
+        let mut server = test_server();
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY {}", "あ".len()).unwrap();
+        input.extend_from_slice("あ".as_bytes());
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+        );
+
+        let output = String::from_utf8_lossy(&writer);
+        assert!(output.contains("DONE 1 "), "output was: {output}");
+        assert!(output.contains('あ'), "output was: {output}");
+        assert!(!output.contains("DONE 3"), "output was: {output}");
+    }
+
+    #[test]
+    fn handle_complete_space_after_selection_returns_selected_candidate() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"a");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b"\t");
+        let _ = read_frame(&mut reader);
+
+        send_key(&mut writer, b" ");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_space_after_empty_kind_selection_appends_space() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git\tcommand\t\ngizmo\tcommand\t\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b" ");
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_unknown_key_passthroughs_filter_text() {
+        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 gi");
+    }
+
+    #[test]
+    fn handle_complete_ctrl_bindings_passthrough_filter_text() {
+        for key in [b"\x01".as_slice(), b"\x05", b"\x0b"] {
+            assert_passthrough_key("gi", key, "DONE 3 gi");
+        }
+    }
+
+    #[test]
+    fn handle_complete_ctrl_j_passthrough_does_not_inject_newline() {
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        send_key(&mut writer, b"\n");
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        assert_eq!(done, "DONE 3 gi\n");
+
+        let mut extra = String::new();
+        reader.read_line(&mut extra).unwrap();
+        assert!(
+            extra.is_empty(),
+            "unexpected extra protocol line: {extra:?}"
+        );
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn handle_complete_oversized_key_drains_payload_and_passthroughs() {
+        assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
+    }
+
     fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let prefix = prefix.to_string();
@@ -1194,6 +1543,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     reuse_popup: false,
+                    shift_tab_sequence: None,
                 },
                 &candidates_tsv,
             );
