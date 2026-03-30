@@ -17,6 +17,14 @@ selected-bg = "dark-green"
 tab = "move-down"
 "#;
 
+const KEY_ARROW_DOWN: &[u8] = b"KEY 3\n\x1b[B";
+const KEY_ENTER: &[u8] = b"KEY 1\n\r";
+const KEY_BACKSPACE: &[u8] = b"KEY 1\n\x7f";
+const KEY_T: &[u8] = b"KEY 1\nt";
+const KEY_C: &[u8] = b"KEY 1\nc";
+const KEY_L: &[u8] = b"KEY 1\nl";
+const KEY_DASH: &[u8] = b"KEY 1\n-";
+
 struct BenchDaemon {
     socket_path: String,
     runtime_dir: std::path::PathBuf,
@@ -158,6 +166,43 @@ fn build_request(
     req.into_bytes()
 }
 
+fn read_frame(reader: &mut BufReader<&UnixStream>) -> Option<usize> {
+    let mut header = String::new();
+    reader.read_line(&mut header).ok()?;
+    if !header.starts_with("FRAME") {
+        return None;
+    }
+    let tty_len: usize = header.trim().rsplit(' ').next()?.parse().ok()?;
+    if tty_len > 0 {
+        let mut tty_bytes = vec![0u8; tty_len];
+        reader.read_exact(&mut tty_bytes).ok()?;
+    }
+    Some(tty_len)
+}
+
+fn send_key(writer: &mut &UnixStream, reader: &mut BufReader<&UnixStream>, key: &[u8]) {
+    writer.write_all(key).unwrap();
+    read_frame(reader).unwrap();
+}
+
+fn start_session<'a>(request: &[u8], stream: &'a UnixStream) -> BufReader<&'a UnixStream> {
+    let mut writer: &UnixStream = stream;
+    let mut reader = BufReader::new(stream);
+    writer.write_all(request).unwrap();
+    read_frame(&mut reader).unwrap();
+    reader
+}
+
+fn confirm_done(writer: &mut &UnixStream, reader: &mut BufReader<&UnixStream>) {
+    writer.write_all(KEY_ENTER).unwrap();
+    let mut done_line = String::new();
+    reader.read_line(&mut done_line).unwrap();
+    assert!(
+        done_line.starts_with("DONE"),
+        "expected DONE, got: {done_line}"
+    );
+}
+
 fn daemon_ping(c: &mut Criterion) {
     let daemon = BenchDaemon::start();
     let sock = &daemon.socket_path;
@@ -182,25 +227,8 @@ fn daemon_render(c: &mut Criterion) {
     group.finish();
 }
 
-fn read_frame(reader: &mut BufReader<&UnixStream>) -> Option<usize> {
-    let mut header = String::new();
-    reader.read_line(&mut header).ok()?;
-    if !header.starts_with("FRAME") {
-        return None;
-    }
-    let tty_len: usize = header.trim().rsplit(' ').next()?.parse().ok()?;
-    if tty_len > 0 {
-        let mut tty_bytes = vec![0u8; tty_len];
-        reader.read_exact(&mut tty_bytes).ok()?;
-    }
-    Some(tty_len)
-}
-
 /// Benchmark a full interactive complete session:
-/// 1. Send complete request (50 candidates)
-/// 2. Receive initial FRAME
-/// 3. Send KEY ↓ twice, receive FRAME each time
-/// 4. Send KEY Enter, receive DONE
+/// Send complete request (50 candidates), arrow down twice, confirm.
 fn daemon_complete_session(c: &mut Criterion) {
     let daemon = BenchDaemon::start();
     let sock = &daemon.socket_path;
@@ -208,33 +236,94 @@ fn daemon_complete_session(c: &mut Criterion) {
     let candidates = helpers::generate_candidates(50);
     let request = build_request("complete", &candidates);
 
-    let arrow_down = b"KEY 3\n\x1b[B";
-    let enter_key = b"KEY 1\n\r";
-
     c.bench_function("daemon_complete_session", |b| {
         b.iter(|| {
             let stream = UnixStream::connect(sock).unwrap();
-            let mut writer = &stream;
-            let mut reader = BufReader::new(&stream);
+            let mut reader = start_session(&request, &stream);
+            let w = &mut (&stream as &UnixStream);
 
-            // Send complete request + read initial FRAME
-            writer.write_all(&request).unwrap();
-            read_frame(&mut reader).unwrap();
+            send_key(w, &mut reader, KEY_ARROW_DOWN);
+            send_key(w, &mut reader, KEY_ARROW_DOWN);
 
-            // Two arrow-down keypresses
-            writer.write_all(arrow_down).unwrap();
-            read_frame(&mut reader).unwrap();
-            writer.write_all(arrow_down).unwrap();
-            read_frame(&mut reader).unwrap();
+            confirm_done(w, &mut reader);
+        });
+    });
+}
 
-            // Confirm with Enter
-            writer.write_all(enter_key).unwrap();
-            let mut done_line = String::new();
-            reader.read_line(&mut done_line).unwrap();
-            assert!(
-                done_line.starts_with("DONE"),
-                "expected DONE, got: {done_line}"
-            );
+/// Benchmark a realistic typing session (200 candidates):
+/// type 3 chars, backspace, retype, arrow navigate, confirm.
+/// Exercises incremental filter, backspace state reset, and mixed interaction.
+fn daemon_typing_session(c: &mut Criterion) {
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
+
+    let candidates = helpers::generate_candidates(200);
+    let request = build_request("complete", &candidates);
+
+    c.bench_function("daemon_typing_session", |b| {
+        b.iter(|| {
+            let stream = UnixStream::connect(sock).unwrap();
+            let mut reader = start_session(&request, &stream);
+            let w = &mut (&stream as &UnixStream);
+
+            send_key(w, &mut reader, KEY_T);
+            send_key(w, &mut reader, KEY_DASH);
+            send_key(w, &mut reader, KEY_C);
+            send_key(w, &mut reader, KEY_BACKSPACE);
+            send_key(w, &mut reader, KEY_L);
+            send_key(w, &mut reader, KEY_ARROW_DOWN);
+            send_key(w, &mut reader, KEY_ARROW_DOWN);
+
+            confirm_done(w, &mut reader);
+        });
+    });
+}
+
+/// Benchmark rapid consecutive arrow-down keypresses (viewport scrolling stress).
+/// 25 arrow-down events on 200 candidates.
+fn daemon_rapid_scroll(c: &mut Criterion) {
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
+
+    let candidates = helpers::generate_candidates(200);
+    let request = build_request("complete", &candidates);
+
+    c.bench_function("daemon_rapid_scroll", |b| {
+        b.iter(|| {
+            let stream = UnixStream::connect(sock).unwrap();
+            let mut reader = start_session(&request, &stream);
+            let w = &mut (&stream as &UnixStream);
+
+            for _ in 0..25 {
+                send_key(w, &mut reader, KEY_ARROW_DOWN);
+            }
+
+            confirm_done(w, &mut reader);
+        });
+    });
+}
+
+/// Benchmark progressive filtering from a large candidate set.
+/// 1200 candidates narrowed via "gi" -> "git" -> "git-" -> "git-c", then confirm.
+fn daemon_many_candidates_filter(c: &mut Criterion) {
+    let daemon = BenchDaemon::start();
+    let sock = &daemon.socket_path;
+
+    let candidates = helpers::generate_candidates(1200);
+    let request = build_request("complete", &candidates);
+
+    c.bench_function("daemon_many_candidates_filter", |b| {
+        b.iter(|| {
+            let stream = UnixStream::connect(sock).unwrap();
+            let mut reader = start_session(&request, &stream);
+            let w = &mut (&stream as &UnixStream);
+
+            send_key(w, &mut reader, KEY_T);
+            send_key(w, &mut reader, KEY_DASH);
+            send_key(w, &mut reader, KEY_C);
+            send_key(w, &mut reader, KEY_ARROW_DOWN);
+
+            confirm_done(w, &mut reader);
         });
     });
 }
@@ -282,6 +371,9 @@ criterion_group!(
     daemon_ping,
     daemon_render,
     daemon_complete_session,
+    daemon_typing_session,
+    daemon_rapid_scroll,
+    daemon_many_candidates_filter,
     config_reload_mtime_check,
     config_reload_full
 );
