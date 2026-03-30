@@ -61,16 +61,14 @@ fn token_stability(c: &mut Criterion) {
     let popup = Popup::compute(&app);
     let tsv = candidates_to_tsv(&app);
 
+    // Verify determinism once before timing.
+    let t1 = compute_reuse_token("gi", &tsv, &app, &popup);
+    let t2 = compute_reuse_token("gi", &tsv, &app, &popup);
+    assert_eq!(t1, t2);
+
     let mut group = c.benchmark_group("reuse_token_stability");
     group.bench_function("repeated_identical_input", |b| {
-        b.iter(|| {
-            let t1 = compute_reuse_token("gi", &tsv, &app, &popup);
-            let t2 = compute_reuse_token("gi", &tsv, &app, &popup);
-            let t3 = compute_reuse_token("gi", &tsv, &app, &popup);
-            assert_eq!(t1, t2);
-            assert_eq!(t2, t3);
-            t3
-        });
+        b.iter(|| compute_reuse_token("gi", &tsv, &app, &popup));
     });
     group.finish();
 }
