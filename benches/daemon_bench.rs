@@ -9,14 +9,13 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zsh_autocomplete_rs::config::Config;
 
-const BENCH_CONFIG_TOML: &str = "\
-[theme]\n\
-border = \"blue\"\n\
-selected-bg = \"dark-green\"\n\
-\n\
-[keybindings]\n\
-tab = \"move-down\"\n\
-";
+const BENCH_CONFIG_TOML: &str = r#"[theme]
+border = "blue"
+selected-bg = "dark-green"
+
+[keybindings]
+tab = "move-down"
+"#;
 
 struct BenchDaemon {
     socket_path: String,
@@ -262,7 +261,8 @@ fn config_reload_full(c: &mut Criterion) {
     fs::create_dir_all(&cfg_dir).expect("failed to create temp config dir");
     fs::write(cfg_dir.join("config.toml"), BENCH_CONFIG_TOML).expect("failed to write temp config");
 
-    // SAFETY: benchmark is single-threaded at this point (before criterion harness).
+    // SAFETY: criterion runs iterations of a single bench_function sequentially
+    // on one thread, so no concurrent env access occurs.
     unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
 
     c.bench_function("config_reload_full", |b| {
