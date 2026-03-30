@@ -345,7 +345,9 @@ _zacrs_apply_result() {
         base="$LBUFFER"
     fi
 
-    unset POSTDISPLAY
+    # Passthrough (code 3): preserve POSTDISPLAY so zsh-autosuggestions
+    # can still accept the suggestion when the re-injected key fires.
+    [[ $result_code -ne 3 ]] && unset POSTDISPLAY
 
     if [[ $result_code -eq 0 && -n "$result_text" ]]; then
         new_lbuffer="${base}${result_text}"
@@ -354,7 +356,6 @@ _zacrs_apply_result() {
         new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 3 ]]; then
-        new_lbuffer="${base}${result_text}"
         _zacrs_suppressed=0
     elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
         new_lbuffer="${base}${result_text}"
