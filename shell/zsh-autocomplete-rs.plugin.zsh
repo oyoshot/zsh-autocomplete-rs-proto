@@ -707,37 +707,10 @@ _zacrs_invoke() {
     [[ $result_code -ne 0 ]] && zle reset-prompt
 }
 
-_zacrs_input_nbytes() {
-    local input="$1"
-    local hex
-    hex="$(_zacrs_encode_hex_input "$input")"
-    REPLY=$(( ${#hex} / 2 ))
-}
-
-_zacrs_utf8_sequence_len() {
-    local input="$1"
-    local hex byte
-    hex="$(_zacrs_encode_hex_input "$input")"
-    [[ ${#hex} -lt 2 ]] && return 1
-    byte=$(( 16#${hex[1,2]} ))
-    if (( byte <= 0x7f )); then
-        REPLY=1
-    elif (( byte >= 0xc0 && byte <= 0xdf )); then
-        REPLY=2
-    elif (( byte >= 0xe0 && byte <= 0xef )); then
-        REPLY=3
-    elif (( byte >= 0xf0 && byte <= 0xf7 )); then
-        REPLY=4
-    else
-        return 1
-    fi
-}
-
 _zacrs_send_key_input() {
-    local fd="$1"
-    local input="$2"
-    _zacrs_input_nbytes "$input"
-    printf 'KEY %d\n%s' "$REPLY" "$input" >&$fd
+    local fd="$1" input="$2"
+    local LC_ALL=C
+    printf 'KEY %d\n%s' "${#input}" "$input" >&$fd
 }
 
 _zacrs_read_key_input() {
@@ -750,17 +723,24 @@ _zacrs_read_key_input() {
             input+="$extra"
             extra=""
         done
-    elif _zacrs_utf8_sequence_len "$input"; then
-        local expected_len="$REPLY"
-        local input_len=0 extra=""
-        _zacrs_input_nbytes "$input"
-        input_len="$REPLY"
-        while (( input_len < expected_len )) && sysread -i $fd -c 1 -t 0.05 extra 2>/dev/null; do
-            input+="$extra"
-            extra=""
-            _zacrs_input_nbytes "$input"
-            input_len="$REPLY"
-        done
+    else
+        local -i expected_len=1 nbytes=1 ord=0
+        LC_ALL=C printf -v ord '%d' "'$input" 2>/dev/null
+        if (( ord >= 0xc0 && ord <= 0xdf )); then
+            expected_len=2
+        elif (( ord >= 0xe0 && ord <= 0xef )); then
+            expected_len=3
+        elif (( ord >= 0xf0 && ord <= 0xf7 )); then
+            expected_len=4
+        fi
+        if (( expected_len > 1 )); then
+            local extra=""
+            while (( nbytes < expected_len )) && sysread -i $fd -c 1 -t 0.05 extra 2>/dev/null; do
+                input+="$extra"
+                (( nbytes++ ))
+                extra=""
+            done
+        fi
     fi
     REPLY="$input"
 }
