@@ -1,0 +1,4 @@
+[default.extend-words]
+# Test data: short prefixes used in fuzzy-match / common-prefix tests
+fo = "fo"
+caf = "caf"
