@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774851880705,
+  "lastUpdate": 1774864444881,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -5687,6 +5687,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 756,
             "range": "± 1",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "41c9d587b54067a96e1b08b5a16bbb8248099ab4",
+          "message": "refactor(input): move popup key handling from Zsh to Rust (#43)\n\n* feat(daemon): move cycle-mode key handling from Zsh to Rust (#41)\n\nAdd KeyAssembler for stateful ESC-sequence assembly in input.rs and a\npersistent cycle_start command in daemon.rs.  The Zsh plugin now sends\nraw key bytes over the Unix socket; the daemon interprets them and\nreplies with FRAME/DONE/NONE, replacing 6 widgets, 13 keybindings, and\n~250 lines of shell logic with a single catch-all _zacrs_cycle_handle\nwidget.\n\nKey changes:\n- input.rs: KeyAssembler + FeedResult, parse_single_byte extraction,\n  stack-based CSI reconstruction\n- daemon.rs: handle_cycle loop, setup_session/apply_navigation helpers\n- shell: daemon-driven cycle mode, deferred popup draw after keymap\n  switch to prevent ZSH redraw from erasing the initial frame\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(cycle): add Rust-owned subprocess fallback for cycle sessions\n\n* fix(input): make escape cancel cycle immediately via raw sequence forwarding\n\n* refactor(shell): simplify tab popup session\n\n* refactor(daemon): remove cycle session plumbing\n\n* fix(shell): retrigger popup after space completion\n\n* fix(shell): restore popup completion actions\n\n* fix(shell): clear popup before executing completion\n\n* fix(shell): refresh prompt before accepting line\n\n* fix(shell): restore popup session chaining and passthrough\n\n* fix(input): passthrough unhandled subprocess keys\n\n* fix(input): leave ctrl-j to zsh\n\n* fix(daemon): honor terminfo shift-tab sequences\n\n* fix(daemon): use is_multiple_of for clippy 1.94 lint\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(input): preserve terminal key sequences\n\n* fix(shell): pass terminfo shift-tab to complete fallback\n\n* fix(daemon): preserve utf-8 key input in popup sessions\n\n* fix(input): parse tty bytes with termwiz\n\n* test(daemon): cover control-key passthrough\n\n* test(input): document passthrough event policy\n\n* test(input): cover passthrough special keys\n\n* fix(test): satisfy clippy utf-8 length check\n\n* bench(daemon): isolate benchmark daemon\n\n* fix(bench): satisfy clippy for daemon helper\n\n* fix(input): relax split escape timeout\n\n* fix(daemon): drain oversized key payloads\n\n* fix(input): preserve long escape passthrough\n\n* fix(input): widen timing margin in long escape passthrough test\n\nReduce sender sleep from ESC_SEQUENCE_TIMEOUT/4 (12.5ms) to 2ms so\nthe data reliably arrives within the 50ms poll timeout on loaded\nmacOS CI runners.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(protocol): deduplicate decode_hex_bytes\n\nMove the shared hex-to-bytes decoder into protocol.rs so both main.rs\nand daemon.rs reference a single implementation.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): align escape sequence timeout with Rust side\n\nIncrease sysread timeout in _zacrs_read_key_input from 20ms to 50ms to\nmatch ESC_SEQUENCE_TIMEOUT in input.rs, reducing the risk of split\nescape sequences being misclassified on slower schedulers.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(daemon): move doc comment to correct function\n\nThe `cap_viewport_and_scroll` doc comment was incorrectly attached to\n`apply_navigation` after extraction.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(input): unify subprocess input path with daemon protocol\n\nThe subprocess `complete` command no longer opens /dev/tty directly.\nInstead, the shell spawns it as a coproc and communicates via\nstdin/stdout using the same KEY/FRAME/DONE text protocol as the daemon.\nThis eliminates ESC sequence timeout logic from Rust entirely — the\nshell handles key assembly — and removes the flaky CI tests that\ndepended on thread-sleep timing margins.\n\n- Add `--cols`/`--rows` to `complete` CLI (subprocess can't query\n  terminal size over pipes)\n- Add `daemon::run_stdio_complete()` public wrapper that reuses\n  `handle_complete<R: BufRead, W: Write>` over stdin/stdout\n- Rewrite `run_complete()` from ~130 lines to ~20 lines\n- Delete `TtyInputReader`, `read_key_bytes`, `poll_reader`,\n  `ESC_SEQUENCE_TIMEOUT`, `ReadOutcome`, `TtyGuard`, `AppResult`\n- Delete 4 timing-sensitive `read_key_bytes_*` tests\n- Extract `_zacrs_popup_session_loop` shared by daemon and coproc paths\n- Rewrite `_zacrs_invoke` from one-shot pipe to coproc protocol\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(main): remove redundant Config::load on complete path\n\nConfig was loaded unconditionally at the top of main() but only used\nby the Render subcommand. The Complete path loads its own config inside\nrun_stdio_complete, resulting in a double disk read + TOML parse.\nMove the load into the Render branch where it is actually needed.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* perf(shell): eliminate subprocess spawning per keystroke in popup loop (#44)\n\nReplace od|tr process spawning (2-4 per keystroke) with zsh builtins:\n- Byte counting: LC_ALL=C ${#var} instead of od -tx1 | tr\n- UTF-8 lead byte detection: printf -v (builtin) instead of od\n- UTF-8 accumulation: sysread call counter instead of re-encoding\n\nRemove _zacrs_input_nbytes and _zacrs_utf8_sequence_len (no longer needed).\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(daemon): remove read_tsv thin wrapper\n\nMake read_tsv_payload pub directly instead of wrapping it\nwith an identical single-line function.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* docs(input): clarify Action::None vs Option<Action> semantics\n\nparse_raw_bytes returns Action::None (ignored by render path).\nparse_tty_bytes_with_shift_tab returns Option, where None means\npassthrough to shell (DONE 3).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* Revert [profile.bench] from 36e5209\n\nMoved to a standalone PR (#45).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): don't corrupt buffer on passthrough key in popup session (#46)\n\nWhen an unrecognized key (e.g. right arrow) was pressed in the popup,\nthe daemon returned DONE 3 with filter_text.  Two problems in\n_zacrs_apply_result caused breakage:\n\n1. LBUFFER was overwritten with filter_text (which includes the\n   auto-computed common prefix), clashing with stale autosuggestion\n   state and producing duplicated text like \"cargogo install --path .\".\n\n2. `unset POSTDISPLAY` cleared the zsh-autosuggestions ghost text\n   before the re-injected key could accept it.\n\nFix: for code 3 (passthrough), leave both LBUFFER and POSTDISPLAY\nunchanged so the re-injected key operates on the original shell state\nand autosuggestion acceptance works correctly.\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-30T18:46:03+09:00",
+          "tree_id": "bd1e6d7c67e28b9f02f83397c68863bedace5d5f",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/41c9d587b54067a96e1b08b5a16bbb8248099ab4"
+        },
+        "date": 1774864444081,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7323,
+            "range": "± 109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74723,
+            "range": "± 1444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 904422,
+            "range": "± 6337",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 190453,
+            "range": "± 6691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100085,
+            "range": "± 2570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75521,
+            "range": "± 816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 19928,
+            "range": "± 197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 18836,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 11992,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 309940,
+            "range": "± 3824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 303385,
+            "range": "± 6121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 264892,
+            "range": "± 5063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 293849,
+            "range": "± 3459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26344,
+            "range": "± 395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 301187,
+            "range": "± 1038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3302139,
+            "range": "± 17746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 151692,
+            "range": "± 740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 113080,
+            "range": "± 523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 356832,
+            "range": "± 14847",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 736,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 113,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 29,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 69,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 63,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 856,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7604,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 754,
+            "range": "± 5",
             "unit": "ns/iter"
           }
         ]
