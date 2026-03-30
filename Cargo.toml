@@ -18,7 +18,7 @@ nucleo-matcher = "0.3"
 unicode-width = "0.2"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-toml = "1.0"
+toml = "1.1"
 dirs = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -45,5 +45,9 @@ name = "daemon_bench"
 harness = false
 
 [profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
 lto = true
 codegen-units = 1
