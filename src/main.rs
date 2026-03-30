@@ -18,7 +18,7 @@ fn run_complete(
 ) -> io::Result<()> {
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
-    let tsv = daemon::read_tsv(&mut reader).map_err(io::Error::other)?;
+    let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
 
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());

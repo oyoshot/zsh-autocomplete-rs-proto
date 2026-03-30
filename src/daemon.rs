@@ -102,10 +102,6 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     server.handle_complete(reader, writer, params, tsv);
 }
 
-pub fn read_tsv(reader: &mut impl BufRead) -> Result<String, String> {
-    read_tsv_payload(reader)
-}
-
 pub fn start() -> io::Result<()> {
     init_tracing();
 
@@ -973,7 +969,7 @@ fn config_file_mtime() -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
-fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
+pub fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
     const MAX_TSV_BYTES: usize = 1_048_576;
     let mut tsv = String::new();
     loop {
