@@ -64,6 +64,7 @@ _zacrs_reset_cache() {
     _zacrs_cached_candidates=""
     _zacrs_cached_from_gather=0
     _zacrs_cached_lbase=""
+    _zacrs_debounce_until=0.0
 }
 
 _zacrs_record_popup_snapshot() {
@@ -957,6 +958,7 @@ _zacrs_line_pre_redraw() {
         # Debounce: when keystrokes arrive faster than compsys can complete,
         # skip this cycle and let the next line-pre-redraw retry.
         if (( ${+EPOCHREALTIME} )) && (( EPOCHREALTIME < _zacrs_debounce_until )); then
+            _zacrs_clear_popup
             _zacrs_prev_lbuffer=""
             return
         fi
@@ -1063,6 +1065,7 @@ zle -N send-break _zacrs_send_break
 
 TRAPWINCH() {
     _zacrs_clear_popup
+    _zacrs_reset_cache
 }
 
 # === Register widgets and keybindings ===
