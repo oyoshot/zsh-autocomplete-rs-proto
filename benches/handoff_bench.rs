@@ -5,26 +5,13 @@ use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::ui::popup::Popup;
 
-fn candidates_to_tsv(app: &App) -> String {
-    let mut tsv = String::new();
-    for c in &app.all_candidates {
-        tsv.push_str(&c.text);
-        tsv.push('\t');
-        tsv.push_str(&c.description);
-        tsv.push('\t');
-        tsv.push_str(&c.kind);
-        tsv.push('\n');
-    }
-    tsv
-}
-
 fn token_candidate_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("reuse_token_candidate_scaling");
     for size in [50, 200, 1_000] {
         let candidates = helpers::generate_candidates(size);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
         let popup = Popup::compute(&app);
-        let tsv = candidates_to_tsv(&app);
+        let tsv = helpers::candidates_to_tsv(&app.all_candidates);
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
             b.iter(|| compute_reuse_token("gi", &tsv, &app, &popup));
@@ -46,7 +33,7 @@ fn token_prefix_length(c: &mut Criterion) {
     for (name, prefix) in prefixes {
         let app = App::new_with_term_size(candidates.clone(), prefix.to_string(), 5, 2, 80, 24);
         let popup = Popup::compute(&app);
-        let tsv = candidates_to_tsv(&app);
+        let tsv = helpers::candidates_to_tsv(&app.all_candidates);
 
         group.bench_with_input(BenchmarkId::from_parameter(name), &name, |b, _| {
             b.iter(|| compute_reuse_token(prefix, &tsv, &app, &popup));
@@ -59,7 +46,7 @@ fn token_stability(c: &mut Criterion) {
     let candidates = helpers::generate_candidates(200);
     let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
     let popup = Popup::compute(&app);
-    let tsv = candidates_to_tsv(&app);
+    let tsv = helpers::candidates_to_tsv(&app.all_candidates);
 
     // Verify determinism once before timing.
     let t1 = compute_reuse_token("gi", &tsv, &app, &popup);

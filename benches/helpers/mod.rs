@@ -175,6 +175,19 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
     candidates
 }
 
+pub fn candidates_to_tsv(candidates: &[Candidate]) -> String {
+    let mut tsv = String::new();
+    for c in candidates {
+        tsv.push_str(&c.text);
+        tsv.push('\t');
+        tsv.push_str(&c.description);
+        tsv.push('\t');
+        tsv.push_str(&c.kind);
+        tsv.push('\n');
+    }
+    tsv
+}
+
 #[allow(dead_code)]
 pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate> {
     let mut candidates = Vec::with_capacity(count);
