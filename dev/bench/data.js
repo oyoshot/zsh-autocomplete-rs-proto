@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774932364211,
+  "lastUpdate": 1774938656363,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -6827,6 +6827,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 755,
             "range": "± 1",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d8de98101fd7deac98dbb970f08bd882fe8bab5",
+          "message": "bench(ui): add rendering pipeline benchmarks (#75)\n\n* bench(ui): add rendering pipeline benchmarks\n\nAdd isolated Criterion benchmarks for the three hottest rendering\nfunctions: Popup::compute (geometry), render_popup_to_bytes (full\nrender), and layout_candidate (per-row layout).\n\nVariants cover candidate-count scaling (50/200/1K), CJK text,\nthemed colors, long-description truncation, and description on/off.\n\nCloses #55\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(bench): correct inner width value and comment in layout_candidate bench\n\nThe inner width is MAX_POPUP_WIDTH(60) - 2 borders = 58, not 56.\nPADDING is used in popup content width calculation, not subtracted\nfrom the render inner width.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* refactor(bench): use ..Theme::default() for themed rendering bench\n\nAvoids listing every Theme field explicitly, making the benchmark\nresilient to future field additions.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(bench): remove misleading candidate-count axis from rendering benchmarks\n\nvisible_candidate_indices() is capped at max_visible (10 on 80×24),\nso varying total candidate count (50/200/1K) does not change the\nmeasured rendering work. Replace with a single 200-candidate pool\nper variant, keeping the meaningful axis: description style and\ntext encoding.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* bench(ui): add themed_selected variant to exercise highlight path\n\nThe existing themed benchmark never selects a candidate, so the\nselected_fg/selected_bg branch in render.rs is never hit. Add a\nthemed_selected variant with select_first() to cover the\nhighlighted-row rendering path.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* style(bench): apply rustfmt to rendering benchmarks\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(bench): correct misleading comment about long description content\n\nThe long-description helper generates ASCII text, not wide unicode\ncharacters. Reword to accurately describe what the benchmark exercises.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-31T15:22:27+09:00",
+          "tree_id": "c1622f823258392e6be1b64238a12699961f44eb",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/4d8de98101fd7deac98dbb970f08bd882fe8bab5"
+        },
+        "date": 1774938626457,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7316,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75102,
+            "range": "± 703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 905664,
+            "range": "± 13316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 191808,
+            "range": "± 11898",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101585,
+            "range": "± 7503",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75617,
+            "range": "± 201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20357,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19106,
+            "range": "± 283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12228,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 315842,
+            "range": "± 1678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 310215,
+            "range": "± 1666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 273561,
+            "range": "± 1820",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 299668,
+            "range": "± 2254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26779,
+            "range": "± 183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 306918,
+            "range": "± 904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3342710,
+            "range": "± 6354",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 154300,
+            "range": "± 339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114345,
+            "range": "± 311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 361968,
+            "range": "± 2334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 731,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 91,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 65,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 141,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 864,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7578,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 755,
+            "range": "± 2",
             "unit": "ns/iter"
           }
         ]
