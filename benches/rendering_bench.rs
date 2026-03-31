@@ -95,9 +95,9 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
             border: Some(Color::Blue),
             selected_fg: Some(Color::White),
             selected_bg: Some(Color::DarkBlue),
-            description: Color::DarkGrey,
             filter: Some(Color::Yellow),
             candidate: Some(Color::Green),
+            ..Theme::default()
         };
         let candidates = helpers::generate_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
