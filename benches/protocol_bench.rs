@@ -56,6 +56,10 @@ fn request_serialize(c: &mut Criterion) {
         b.iter(|| black_box(&Request::Ping).serialize());
     });
 
+    group.bench_function("ShutdownRequest", |b| {
+        b.iter(|| black_box(&Request::Shutdown).serialize());
+    });
+
     group.finish();
 }
 
@@ -111,6 +115,11 @@ fn request_deserialize(c: &mut Criterion) {
     let ping_bytes = Request::Ping.serialize();
     group.bench_function("PingRequest", |b| {
         b.iter(|| Request::deserialize(&mut black_box(ping_bytes.as_slice())));
+    });
+
+    let shutdown_bytes = Request::Shutdown.serialize();
+    group.bench_function("ShutdownRequest", |b| {
+        b.iter(|| Request::deserialize(&mut black_box(shutdown_bytes.as_slice())));
     });
 
     group.finish();
