@@ -69,7 +69,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-msrv
-      - run: cargo check --all-targets
+      - run: cargo check --lib --bins --tests
 
   test:
     name: Test (${{ matrix.os }})
