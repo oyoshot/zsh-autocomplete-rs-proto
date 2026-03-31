@@ -30,7 +30,7 @@ fn bench_popup_compute(c: &mut Criterion) {
     }
 
     {
-        // Long descriptions exercise the max-width scan with wider unicode-width input
+        // Long descriptions exercise the max-width scan and truncation path
         let candidates = helpers::generate_long_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
         group.bench_with_input(BenchmarkId::from_parameter("long_desc"), &app, |b, app| {
