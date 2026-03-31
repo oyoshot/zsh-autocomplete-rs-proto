@@ -39,6 +39,7 @@ typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_cached_from_gather=0
+typeset -gF _zacrs_debounce_until=0.0
 
 # Render header parse results (set by _zacrs_parse_render_header)
 typeset -g  _zacrs_parsed_reuse_token=""
@@ -83,6 +84,8 @@ _zacrs_record_popup_snapshot() {
 
 # Try to load zsh/system for sysread (used by daemon complete)
 zmodload zsh/system 2>/dev/null
+# Try to load zsh/datetime for EPOCHREALTIME (debounce timestamps)
+zmodload zsh/datetime 2>/dev/null
 
 # Try to load zsh/net/socket (preferred) or zsh/net/unix for zsocket support
 if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; then
@@ -935,65 +938,88 @@ _zacrs_line_pre_redraw() {
         _zacrs_cached_lbase="$lbase"
     fi
 
-    # 候補収集: compsys → gather fallback
+    # 候補収集: cache-first → compsys → gather fallback
     local candidates_str="" from_gather=0
-    _zacrs_captured=()
-    local _zacrs_fd2
-    exec {_zacrs_fd2}>&2
-    zle _zacrs_compsys 2>/dev/null
-    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
-    # compsys コンテキストから prefix 取得 (render 用、LBUFFER 置換なし)
     local prefix prefix_len
-    if (( _zacrs_ctx_valid )); then
-        prefix="$_zacrs_ctx_prefix"
-        prefix_len=$_zacrs_ctx_prefix_len
-    else
-        prefix="$naive_prefix"
-        prefix_len=${#naive_prefix}
-    fi
 
-    if (( ${#_zacrs_captured} > 0 )); then
-        candidates_str="${(pj:\n:)_zacrs_captured}"
-    fi
-    # compsys 0 件 → 遅延ロード補完のためリトライ1回
-    # チェーン時 or サブコマンド位置 (naive_prefix 空) で発動
-    if (( ${#_zacrs_captured} == 0 )) && { (( _zacrs_chain_retry )) || [[ -z "$naive_prefix" ]]; }; then
-        _zacrs_chain_retry=0
-        _zacrs_captured=()
-        exec {_zacrs_fd2}>&2
-        zle _zacrs_compsys 2>/dev/null
-        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-        if (( _zacrs_ctx_valid )); then
-            prefix="$_zacrs_ctx_prefix"
-            prefix_len=$_zacrs_ctx_prefix_len
-        fi
-        if (( ${#_zacrs_captured} > 0 )); then
-            candidates_str="${(pj:\n:)_zacrs_captured}"
-        fi
-    fi
-    _zacrs_chain_retry=0
-    if [[ -z "$candidates_str" ]]; then
-        candidates_str="$(_zacrs_gather "$LBUFFER")"
-        if [[ -n "$candidates_str" ]]; then
-            prefix="$naive_prefix"
-            prefix_len=${#naive_prefix}
-            from_gather=1
-        fi
-    fi
-
-    # キャッシュ更新: 同じ lbase で初めて候補が見つかった場合
-    if [[ -n "$candidates_str" && -z "$_zacrs_cached_candidates" ]]; then
-        _zacrs_cached_candidates="$candidates_str"
-        _zacrs_cached_from_gather=$from_gather
-    fi
-
-    # Fuzzy fallback: 候補なし → キャッシュから再利用
-    if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
+    # Cache-first: lbase unchanged + cache available → skip compsys/gather.
+    # Rust-side filtering handles the current prefix, so the full candidate
+    # list from cache is sufficient.  This eliminates per-keystroke compsys
+    # overhead during rapid Backspace (same command context, shrinking prefix).
+    if [[ -n "$_zacrs_cached_candidates" ]]; then
         candidates_str="$_zacrs_cached_candidates"
         from_gather=$_zacrs_cached_from_gather
         prefix="$naive_prefix"
         prefix_len=${#naive_prefix}
+        _zacrs_chain_retry=0
+    else
+        # Heavy path: compsys + gather (no cache available).
+        # Debounce: when keystrokes arrive faster than compsys can complete,
+        # skip this cycle and let the next line-pre-redraw retry.
+        if (( ${+EPOCHREALTIME} )) && (( EPOCHREALTIME < _zacrs_debounce_until )); then
+            _zacrs_prev_lbuffer=""
+            return
+        fi
+
+        _zacrs_captured=()
+        local _zacrs_fd2
+        exec {_zacrs_fd2}>&2
+        zle _zacrs_compsys 2>/dev/null
+        exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+
+        if (( _zacrs_ctx_valid )); then
+            prefix="$_zacrs_ctx_prefix"
+            prefix_len=$_zacrs_ctx_prefix_len
+        else
+            prefix="$naive_prefix"
+            prefix_len=${#naive_prefix}
+        fi
+
+        if (( ${#_zacrs_captured} > 0 )); then
+            candidates_str="${(pj:\n:)_zacrs_captured}"
+        fi
+        # compsys 0 件 → 遅延ロード補完のためリトライ1回
+        # チェーン時 or サブコマンド位置 (naive_prefix 空) で発動
+        if (( ${#_zacrs_captured} == 0 )) && { (( _zacrs_chain_retry )) || [[ -z "$naive_prefix" ]]; }; then
+            _zacrs_chain_retry=0
+            _zacrs_captured=()
+            exec {_zacrs_fd2}>&2
+            zle _zacrs_compsys 2>/dev/null
+            exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+            if (( _zacrs_ctx_valid )); then
+                prefix="$_zacrs_ctx_prefix"
+                prefix_len=$_zacrs_ctx_prefix_len
+            fi
+            if (( ${#_zacrs_captured} > 0 )); then
+                candidates_str="${(pj:\n:)_zacrs_captured}"
+            fi
+        fi
+        _zacrs_chain_retry=0
+        if [[ -z "$candidates_str" ]]; then
+            candidates_str="$(_zacrs_gather "$LBUFFER")"
+            if [[ -n "$candidates_str" ]]; then
+                prefix="$naive_prefix"
+                prefix_len=${#naive_prefix}
+                from_gather=1
+            fi
+        fi
+
+        # キャッシュ更新: heavy path で初めて候補が見つかった場合
+        if [[ -n "$candidates_str" ]]; then
+            _zacrs_cached_candidates="$candidates_str"
+            _zacrs_cached_from_gather=$from_gather
+        fi
+
+        # Fuzzy fallback: 候補なし → キャッシュから再利用
+        if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
+            candidates_str="$_zacrs_cached_candidates"
+            from_gather=$_zacrs_cached_from_gather
+            prefix="$naive_prefix"
+            prefix_len=${#naive_prefix}
+        fi
+
+        # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)
+        (( ${+EPOCHREALTIME} )) && _zacrs_debounce_until=$(( EPOCHREALTIME + 0.050 ))
     fi
 
     [[ -z "$candidates_str" ]] && { _zacrs_clear_popup; return }
