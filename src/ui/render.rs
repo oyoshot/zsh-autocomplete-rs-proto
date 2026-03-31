@@ -10,14 +10,14 @@ use crossterm::terminal;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
-struct CandidateLayout {
-    text: String,
-    gap: usize,
-    description: String,
+pub struct CandidateLayout {
+    pub text: String,
+    pub gap: usize,
+    pub description: String,
 }
 
 #[inline]
-fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
+pub fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
     let text = truncate_to_width(&candidate.text, inner);
     let text_w = UnicodeWidthStr::width(text.as_str());
 

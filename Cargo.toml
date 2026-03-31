@@ -55,6 +55,10 @@ harness = false
 name = "protocol_bench"
 harness = false
 
+[[bench]]
+name = "rendering_bench"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1

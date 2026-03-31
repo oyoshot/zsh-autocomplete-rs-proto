@@ -202,3 +202,95 @@ pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate
     }
     candidates
 }
+
+const CJK_COMMAND_NAMES: &[&str] = &[
+    "git-ブランチ",
+    "cargo-ビルド",
+    "ファイル一覧",
+    "docker-実行",
+    "検索コマンド",
+    "npm-インストール",
+    "設定ファイル",
+    "make-ビルド",
+    "テスト実行",
+    "ssh-接続",
+    "ディレクトリ作成",
+    "python-スクリプト",
+    "パッケージ管理",
+    "curl-ダウンロード",
+    "ログ表示",
+    "rsync-同期",
+    "プロセス一覧",
+    "gcc-コンパイル",
+    "ネットワーク診断",
+    "vim-編集",
+];
+
+pub fn generate_cjk_candidates(count: usize) -> Vec<Candidate> {
+    let mut candidates = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = CJK_COMMAND_NAMES[i % CJK_COMMAND_NAMES.len()];
+        let (text, description, kind) = if i < CJK_COMMAND_NAMES.len() {
+            (
+                base.to_string(),
+                format!("{}の説明", base),
+                "command".to_string(),
+            )
+        } else {
+            let suffix = i / CJK_COMMAND_NAMES.len();
+            (
+                format!("{}-{}", base, suffix),
+                format!("{} バリアント {}", base, suffix),
+                "command".to_string(),
+            )
+        };
+        candidates.push(Candidate {
+            text,
+            description,
+            kind,
+        });
+    }
+    candidates
+}
+
+pub fn generate_no_description_candidates(count: usize) -> Vec<Candidate> {
+    let mut candidates = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = COMMAND_NAMES[i % COMMAND_NAMES.len()];
+        let text = if i < COMMAND_NAMES.len() {
+            base.to_string()
+        } else {
+            format!("{}-{}", base, i / COMMAND_NAMES.len())
+        };
+        candidates.push(Candidate {
+            text,
+            description: String::new(),
+            kind: "command".to_string(),
+        });
+    }
+    candidates
+}
+
+pub fn generate_long_description_candidates(count: usize) -> Vec<Candidate> {
+    let mut candidates = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = COMMAND_NAMES[i % COMMAND_NAMES.len()];
+        let text = if i < COMMAND_NAMES.len() {
+            base.to_string()
+        } else {
+            format!("{}-{}", base, i / COMMAND_NAMES.len())
+        };
+        let description = format!(
+            "{} - a comprehensive tool for managing complex workflows, \
+             including build automation, dependency resolution, and deployment \
+             orchestration across multiple environments (variant {})",
+            base, i,
+        );
+        candidates.push(Candidate {
+            text,
+            description,
+            kind: "command".to_string(),
+        });
+    }
+    candidates
+}
