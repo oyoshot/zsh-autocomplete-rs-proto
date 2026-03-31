@@ -288,7 +288,7 @@ impl Response {
 }
 
 pub fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || !hex.len().is_multiple_of(2) {
+    if hex.is_empty() || hex.len() % 2 != 0 {
         return None;
     }
 
