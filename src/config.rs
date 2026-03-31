@@ -111,14 +111,14 @@ pub(crate) fn parse_color(s: &str) -> Option<Color> {
                 n.parse::<u8>().ok().map(Color::AnsiValue)
             } else if let Some(rgb) = s.strip_prefix("rgb:") {
                 let parts: Vec<&str> = rgb.split(',').collect();
-                if parts.len() == 3
-                    && let (Ok(r), Ok(g), Ok(b)) = (
+                if parts.len() == 3 {
+                    if let (Ok(r), Ok(g), Ok(b)) = (
                         parts[0].parse::<u8>(),
                         parts[1].parse::<u8>(),
                         parts[2].parse::<u8>(),
-                    )
-                {
-                    return Some(Color::Rgb { r, g, b });
+                    ) {
+                        return Some(Color::Rgb { r, g, b });
+                    }
                 }
                 None
             } else {
