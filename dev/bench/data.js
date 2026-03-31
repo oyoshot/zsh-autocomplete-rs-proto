@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774938656363,
+  "lastUpdate": 1774940384234,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -7055,6 +7055,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 755,
             "range": "± 2",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cceb90e3b58da46438ee325ac57821b53e69608c",
+          "message": "ci: add MSRV check (#76)\n\n* ci: add MSRV check to CI workflow\n\nSet rust-version = \"1.85\" in Cargo.toml (minimum for edition 2024) and\nadd a CI job that reads this value to verify the build with the MSRV\ntoolchain via cargo check.\n\nCloses #64\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(protocol): replace is_multiple_of with modulo for MSRV compatibility\n\n`usize::is_multiple_of` is stable since Rust 1.87 but our MSRV is\n1.85. Use the equivalent `% 2 != 0` check instead.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* ci(msrv): exclude bench targets from MSRV check\n\ncriterion requires a newer Rust than our MSRV. Use\n`cargo check --lib --bins --tests` to skip bench targets.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* ci(msrv): regenerate lockfile for MSRV-compatible dep resolution\n\nThe committed Cargo.lock pins criterion@0.8.2 which requires Rust\n1.86. Cargo validates all resolved packages (including dev-deps)\nagainst MSRV before compilation, so even --lib --bins fails.\n\nRegenerate the lockfile with the MSRV toolchain so the MSRV-aware\nresolver selects compatible dependency versions, and drop --tests\nto avoid compiling dev-dependency code.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(config): replace let-chain with nested if for MSRV compatibility\n\nlet-chains in if expressions are not stable in Rust 1.85. Split the\ncombined condition into nested if blocks.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* ci(msrv): guard against missing rust-version in Cargo.toml\n\nFail early with a clear error annotation if the sed extraction\nyields an empty string, instead of letting dtolnay/rust-toolchain\nfail with a confusing message.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-31T15:51:40+09:00",
+          "tree_id": "8e3a8b4dfbb9b040671b1ecb94dfe413a3240df5",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/cceb90e3b58da46438ee325ac57821b53e69608c"
+        },
+        "date": 1774940383344,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7301,
+            "range": "± 157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75046,
+            "range": "± 278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 915098,
+            "range": "± 12043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 191746,
+            "range": "± 1998",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101846,
+            "range": "± 2358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76252,
+            "range": "± 598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20299,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19077,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12174,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 311499,
+            "range": "± 660",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306555,
+            "range": "± 1891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 269545,
+            "range": "± 944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295044,
+            "range": "± 11210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 27184,
+            "range": "± 156",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 311213,
+            "range": "± 1513",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3396321,
+            "range": "± 39457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 152233,
+            "range": "± 764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 113763,
+            "range": "± 435",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 363569,
+            "range": "± 2367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 744,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 63,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 858,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7612,
+            "range": "± 172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 757,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
