@@ -949,7 +949,7 @@ _zacrs_line_pre_redraw() {
     # Rust-side filtering handles the current prefix, so the full candidate
     # list from cache is sufficient.  This eliminates per-keystroke compsys
     # overhead during rapid Backspace (same command context, shrinking prefix).
-    if [[ -n "$_zacrs_cached_candidates" ]] && (( ${#naive_prefix} >= _zacrs_cached_prefix_len )); then
+    if [[ -n "$_zacrs_cached_candidates" ]] && (( ! _zacrs_chain_retry )) && (( ${#naive_prefix} >= _zacrs_cached_prefix_len )); then
         candidates_str="$_zacrs_cached_candidates"
         from_gather=$_zacrs_cached_from_gather
         prefix="$naive_prefix"
