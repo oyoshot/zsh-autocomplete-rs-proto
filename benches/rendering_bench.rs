@@ -16,38 +16,26 @@ fn bench_popup_compute(c: &mut Criterion) {
     {
         let candidates = helpers::generate_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("with_desc"),
-            &app,
-            |b, app| {
-                b.iter(|| Popup::compute(app));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("with_desc"), &app, |b, app| {
+            b.iter(|| Popup::compute(app));
+        });
     }
 
     {
         let candidates = helpers::generate_no_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("no_desc"),
-            &app,
-            |b, app| {
-                b.iter(|| Popup::compute(app));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("no_desc"), &app, |b, app| {
+            b.iter(|| Popup::compute(app));
+        });
     }
 
     {
         // Long descriptions exercise the max-width scan with wider unicode-width input
         let candidates = helpers::generate_long_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("long_desc"),
-            &app,
-            |b, app| {
-                b.iter(|| Popup::compute(app));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("long_desc"), &app, |b, app| {
+            b.iter(|| Popup::compute(app));
+        });
     }
 
     group.finish();
@@ -65,37 +53,25 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
     {
         let candidates = helpers::generate_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("standard"),
-            &app,
-            |b, app| {
-                b.iter(|| render_popup_to_bytes(app, &default_theme));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("standard"), &app, |b, app| {
+            b.iter(|| render_popup_to_bytes(app, &default_theme));
+        });
     }
 
     {
         let candidates = helpers::generate_no_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("no_desc"),
-            &app,
-            |b, app| {
-                b.iter(|| render_popup_to_bytes(app, &default_theme));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("no_desc"), &app, |b, app| {
+            b.iter(|| render_popup_to_bytes(app, &default_theme));
+        });
     }
 
     {
         let candidates = helpers::generate_cjk_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("cjk"),
-            &app,
-            |b, app| {
-                b.iter(|| render_popup_to_bytes(app, &default_theme));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("cjk"), &app, |b, app| {
+            b.iter(|| render_popup_to_bytes(app, &default_theme));
+        });
     }
 
     {
@@ -109,13 +85,9 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
         };
         let candidates = helpers::generate_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("themed"),
-            &app,
-            |b, app| {
-                b.iter(|| render_popup_to_bytes(app, &themed));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("themed"), &app, |b, app| {
+            b.iter(|| render_popup_to_bytes(app, &themed));
+        });
     }
 
     {
@@ -143,13 +115,9 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
     {
         let candidates = helpers::generate_long_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
-        group.bench_with_input(
-            BenchmarkId::from_parameter("long_desc"),
-            &app,
-            |b, app| {
-                b.iter(|| render_popup_to_bytes(app, &default_theme));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter("long_desc"), &app, |b, app| {
+            b.iter(|| render_popup_to_bytes(app, &default_theme));
+        });
     }
 
     group.finish();
