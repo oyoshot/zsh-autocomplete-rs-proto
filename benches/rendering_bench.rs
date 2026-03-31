@@ -126,7 +126,7 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
 }
 
 fn bench_layout_candidate(c: &mut Criterion) {
-    let inner: usize = 56; // MAX_POPUP_WIDTH(60) - 2 borders - 2 padding
+    let inner: usize = 58; // MAX_POPUP_WIDTH(60) - 2 borders
 
     let mut group = c.benchmark_group("layout_candidate");
 
