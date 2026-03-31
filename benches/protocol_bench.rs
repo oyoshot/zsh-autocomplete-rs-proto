@@ -39,7 +39,7 @@ fn request_serialize(c: &mut Criterion) {
     for size in [50, 200, 1_000] {
         let req = make_render_request(size);
         group.bench_with_input(BenchmarkId::new("RenderRequest", size), &req, |b, req| {
-            b.iter(|| black_box(req).serialize());
+            b.iter(|| black_box(black_box(req).serialize()));
         });
     }
 
@@ -49,15 +49,15 @@ fn request_serialize(c: &mut Criterion) {
         cursor_row: 5,
     };
     group.bench_function("ClearRequest", |b| {
-        b.iter(|| black_box(&clear_req).serialize());
+        b.iter(|| black_box(black_box(&clear_req).serialize()));
     });
 
     group.bench_function("PingRequest", |b| {
-        b.iter(|| black_box(&Request::Ping).serialize());
+        b.iter(|| black_box(black_box(&Request::Ping).serialize()));
     });
 
     group.bench_function("ShutdownRequest", |b| {
-        b.iter(|| black_box(&Request::Shutdown).serialize());
+        b.iter(|| black_box(black_box(&Request::Shutdown).serialize()));
     });
 
     group.finish();
@@ -72,16 +72,16 @@ fn response_serialize(c: &mut Criterion) {
         metadata: Some(METADATA.to_string()),
     };
     group.bench_function("SuccessResponse", |b| {
-        b.iter(|| black_box(&success).serialize());
+        b.iter(|| black_box(black_box(&success).serialize()));
     });
 
     group.bench_function("EmptyResponse", |b| {
-        b.iter(|| black_box(&Response::Empty).serialize());
+        b.iter(|| black_box(black_box(&Response::Empty).serialize()));
     });
 
     let error = Response::Error("something went wrong".to_string());
     group.bench_function("ErrorResponse", |b| {
-        b.iter(|| black_box(&error).serialize());
+        b.iter(|| black_box(black_box(&error).serialize()));
     });
 
     group.finish();
@@ -97,7 +97,9 @@ fn request_deserialize(c: &mut Criterion) {
             BenchmarkId::new("RenderRequest", size),
             &bytes,
             |b, bytes| {
-                b.iter(|| black_box(Request::deserialize(&mut black_box(bytes.as_slice())).unwrap()));
+                b.iter(|| {
+                    black_box(Request::deserialize(&mut black_box(bytes.as_slice())).unwrap())
+                });
             },
         );
     }
@@ -135,17 +137,23 @@ fn response_deserialize(c: &mut Criterion) {
     }
     .serialize();
     group.bench_function("SuccessResponse", |b| {
-        b.iter(|| black_box(Response::deserialize(&mut black_box(success_bytes.as_slice())).unwrap()));
+        b.iter(|| {
+            black_box(Response::deserialize(&mut black_box(success_bytes.as_slice())).unwrap())
+        });
     });
 
     let empty_bytes = Response::Empty.serialize();
     group.bench_function("EmptyResponse", |b| {
-        b.iter(|| black_box(Response::deserialize(&mut black_box(empty_bytes.as_slice())).unwrap()));
+        b.iter(|| {
+            black_box(Response::deserialize(&mut black_box(empty_bytes.as_slice())).unwrap())
+        });
     });
 
     let error_bytes = Response::Error("something went wrong".to_string()).serialize();
     group.bench_function("ErrorResponse", |b| {
-        b.iter(|| black_box(Response::deserialize(&mut black_box(error_bytes.as_slice())).unwrap()));
+        b.iter(|| {
+            black_box(Response::deserialize(&mut black_box(error_bytes.as_slice())).unwrap())
+        });
     });
 
     group.finish();
