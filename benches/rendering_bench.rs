@@ -119,6 +119,28 @@ fn bench_render_popup_to_bytes(c: &mut Criterion) {
     }
 
     {
+        // Exercise the selected-row highlight path (render.rs selected_fg/selected_bg branch)
+        let themed = Theme {
+            border: Some(Color::Blue),
+            selected_fg: Some(Color::White),
+            selected_bg: Some(Color::DarkBlue),
+            filter: Some(Color::Yellow),
+            candidate: Some(Color::Green),
+            ..Theme::default()
+        };
+        let candidates = helpers::generate_candidates(200);
+        let mut app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
+        app.select_first();
+        group.bench_with_input(
+            BenchmarkId::from_parameter("themed_selected"),
+            &app,
+            |b, app| {
+                b.iter(|| render_popup_to_bytes(app, &themed));
+            },
+        );
+    }
+
+    {
         let candidates = helpers::generate_long_description_candidates(200);
         let app = App::new_with_term_size(candidates, "gi".to_string(), 5, 2, 80, 24);
         group.bench_with_input(
