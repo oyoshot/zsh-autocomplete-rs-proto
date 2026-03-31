@@ -97,7 +97,7 @@ fn request_deserialize(c: &mut Criterion) {
             BenchmarkId::new("RenderRequest", size),
             &bytes,
             |b, bytes| {
-                b.iter(|| Request::deserialize(&mut black_box(bytes.as_slice())));
+                b.iter(|| black_box(Request::deserialize(&mut black_box(bytes.as_slice())).unwrap()));
             },
         );
     }
@@ -135,17 +135,17 @@ fn response_deserialize(c: &mut Criterion) {
     }
     .serialize();
     group.bench_function("SuccessResponse", |b| {
-        b.iter(|| Response::deserialize(&mut black_box(success_bytes.as_slice())));
+        b.iter(|| black_box(Response::deserialize(&mut black_box(success_bytes.as_slice())).unwrap()));
     });
 
     let empty_bytes = Response::Empty.serialize();
     group.bench_function("EmptyResponse", |b| {
-        b.iter(|| Response::deserialize(&mut black_box(empty_bytes.as_slice())));
+        b.iter(|| black_box(Response::deserialize(&mut black_box(empty_bytes.as_slice())).unwrap()));
     });
 
     let error_bytes = Response::Error("something went wrong".to_string()).serialize();
     group.bench_function("ErrorResponse", |b| {
-        b.iter(|| Response::deserialize(&mut black_box(error_bytes.as_slice())));
+        b.iter(|| black_box(Response::deserialize(&mut black_box(error_bytes.as_slice())).unwrap()));
     });
 
     group.finish();
@@ -159,7 +159,7 @@ fn request_roundtrip(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("RenderRequest", size), &req, |b, req| {
             b.iter(|| {
                 let bytes = black_box(req).serialize();
-                Request::deserialize(&mut bytes.as_slice())
+                black_box(Request::deserialize(&mut bytes.as_slice()).unwrap())
             });
         });
     }
@@ -178,7 +178,7 @@ fn response_roundtrip(c: &mut Criterion) {
     group.bench_function("SuccessResponse", |b| {
         b.iter(|| {
             let bytes = black_box(&success).serialize();
-            Response::deserialize(&mut bytes.as_slice())
+            black_box(Response::deserialize(&mut bytes.as_slice()).unwrap())
         });
     });
 
