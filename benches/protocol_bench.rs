@@ -111,17 +111,19 @@ fn request_deserialize(c: &mut Criterion) {
     }
     .serialize();
     group.bench_function("ClearRequest", |b| {
-        b.iter(|| Request::deserialize(&mut black_box(clear_bytes.as_slice())));
+        b.iter(|| black_box(Request::deserialize(&mut black_box(clear_bytes.as_slice())).unwrap()));
     });
 
     let ping_bytes = Request::Ping.serialize();
     group.bench_function("PingRequest", |b| {
-        b.iter(|| Request::deserialize(&mut black_box(ping_bytes.as_slice())));
+        b.iter(|| black_box(Request::deserialize(&mut black_box(ping_bytes.as_slice())).unwrap()));
     });
 
     let shutdown_bytes = Request::Shutdown.serialize();
     group.bench_function("ShutdownRequest", |b| {
-        b.iter(|| Request::deserialize(&mut black_box(shutdown_bytes.as_slice())));
+        b.iter(|| {
+            black_box(Request::deserialize(&mut black_box(shutdown_bytes.as_slice())).unwrap())
+        });
     });
 
     group.finish();
