@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774890974806,
+  "lastUpdate": 1774932364211,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -6599,6 +6599,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 755,
             "range": "± 7",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e143bc2ad5a50388a4e1a63f8a95a9a63dafbb3",
+          "message": "bench(protocol): add serialization/deserialization benchmarks (#74)\n\n* bench(protocol): add serialization/deserialization benchmarks\n\nCover Request and Response serialize/deserialize paths with Criterion\nbenchmarks to detect regressions and isolate protocol overhead from\nsocket cost. Extract candidates_to_tsv into shared bench helpers.\n\nCloses #56\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* bench(protocol): add Shutdown request to serialize/deserialize benchmarks\n\nCover the remaining Request variant for completeness alongside Ping.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* bench(protocol): unwrap and sink deserialize/roundtrip results\n\nEnsure deserialize benchmarks fail fast on protocol regressions\ninstead of silently measuring the cheap error path. Wrap parsed\nvalues with black_box() to prevent dead-code elimination.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* bench(protocol): sink serialize outputs with black_box\n\nWrap serialize() return values with black_box() to prevent the\noptimizer from eliminating the output, especially for trivial\nPing/Shutdown/Empty variants.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* bench(protocol): unwrap and sink remaining request deserialize results\n\nApply the same unwrap+black_box pattern to ClearRequest, PingRequest,\nand ShutdownRequest deserialize benchmarks that was missed in the\nearlier fix for RenderRequest.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-03-31T13:38:06+09:00",
+          "tree_id": "c0e8f66250a8257828ad0d9c01a056863fb82b4e",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/3e143bc2ad5a50388a4e1a63f8a95a9a63dafbb3"
+        },
+        "date": 1774932363340,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7337,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74638,
+            "range": "± 365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 900741,
+            "range": "± 6189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 192440,
+            "range": "± 2182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101017,
+            "range": "± 217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 76017,
+            "range": "± 204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20286,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19024,
+            "range": "± 533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12141,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 313388,
+            "range": "± 29905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 308038,
+            "range": "± 728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 271953,
+            "range": "± 1496",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295128,
+            "range": "± 797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 27222,
+            "range": "± 347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 308467,
+            "range": "± 628",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3362640,
+            "range": "± 10134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 152818,
+            "range": "± 2572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114394,
+            "range": "± 724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 363013,
+            "range": "± 2318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 746,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 64,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 857,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7600,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 755,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
