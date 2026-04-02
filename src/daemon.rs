@@ -1199,30 +1199,36 @@ mod tests {
     }
 
     #[test]
-    fn handle_render_no_common_prefix_when_auto_insert_disabled() {
-        let mut server = test_server();
-        server.config.auto_insert_unambiguous = false;
-        let response = server.handle_render(
-            RenderParams {
-                prefix: "gi".to_string(),
-                cursor_row: 5,
-                cursor_col: 2,
-                term_cols: 80,
-                term_rows: 24,
-                selected: None,
-            },
-            b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
-        );
+    fn handle_render_never_emits_common_prefix() {
+        // Render metadata is for popup position only; auto-insert travels via
+        // FRAME headers in the complete path.  common_prefix must be absent
+        // regardless of auto_insert_unambiguous.
+        for auto_insert in [true, false] {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = auto_insert;
+            let response = server.handle_render(
+                RenderParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    selected: None,
+                },
+                b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
 
-        match response {
-            crate::protocol::Response::Success { metadata, .. } => {
-                let metadata = metadata.unwrap();
-                assert!(
-                    !metadata.contains("common_prefix="),
-                    "common_prefix must be absent when auto_insert_unambiguous=false: {metadata}"
-                );
+            match response {
+                crate::protocol::Response::Success { metadata, .. } => {
+                    let metadata = metadata.unwrap();
+                    assert!(
+                        !metadata.contains("common_prefix="),
+                        "common_prefix must be absent from render metadata \
+                         (auto_insert={auto_insert}): {metadata}"
+                    );
+                }
+                other => panic!("unexpected response: {other:?}"),
             }
-            other => panic!("unexpected response: {other:?}"),
         }
     }
 
@@ -1253,6 +1259,45 @@ mod tests {
                 "control char {ctrl:?} should suppress common_prefix in: {header}"
             );
         }
+    }
+
+    #[test]
+    fn handle_complete_initial_frame_includes_common_prefix_when_enabled() {
+        // With auto_insert_unambiguous=true, the first FRAME header must carry
+        // common_prefix= when candidates share a longer prefix than the typed input.
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = true;
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
+        });
+
+        let mut reader = BufReader::new(&client_stream);
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(
+            header.contains("common_prefix=git-"),
+            "initial FRAME must contain common_prefix=git- when auto_insert enabled: {header}"
+        );
+
+        drop(reader);
+        drop(client_stream);
+        handle.join().unwrap();
     }
 
     #[test]
