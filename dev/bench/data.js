@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775125674154,
+  "lastUpdate": 1775149860519,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -8195,6 +8195,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 755,
             "range": "± 44",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e26c06235babe92e818199749f7e90030110b15e",
+          "message": "fix(completion): use IPREFIX+PREFIX length for prefix_len to fix quoted completion (#84)\n\n* fix(completion): use IPREFIX+PREFIX length for prefix_len to fix quoted completion\n\nWhen LBUFFER contains an open (unclosed) quote such as `\"s`, zsh's (z)\nword-splitting flag fails to parse the unmatched quote and may return an\nempty array.  The old code fell through to prefix_len=0, causing\n_zacrs_apply_result to treat the entire LBUFFER as the base and prepend\nit to the inserted candidate text — producing doubled output like `\"ssrc`\ninstead of the expected `\"src`.\n\nIPREFIX+PREFIX (stored in _zacrs_ctx_prefix) is exactly the LBUFFER\nsuffix that compsys is completing, so ${#_zacrs_ctx_prefix} gives the\nprecise number of characters to strip without any shell-syntax parsing.\n\nFixes #15\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* docs(completion): soften prefix_len comment to avoid overstating IPREFIX+PREFIX identity\n\nPer Codex review: the phrase \"always equals the raw LBUFFER suffix\" was too\nstrong.  When compset -q or similar transforms are involved, QIPREFIX carries\nthe quoted context separately and the claim no longer holds literally.\n\nReword to say _zacrs_ctx_prefix is what *this implementation* uses for both\ncandidate reconstruction and LBUFFER trimming, making its length the correct\nstrip count within the scope of the current design.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(completion): add quoted-prefix regression tests for daemon complete session\n\nPin the protocol contract for IPREFIX-style prefixes so a regression is\nvisible from the Rust side.  Covers the four patterns called out in the\nCodex review:\n\n  - double-quoted prefix: `\"s` + candidate `\"src/`  (issue #15 scenario)\n  - single-quoted prefix: `'s` + candidate `'src/`\n  - assignment prefix:    `FOO=ba` + candidate `FOO=bar`\n  - option-equals prefix: `--opt=va` + candidate `--opt=value`\n\nThe shell-side fix (prefix_len = ${#_zacrs_ctx_prefix}) is not directly\nexercisable in Rust unit tests, but these cases confirm that the daemon\nreturns the correct DONE response when quoted candidate text is received.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(ci): apply cargo fmt and suppress \\\"ba\\\" typo false positive\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* docs(completion): clarify QIPREFIX caveat in prefix_len comment\n\nReplace the over-assertive \"even in quoted contexts where compset -q or\nsimilar transforms may affect QIPREFIX separately\" with an explicit\ncaveat that QIPREFIX is not modelled and deeply-nested quoting paths are\nuntested.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-03T02:03:01+09:00",
+          "tree_id": "22f2fd09870afaf224ad0b14d4e47eed75fa425e",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/e26c06235babe92e818199749f7e90030110b15e"
+        },
+        "date": 1775149859676,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 6728,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 73410,
+            "range": "± 279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 847823,
+            "range": "± 10330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 204026,
+            "range": "± 711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101401,
+            "range": "± 928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 73810,
+            "range": "± 254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 18297,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 16664,
+            "range": "± 287",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 10398,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 311279,
+            "range": "± 10572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 303217,
+            "range": "± 12068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 268052,
+            "range": "± 11982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 293434,
+            "range": "± 10838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 25454,
+            "range": "± 262",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 289204,
+            "range": "± 3144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3179737,
+            "range": "± 33817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 138169,
+            "range": "± 1199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 104640,
+            "range": "± 1159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 337338,
+            "range": "± 1726",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 582,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 36,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 104,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 32,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 94,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 89,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 59,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 59,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 121,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 817,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7333,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 805,
+            "range": "± 20",
             "unit": "ns/iter"
           }
         ]
