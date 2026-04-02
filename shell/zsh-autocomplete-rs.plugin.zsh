@@ -1022,7 +1022,7 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$candidates_str" ]]; then
             _zacrs_cached_candidates="$candidates_str"
             _zacrs_cached_from_gather=$from_gather
-            _zacrs_cached_prefix="$prefix"
+            _zacrs_cached_prefix="$naive_prefix"
         fi
 
         # Fuzzy fallback: 候補なし → キャッシュから再利用
