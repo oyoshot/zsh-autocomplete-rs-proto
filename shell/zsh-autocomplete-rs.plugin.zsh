@@ -568,7 +568,7 @@ _zacrs_popup_session_loop() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
     local passthrough_input=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
@@ -588,10 +588,13 @@ _zacrs_invoke_daemon() {
     local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
     [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
     (( reuse_visible )) && [[ -n "$reuse_token" ]] && req+=" reuse_token=$reuse_token"
+    [[ -n "$context_key" ]] && req+=" context_key=$context_key"
     [[ -n "$shift_tab_hex" ]] && req+=" shift_tab_hex=$shift_tab_hex"
     print -u $fd -- "$req"
     printf '%s\n' "$prefix" >&$fd
-    printf '%s\n' "$candidates_str" >&$fd
+    if [[ -n "$candidates_str" ]]; then
+        printf '%s\n' "$candidates_str" >&$fd
+    fi
     print -u $fd "END"
 
     local header
@@ -600,6 +603,10 @@ _zacrs_invoke_daemon() {
     local have_initial_frame=0 initial_done=0
     case "$header" in
         FRAME*) have_initial_frame=1 ;;
+        CACHE_MISS)
+            exec {fd}<&-
+            return 2
+            ;;
         NONE)
             if (( ! reuse_visible )) || [[ -z "$reuse_token" ]]; then
                 (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
@@ -847,10 +854,16 @@ _zacrs_complete_popup() {
     local cursor_row="" cursor_col=""
     local reuse_visible=0
     local reuse_token=""
+    local lbase=""
+    if [[ "$LBUFFER" == *" "* ]]; then
+        lbase="${LBUFFER% *} "
+    fi
+    local _ctx_lbase="${lbase// /%20}"
+    local _ctx_pwd="${PWD// /%20}"
+    local context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
 
     if (( _zacrs_popup_visible )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
-        && [[ -n "$_zacrs_popup_snapshot_candidates" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
         && (( _zacrs_popup_snapshot_lines == LINES )) \
         && (( ! _zacrs_popup_snapshot_from_gather )); then
@@ -867,8 +880,8 @@ _zacrs_complete_popup() {
         _zacrs_collect_candidates
     fi
 
-    # 候補なし → default zsh 補完にフォールバック
-    if [[ -z "$candidates_str" ]]; then
+    # 候補なしでデーモン再利用もできない場合のみ default zsh 補完にフォールバック
+    if [[ -z "$candidates_str" ]] && { (( ! _zacrs_daemon_available )) || (( ! reuse_visible )); }; then
         _zacrs_clear_popup
         zle expand-or-complete
         return
@@ -879,7 +892,7 @@ _zacrs_complete_popup() {
     cands=( ${cands:#} )
 
     # 単一候補 → 即補完
-    if [[ ${#cands[@]} -eq 1 ]]; then
+    if [[ -n "$candidates_str" && ${#cands[@]} -eq 1 ]]; then
         _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${cands[1]}"
         return
     fi
@@ -889,10 +902,30 @@ _zacrs_complete_popup() {
     # Try daemon path first, fall back to subprocess
     if (( _zacrs_daemon_available )); then
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-            "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" && return
+            "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" "$context_key"
+        local daemon_rc=$?
+        if (( daemon_rc == 0 )); then
+            return
+        elif (( daemon_rc == 2 )); then
+            _zacrs_collect_candidates
+            if [[ -z "$candidates_str" ]]; then
+                _zacrs_clear_popup
+                zle expand-or-complete
+                return
+            fi
+            _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
+                "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" "$context_key" && return
+        fi
+    fi
+    if [[ -z "$candidates_str" ]]; then
+        _zacrs_collect_candidates
     fi
     if (( ! reuse_visible )); then
         _zacrs_clear_popup
+    fi
+    if [[ -z "$candidates_str" ]]; then
+        zle expand-or-complete
+        return
     fi
     _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col"
 }

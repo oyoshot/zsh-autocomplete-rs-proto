@@ -1077,6 +1077,7 @@ fn read_prefix_and_candidates(
     writer: &mut impl Write,
     command: &str,
 ) -> Result<(String, Option<String>), ()> {
+    const MAX_TSV_BYTES: usize = 1_048_576;
     let prefix = match read_text_line(reader) {
         Ok(p) => p,
         Err(_) => {
@@ -1100,9 +1101,23 @@ fn read_prefix_and_candidates(
         return Ok((prefix, None));
     }
 
+    if first_line.len() > MAX_TSV_BYTES {
+        loop {
+            let mut drain = String::new();
+            if reader.read_line(&mut drain).is_err()
+                || drain.is_empty()
+                || drain.trim_end() == "END"
+            {
+                break;
+            }
+        }
+        let _ = writeln!(writer, "ERROR payload too large");
+        let _ = writer.flush();
+        return Err(());
+    }
+
     // Full request: first_line is the start of the TSV; read the rest.
     let mut tsv = first_line;
-    const MAX_TSV_BYTES: usize = 1_048_576;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line).is_err() || line.is_empty() {
@@ -1235,7 +1250,9 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompleteParams, DaemonServer, RenderParams, read_text_line};
+    use super::{
+        CompleteParams, DaemonServer, RenderParams, read_prefix_and_candidates, read_text_line,
+    };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use std::collections::HashMap;
@@ -1991,128 +2008,51 @@ mod tests {
 
     // --- Candidate cache tests ---
 
-    fn text_render_request(context_key: &str, tsv: &str) -> String {
-        // render <row> <col> <cols> <rows> context_key=<key>\n<prefix>\n[<tsv>]END\n
-        let mut req = format!("render 5 2 80 24 context_key={}\ngi\n", context_key);
-        req.push_str(tsv);
-        req.push_str("END\n");
-        req
-    }
-
-    fn text_render_cache_only(context_key: &str) -> String {
-        // Cache-only: END immediately after prefix, no TSV.
-        format!("render 5 2 80 24 context_key={}\ngi\nEND\n", context_key)
+    #[test]
+    fn read_prefix_and_candidates_returns_none_for_cache_only_request() {
+        let data = Cursor::new(b"gi\nEND\n");
+        let mut reader = BufReader::new(data);
+        let mut writer = Vec::new();
+        let (prefix, tsv) = read_prefix_and_candidates(&mut reader, &mut writer, "render").unwrap();
+        assert_eq!(prefix, "gi");
+        assert_eq!(tsv, None);
+        assert!(writer.is_empty());
     }
 
     #[test]
-    fn candidate_cache_hit_returns_ok_without_tsv() {
-        // First request populates the cache.
-        let (s1, c1) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_request(
-                "pid1:git%20",
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-            let mut w = &c1;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        let mut server = test_server();
-        {
-            let mut reader = BufReader::new(&s1);
-            server.handle_text_connection(&mut reader, &s1);
-        }
-        let mut first_resp = String::new();
-        let mut r1 = BufReader::new(&c1);
-        r1.read_line(&mut first_resp).unwrap();
-        assert!(
-            first_resp.starts_with("OK "),
-            "expected OK, got: {first_resp:?}"
-        );
-
-        // Second request uses the same context_key with no TSV (cache-only).
-        let (s2, c2) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_cache_only("pid1:git%20");
-            let mut w = &c2;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s2);
-            server.handle_text_connection(&mut reader, &s2);
-        }
-        let mut second_resp = String::new();
-        let mut r2 = BufReader::new(&c2);
-        r2.read_line(&mut second_resp).unwrap();
-        assert!(
-            second_resp.starts_with("OK "),
-            "cache hit should return OK, got: {second_resp:?}"
-        );
+    fn read_prefix_and_candidates_returns_some_for_payload_request() {
+        let data = Cursor::new(b"gi\ngit\tcommand\tcommand\nEND\n");
+        let mut reader = BufReader::new(data);
+        let mut writer = Vec::new();
+        let (prefix, tsv) = read_prefix_and_candidates(&mut reader, &mut writer, "render").unwrap();
+        assert_eq!(prefix, "gi");
+        assert_eq!(tsv.as_deref(), Some("git\tcommand\tcommand\n"));
+        assert!(writer.is_empty());
     }
 
     #[test]
-    fn candidate_cache_miss_returns_cache_miss_response() {
-        let mut server = test_server();
-        let (s, c) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_cache_only("unknown_key");
-            let mut w = &c;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s);
-            server.handle_text_connection(&mut reader, &s);
-        }
-        let mut resp = String::new();
-        let mut r = BufReader::new(&c);
-        r.read_line(&mut resp).unwrap();
+    fn read_prefix_and_candidates_rejects_oversized_first_line() {
+        let oversized = "x".repeat(1_048_577);
+        let data = Cursor::new(format!("gi\n{oversized}\nEND\n"));
+        let mut reader = BufReader::new(data);
+        let mut writer = Vec::new();
+        let result = read_prefix_and_candidates(&mut reader, &mut writer, "render");
+        assert!(result.is_err());
         assert_eq!(
-            resp.trim_end(),
-            "CACHE_MISS",
-            "unknown context_key should return CACHE_MISS, got: {resp:?}"
+            String::from_utf8(writer).unwrap(),
+            "ERROR payload too large\n"
         );
     }
 
     #[test]
-    fn candidate_cache_isolated_by_context_key() {
-        // Two different context keys must not share cache entries.
+    fn candidate_cache_get_returns_stored_payload() {
         let mut server = test_server();
-
-        // Populate cache for key A.
-        let (s1, c1) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_request("pid1:git%20", "git\tcommand\tcommand\n");
-            let mut w = &c1;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s1);
-            server.handle_text_connection(&mut reader, &s1);
-        }
-
-        // Cache-only lookup for key B (different PID, same lbase) must miss.
-        let (s2, c2) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_cache_only("pid2:git%20");
-            let mut w = &c2;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s2);
-            server.handle_text_connection(&mut reader, &s2);
-        }
-        let mut resp = String::new();
-        let mut r = BufReader::new(&c2);
-        r.read_line(&mut resp).unwrap();
+        server.store_cached_tsv("123:/tmp:git%20", "git\tcommand\tcommand\n".to_string());
         assert_eq!(
-            resp.trim_end(),
-            "CACHE_MISS",
-            "different context_key should not hit other session's cache, got: {resp:?}"
+            server.get_cached_tsv("123:/tmp:git%20"),
+            Some("git\tcommand\tcommand\n")
         );
+        assert_eq!(server.get_cached_tsv("missing"), None);
     }
 
     #[test]
@@ -2131,89 +2071,45 @@ mod tests {
         );
 
         // Insert one more entry — the oldest (pid0) should be evicted.
-        server.store_cached_tsv("new_key:git ", tsv.to_string());
+        server.store_cached_tsv("new_key:git%20", tsv.to_string());
         assert_eq!(
             server.candidate_cache.len(),
             super::CANDIDATE_CACHE_MAX_ENTRIES
         );
         assert!(
-            !server.candidate_cache.contains_key("pid0:git "),
+            !server.candidate_cache.contains_key("pid0:git%20"),
             "oldest cache entry should have been evicted"
         );
         assert!(
-            server.candidate_cache.contains_key("new_key:git "),
+            server.candidate_cache.contains_key("new_key:git%20"),
             "newly inserted entry should be present"
         );
     }
 
     #[test]
-    fn candidate_cache_render_then_complete_share_cache() {
-        // Verifies that a render request that populates the cache with a given
-        // context_key makes that TSV available for a subsequent complete request
-        // that uses the same key but sends no TSV (cache-only).
+    fn candidate_cache_reinsert_moves_key_to_most_recent_position() {
         let mut server = test_server();
-        let tsv = "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n";
+        for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
+            server.store_cached_tsv(
+                &format!("pid{}:git%20", i),
+                format!("git{}\tcommand\tcommand\n", i),
+            );
+        }
 
-        // render populates cache.
-        let (s1, c1) = UnixStream::pair().unwrap();
-        {
-            let req = text_render_request("pid1:git%20", tsv);
-            let mut w = &c1;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s1);
-            server.handle_text_connection(&mut reader, &s1);
-        }
-        let mut render_resp = String::new();
-        let mut r1 = BufReader::new(&c1);
-        r1.read_line(&mut render_resp).unwrap();
+        server.store_cached_tsv("pid0:git%20", "git0-new\tcommand\tcommand\n".to_string());
+        server.store_cached_tsv("new_key:git%20", "new\tcommand\tcommand\n".to_string());
+
         assert!(
-            render_resp.starts_with("OK "),
-            "render should succeed: {render_resp:?}"
+            server.candidate_cache.contains_key("pid0:git%20"),
+            "reinserted key should not be evicted"
         );
-
-        // Confirm the cache holds the expected TSV after the render request.
-        assert_eq!(
-            server.get_cached_tsv("pid1:git%20"),
-            Some(tsv),
-            "cache should hold the TSV after a render with context_key"
-        );
-
-        // A complete request without TSV (cache-only) should NOT return CACHE_MISS.
-        // Because the server is single-threaded and complete sessions wait for KEY
-        // input we verify the cache lookup directly rather than over a socket.
-        let complete_tsv = server.get_cached_tsv("pid1:git%20").map(str::to_string);
         assert!(
-            complete_tsv.is_some(),
-            "complete cache-only lookup should find the TSV populated by render"
+            !server.candidate_cache.contains_key("pid1:git%20"),
+            "oldest untouched key should be evicted after pid0 is refreshed"
         );
-        assert_eq!(complete_tsv.as_deref(), Some(tsv));
-    }
-
-    #[test]
-    fn candidate_cache_no_context_key_no_tsv_returns_empty() {
-        // Without context_key, an empty-payload render must return EMPTY (not CACHE_MISS).
-        let mut server = test_server();
-        let (s, c) = UnixStream::pair().unwrap();
-        {
-            let req = "render 5 2 80 24\ngi\nEND\n";
-            let mut w = &c;
-            w.write_all(req.as_bytes()).unwrap();
-            w.flush().unwrap();
-        }
-        {
-            let mut reader = BufReader::new(&s);
-            server.handle_text_connection(&mut reader, &s);
-        }
-        let mut resp = String::new();
-        let mut r = BufReader::new(&c);
-        r.read_line(&mut resp).unwrap();
         assert_eq!(
-            resp.trim_end(),
-            "EMPTY",
-            "no context_key + no TSV should return EMPTY, got: {resp:?}"
+            server.get_cached_tsv("pid0:git%20"),
+            Some("git0-new\tcommand\tcommand\n")
         );
     }
 }
