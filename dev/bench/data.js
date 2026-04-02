@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775093223679,
+  "lastUpdate": 1775118667500,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -7511,6 +7511,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 754,
             "range": "± 11",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d5c0e603f02a942dd60df5fabd11f653c7e7fa2",
+          "message": "feat(completion): auto-insert unambiguous prefix before popup display (#78)\n\n* feat(completion): auto-insert unambiguous prefix before popup display (#51)\n\n- Add `[completion] auto_insert_unambiguous` config option (default: true)\n- Propagate common prefix via FRAME header (`common_prefix=<text>`) on\n  initial popup frame in both daemon and subprocess paths\n- Add `common_prefix` field to render metadata (`format_metadata`)\n- Shell: parse `common_prefix` from FRAME header and update LBUFFER/CURSOR\n  before entering the key loop, so prefix extension is visible immediately\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(completion): simplify common prefix extraction and frame building\n\n- Extract App::unambiguous_prefix() to deduplicate identical\n  filter_text/prefix length check across daemon.rs (×2) and main.rs\n- Avoid double Config::load() in run_render fallback path by passing\n  auto_insert_unambiguous as a parameter from main()\n- Replace format+push_str chain in send_frame with direct write! calls\n  to writer, eliminating intermediate String allocation\n- Use length-based LBUFFER slicing in shell instead of %-suffix pattern\n  to avoid treating prefix characters as glob patterns\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* style: apply rustfmt\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(completion): merge duplicate impl App block; document CompletionRaw default\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(completion): skip common_prefix emission when value contains spaces\n\nSpace-delimited FRAME/OK headers cannot safely carry a value that\ncontains spaces.  Guard both send_frame and format_metadata so they\nomit common_prefix rather than truncating it or corrupting tty_len\nparsing in the shell.  Add a test asserting the field is absent for\nspace-containing prefixes.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(completion): reset filter_text to typed prefix when auto_insert_unambiguous disabled\n\nWhen auto_insert_unambiguous = false, App was still initializing\nfilter_text to the computed common prefix (lcp), causing Cancel and\npassthrough paths to return the extended value even with the feature\noff.  Reset filter_text to the original typed prefix in setup_session\nso all exit paths respect the setting.\n\nAdd test: cancel with auto_insert_unambiguous=false returns empty text\n(filter_text == prefix), not the extended common prefix.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(completion): apply filter_text reset to render paths when auto_insert_unambiguous disabled\n\nsetup_session already reset filter_text for the interactive complete\npath, but handle_render and run_render were left unchanged.  Without\nthe reset the popup filter line would display the extended lcp instead\nof the typed prefix, and the metadata common_prefix logic was\ninconsistent.\n\nApply the same filter_text = prefix; update_filter() normalization to\nboth render paths.  Add a test confirming that handle_render emits no\ncommon_prefix field when auto_insert_unambiguous = false.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(completion): extend common_prefix header guard to ASCII control characters\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): update prefix_len after common_prefix LBUFFER insertion\n\nWhen _f_common_prefix is inserted into LBUFFER, _zacrs_apply_result\nwas still stripping only the original prefix_len characters, causing\nthe inserted prefix tail to be duplicated on confirm/dismiss.\n\nUpdate prefix_len in the caller scope via Zsh dynamic scoping so that\n_zacrs_apply_result computes the correct base for both the daemon and\ncoproc paths.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(completion): add regression tests for ASCII control char header guard\n\nVerify that common_prefix values containing \\t, \\r, \\n, \\x1b, or \\x7f\nare suppressed in both the popup metadata (ui/popup.rs) and the FRAME\nheader emitted by send_frame (daemon.rs).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(app): extract reset_filter_to_prefix to eliminate duplication\n\nConsolidate the three identical `filter_text = prefix.clone(); update_filter()`\ncall sites (main.rs, daemon.rs ×2) into a single App method.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(ui): extract is_safe_prefix helper to deduplicate header guard\n\nBoth send_frame and format_metadata checked the same space/control-char\ncondition inline. Centralise it in popup::is_safe_prefix so the rule\nlives in one place.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(ui): unify format_metadata common_prefix to Option<&str>\n\n- Change format_metadata signature from &str to Option<&str>, matching\n  the Option pattern already used by send_frame.\n- Update handle_render to use .then(|| ...).flatten() instead of\n  unwrap_or(\"\") / String::new() branches.\n- Update config tests to use ..Config::default() so new fields don't\n  require manual updates.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(completion): remove common_prefix from render metadata\n\nThe render path (handle_render / run_render) is used for live popup\ndisplay updates, not for interactive Tab sessions.  Auto-insert via\ncommon_prefix is handled exclusively in the complete path's FRAME\nheaders (_zacrs_popup_session_loop).  Passing None to format_metadata\nin both render callers makes the boundary explicit and removes a field\nthat was emitted but never consumed.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): use prefix_len instead of \\${#prefix} in LBUFFER splice\n\n\\${#prefix} is the logical character count of the unquoted/expanded\nprefix string.  prefix_len is the raw LBUFFER character count that\ncompsys uses (set by _zacrs_compsys context detection).  They diverge\nfor quoted or escaped input, which would cause the wrong slice of\nLBUFFER to be replaced.  Use prefix_len consistently in both the guard\ncomparison and the slice arithmetic.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(completion): add coverage for common_prefix in FRAME vs render paths\n\n- Replace handle_render_no_common_prefix_when_auto_insert_disabled with\n  handle_render_never_emits_common_prefix, which asserts common_prefix is\n  always absent from render metadata (for both config values) since auto-\n  insert travels exclusively via FRAME headers.\n- Add handle_complete_initial_frame_includes_common_prefix_when_enabled:\n  confirms the first FRAME header carries common_prefix=git- when\n  auto_insert_unambiguous=true and candidates share a longer prefix.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(app): add unit tests for unambiguous_prefix and reset_filter_to_prefix\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(config): add TOML parse coverage for auto_insert_unambiguous\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test: strengthen reset_filter_to_prefix and malformed-toml fallback assertions\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-02T17:23:03+09:00",
+          "tree_id": "0bdc10924c2b4c1e008d2cf253a75ed2dc6c1733",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/0d5c0e603f02a942dd60df5fabd11f653c7e7fa2"
+        },
+        "date": 1775118667152,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7309,
+            "range": "± 267",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 75195,
+            "range": "± 366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 910591,
+            "range": "± 4712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 192161,
+            "range": "± 2142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101887,
+            "range": "± 660",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75927,
+            "range": "± 480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20519,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19106,
+            "range": "± 177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12197,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 311821,
+            "range": "± 1732",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306417,
+            "range": "± 1503",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 269935,
+            "range": "± 1068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295436,
+            "range": "± 3036",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26994,
+            "range": "± 221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 309527,
+            "range": "± 3027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3483851,
+            "range": "± 84866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 153591,
+            "range": "± 1229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114227,
+            "range": "± 393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 365407,
+            "range": "± 2736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 748,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 68,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 64,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 863,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7622,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 758,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
