@@ -28,7 +28,9 @@ impl Popup {
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
         }
-        if !common_prefix.is_empty() && !common_prefix.contains(' ') {
+        if !common_prefix.is_empty()
+            && !common_prefix.contains(|c: char| c == ' ' || c.is_ascii_control())
+        {
             meta.push_str(&format!(" common_prefix={}", common_prefix));
         }
         meta
