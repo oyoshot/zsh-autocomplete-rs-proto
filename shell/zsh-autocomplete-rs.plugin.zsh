@@ -40,7 +40,6 @@ typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_cached_from_gather=0
-typeset -gi _zacrs_cached_prefix_len=0
 typeset -gF _zacrs_debounce_until=0.0
 
 # Render header parse results (set by _zacrs_parse_render_header)
@@ -65,9 +64,9 @@ _zacrs_reset_popup_snapshot() {
 _zacrs_reset_cache() {
     _zacrs_cached_candidates=""
     _zacrs_cached_from_gather=0
-    _zacrs_cached_prefix_len=0
     _zacrs_cached_prefix=""
     _zacrs_cached_lbase=""
+    _zacrs_chain_retry=0
     _zacrs_debounce_until=0.0
 }
 
@@ -1023,7 +1022,6 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$candidates_str" ]]; then
             _zacrs_cached_candidates="$candidates_str"
             _zacrs_cached_from_gather=$from_gather
-            _zacrs_cached_prefix_len=$prefix_len
             _zacrs_cached_prefix="$prefix"
         fi
 
