@@ -123,17 +123,20 @@ _zacrs_compsys_func() {
         _zacrs_ctx_valid=1
         _zacrs_ctx_prefix="${IPREFIX}${PREFIX}"
 
-        # Raw prefix length on LBUFFER (preserves quotes/escapes)
-        if [[ "$LBUFFER" == *[[:space:]] || -z "$LBUFFER" ]]; then
-            _zacrs_ctx_prefix_len=0
-        else
-            local -a _zacrs_zwords=( ${(z)LBUFFER} )
-            if (( ${#_zacrs_zwords} > 0 )); then
-                _zacrs_ctx_prefix_len=${#_zacrs_zwords[-1]}
-            else
-                _zacrs_ctx_prefix_len=0
-            fi
-        fi
+        # Prefix length on LBUFFER: use the length of IPREFIX+PREFIX directly.
+        # Using ${(z)LBUFFER} to get the last token length is fragile when
+        # LBUFFER contains an open (unclosed) quote character such as `"s` —
+        # zsh's (z) flag fails to parse the unmatched quote and may return an
+        # empty array, leaving prefix_len=0.  With prefix_len=0 the apply step
+        # treats the whole LBUFFER as the base and prepends it to the candidate
+        # text, producing doubled output like `"ssrc`.
+        # _zacrs_ctx_prefix (IPREFIX+PREFIX) is exactly what this implementation
+        # uses for candidate reconstruction and LBUFFER trimming, so its length
+        # is the correct character count to strip.
+        # Caveat: when compset -q further splits the prefix, zsh stores the
+        # additional dequoted text in QIPREFIX; this implementation does not
+        # model QIPREFIX, so deeply-nested quoting paths are untested.
+        _zacrs_ctx_prefix_len=${#_zacrs_ctx_prefix}
 
         _zacrs_dbg "context: PREFIX='$PREFIX' IPREFIX='$IPREFIX' ctx_prefix='$_zacrs_ctx_prefix' raw_len=$_zacrs_ctx_prefix_len"
     fi
