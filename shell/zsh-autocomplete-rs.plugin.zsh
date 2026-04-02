@@ -858,9 +858,12 @@ _zacrs_complete_popup() {
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "
     fi
-    local _ctx_lbase="${lbase// /%20}"
-    local _ctx_pwd="${PWD// /%20}"
-    local context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
+    local context_key=""
+    if [[ -n "$lbase" ]]; then
+        local _ctx_lbase="${lbase// /%20}"
+        local _ctx_pwd="${PWD// /%20}"
+        context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
+    fi
 
     if (( _zacrs_popup_visible )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
@@ -961,18 +964,21 @@ _zacrs_line_pre_redraw() {
     fi
 
     # lbase 計算: 最後のスペースより前の部分（コマンド＋引数の文脈）
-    # context_key にはシェルの PID + PWD + lbase を含め、
-    # セッションをまたいだキャッシュ干渉とディレクトリ変化に対応する。
-    # スペースは %20 に変換してプロトコルのスペース区切りと衝突しないようにする。
     local lbase
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "
     else
         lbase=""
     fi
-    local _ctx_lbase="${lbase// /%20}"
-    local _ctx_pwd="${PWD// /%20}"
-    local context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
+    # context_key はコマンド引数位置 (lbase 非空) のみ設定する。
+    # コマンド名位置 (lbase 空) では候補がカレントプレフィクスに依存するため
+    # 異なるコマンド間で同一キー "PID:PWD:" を共有するとキャッシュ汚染が起きる。
+    local context_key=""
+    if [[ -n "$lbase" ]]; then
+        local _ctx_lbase="${lbase// /%20}"
+        local _ctx_pwd="${PWD// /%20}"
+        context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
+    fi
 
     # 候補収集変数
     local candidates_str="" from_gather=0
@@ -984,9 +990,9 @@ _zacrs_line_pre_redraw() {
         _zacrs_maybe_retry_daemon
     fi
 
-    # Cache-first: デーモンにキャッシュのみで render を試みる。
-    # キャッシュヒット時はコマンドシステム呼び出しをスキップできる（最速パス）。
-    if (( _zacrs_daemon_available )); then
+    # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置のみ）。
+    # コマンド名位置 (context_key="") はキャッシュを使わず常に heavy path へ。
+    if (( _zacrs_daemon_available )) && [[ -n "$context_key" ]]; then
         local cursor_row=0 cursor_col=0
         if (( _zacrs_popup_visible
                 && _zacrs_last_render_cursor_row > 0
