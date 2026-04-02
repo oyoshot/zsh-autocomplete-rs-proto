@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775121956871,
+  "lastUpdate": 1775125674154,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -7967,6 +7967,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 756,
             "range": "± 1",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "391e23ad77ba305b851b86e4d34f7c50a99730a6",
+          "message": "fix(shell): use prefix string for cache-hit check to fix history nav stale candidates (#82)\n\n* fix(shell): use prefix string for cache-hit check to fix history nav stale candidates\n\nThe previous cache-hit condition only checked prefix length:\n\n  (( ${#naive_prefix} >= _zacrs_cached_prefix_len ))\n\nHistory navigation (↑/↓) changes LBUFFER atomically without passing\nthrough empty, so neither the lbase-change guard nor the empty-LBUFFER\nguard (#79) caught the case. Navigating from \"cargo\" to \"a\" satisfied\nthe length condition (1 >= 1) and reused stale cargo candidates.\n\nIntroduce _zacrs_cached_prefix to store the actual prefix string at\ncache-build time and change the condition to a prefix-extension check:\n\n  [[ \"$naive_prefix\" == \"${_zacrs_cached_prefix}\"* ]]\n\n\"a\" does not start with \"c\", so the cache is correctly invalidated and\ncompsys runs fresh for the new input.\n\nFixes #81\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(shell): remove dead _zacrs_cached_prefix_len and reset chain_retry in reset_cache\n\n_zacrs_cached_prefix_len became dead code after the cache-hit condition\nwas changed to a prefix-string extension check. Remove the variable\nfrom its declaration, reset, and update sites.\n\nAlso add _zacrs_chain_retry=0 to _zacrs_reset_cache so that stale\nretry state from a previous command context is cleared alongside the\ncandidate cache, as suggested in code review.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): store naive_prefix in _zacrs_cached_prefix for consistent cache-hit check\n\nThe guard uses naive_prefix on the left-hand side:\n\n  [[ \"$naive_prefix\" == \"${_zacrs_cached_prefix}\"* ]]\n\nbut the stored value was $prefix, which compsys can set to a different\nstring (e.g. without the opening quote in quoted completion contexts).\nThis mismatch caused unnecessary cache misses on every keystroke inside\nquoted arguments.\n\nStore naive_prefix instead so both sides of the comparison use the same\nconcept, making quoted completion as cache-efficient as unquoted.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-02T19:19:57+09:00",
+          "tree_id": "992ab2aba4b27508bbc6dad2d3fa13822067456f",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/391e23ad77ba305b851b86e4d34f7c50a99730a6"
+        },
+        "date": 1775125673850,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7331,
+            "range": "± 112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74584,
+            "range": "± 1837",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 899203,
+            "range": "± 12250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 190259,
+            "range": "± 1411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100945,
+            "range": "± 470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75796,
+            "range": "± 518",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20244,
+            "range": "± 171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19055,
+            "range": "± 139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12138,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 312300,
+            "range": "± 5397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306437,
+            "range": "± 6144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 270072,
+            "range": "± 1654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295488,
+            "range": "± 1619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 27064,
+            "range": "± 757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 308465,
+            "range": "± 3112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3384141,
+            "range": "± 61329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 152949,
+            "range": "± 2751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 114449,
+            "range": "± 1192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 363613,
+            "range": "± 6314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 742,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 69,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 64,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 875,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7614,
+            "range": "± 75",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 755,
+            "range": "± 44",
             "unit": "ns/iter"
           }
         ]
