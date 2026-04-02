@@ -290,6 +290,25 @@ impl App {
             }
         }
     }
+
+    /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
+    /// `filter_text` is initialized to the common prefix of all candidates at construction time.
+    pub fn unambiguous_prefix(&self) -> Option<&str> {
+        if self.filter_text.len() > self.prefix.len() {
+            Some(&self.filter_text)
+        } else {
+            None
+        }
+    }
+
+    /// Resets `filter_text` to the original typed prefix and re-runs filtering.
+    /// No-op if `filter_text` already equals `prefix`.
+    pub fn reset_filter_to_prefix(&mut self) {
+        if self.filter_text != self.prefix {
+            self.filter_text = self.prefix.clone();
+            self.update_filter();
+        }
+    }
 }
 
 pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
@@ -860,5 +879,69 @@ mod tests {
     fn selected_original_idx_none_when_no_selection() {
         let app = make_test_app("gi", &["git", "gist"]);
         assert_eq!(app.selected_original_idx(), None);
+    }
+
+    // --- unambiguous_prefix ---
+
+    #[test]
+    fn unambiguous_prefix_returns_some_when_filter_text_extends_prefix() {
+        // "gi" typed; candidates share "git-" prefix → filter_text extended to "git-"
+        let app = make_test_app("gi", &["git-log", "git-status", "git-diff"]);
+        assert_eq!(app.unambiguous_prefix(), Some("git-"));
+    }
+
+    #[test]
+    fn unambiguous_prefix_returns_none_when_no_extension() {
+        // candidates only share the typed prefix itself
+        let app = make_test_app("git", &["git-log", "git-status"]);
+        assert_eq!(app.unambiguous_prefix(), Some("git-"));
+        // when filter_text == prefix exactly
+        let app2 = make_test_app("abc", &["abcx", "abcy"]);
+        // common prefix is "abc" (== typed prefix), so None
+        assert_eq!(app2.unambiguous_prefix(), None);
+    }
+
+    #[test]
+    fn unambiguous_prefix_returns_none_for_empty_candidates() {
+        let app = make_test_app("gi", &[]);
+        assert_eq!(app.unambiguous_prefix(), None);
+    }
+
+    #[test]
+    fn unambiguous_prefix_returns_none_for_single_candidate_equal_prefix() {
+        let app = make_test_app("git-log", &["git-log"]);
+        assert_eq!(app.unambiguous_prefix(), None);
+    }
+
+    #[test]
+    fn unambiguous_prefix_returns_some_for_single_candidate_longer_than_prefix() {
+        let app = make_test_app("gi", &["git-log"]);
+        assert_eq!(app.unambiguous_prefix(), Some("git-log"));
+    }
+
+    // --- reset_filter_to_prefix ---
+
+    #[test]
+    fn reset_filter_to_prefix_noop_when_already_equal() {
+        let mut app = make_test_app("abc", &["abcx", "abcy"]);
+        // filter_text == prefix ("abc"), so reset is a no-op
+        let before = app.filtered_indices.clone();
+        app.reset_filter_to_prefix();
+        assert_eq!(app.filter_text, "abc");
+        assert_eq!(app.filtered_indices, before);
+    }
+
+    #[test]
+    fn reset_filter_to_prefix_restores_and_refilters() {
+        // prefix "g"; "grep" prevents common prefix from extending past "g".
+        // type_char('i') narrows to 2 matches ("git-log", "gist").
+        // reset_filter_to_prefix() must restore filter_text to "g" and re-expand to 3 matches.
+        let mut app = make_test_app("g", &["git-log", "gist", "grep"]);
+        app.type_char('i');
+        assert_eq!(app.filter_text, "gi");
+        assert_eq!(app.filtered_indices.len(), 2); // git-log, gist
+        app.reset_filter_to_prefix();
+        assert_eq!(app.filter_text, "g");
+        assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
     }
 }

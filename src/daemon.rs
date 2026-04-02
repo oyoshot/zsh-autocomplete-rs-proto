@@ -513,6 +513,7 @@ impl DaemonServer {
         app: &App,
         extra_prefix: &[u8],
         popup_only: bool,
+        common_prefix: Option<&str>,
     ) -> io::Result<()> {
         let (tty_bytes, popup) = if popup_only {
             ui::render::render_popup_to_bytes(app, &self.theme)?
@@ -520,11 +521,17 @@ impl DaemonServer {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
         let total_len = extra_prefix.len() + tty_bytes.len();
-        writeln!(
+        write!(
             writer,
-            "FRAME popup_row={} popup_height={} cursor_row={} {}",
-            popup.row, popup.height, app.cursor_row, total_len
+            "FRAME popup_row={} popup_height={} cursor_row={}",
+            popup.row, popup.height, app.cursor_row
         )?;
+        if let Some(cp) = common_prefix {
+            if ui::popup::is_safe_prefix(cp) {
+                write!(writer, " common_prefix={}", cp)?;
+            }
+        }
+        writeln!(writer, " {}", total_len)?;
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
         }
@@ -572,6 +579,10 @@ impl DaemonServer {
             return Response::Empty;
         }
 
+        if !self.config.auto_insert_unambiguous {
+            app.reset_filter_to_prefix();
+        }
+
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
@@ -607,11 +618,14 @@ impl DaemonServer {
                     tty_bytes = tty_bytes.len(),
                     "render complete"
                 );
+                // Render metadata is for popup position only; auto-insert is handled
+                // exclusively via FRAME headers in the complete (interactive) path.
                 let metadata = popup.format_metadata(
                     cursor_row_final,
                     reuse_token,
                     filtered_count,
                     selected_original_idx,
+                    None,
                 );
                 Response::Success {
                     tty_bytes,
@@ -659,6 +673,12 @@ impl DaemonServer {
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
 
+        // When auto_insert_unambiguous is disabled, keep filter_text at the typed
+        // prefix so that cancel/passthrough paths never return an extended value.
+        if !self.config.auto_insert_unambiguous {
+            app.reset_filter_to_prefix();
+        }
+
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = writeln!(writer, "DONE 1 ");
@@ -703,9 +723,21 @@ impl DaemonServer {
             None => return,
         };
 
+        let initial_common_prefix = self
+            .config
+            .auto_insert_unambiguous
+            .then(|| app.unambiguous_prefix().map(str::to_string))
+            .flatten();
+
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         if self
-            .send_frame(writer, &app, &scroll_bytes, reuse_fast_path)
+            .send_frame(
+                writer,
+                &app,
+                &scroll_bytes,
+                reuse_fast_path,
+                initial_common_prefix.as_deref(),
+            )
             .is_err()
         {
             self.fuzzy = Some(app.take_fuzzy());
@@ -749,7 +781,7 @@ impl DaemonServer {
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
                         apply_navigation(&mut app, action);
-                        if self.send_frame(writer, &app, &[], false).is_err() {
+                        if self.send_frame(writer, &app, &[], false, None).is_err() {
                             break;
                         }
                     }
@@ -761,7 +793,10 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
+                        if self
+                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -779,7 +814,10 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
+                        if self
+                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1158,6 +1196,108 @@ mod tests {
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn handle_render_never_emits_common_prefix() {
+        // Render metadata is for popup position only; auto-insert travels via
+        // FRAME headers in the complete path.  common_prefix must be absent
+        // regardless of auto_insert_unambiguous.
+        for auto_insert in [true, false] {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = auto_insert;
+            let response = server.handle_render(
+                RenderParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    selected: None,
+                },
+                b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
+
+            match response {
+                crate::protocol::Response::Success { metadata, .. } => {
+                    let metadata = metadata.unwrap();
+                    assert!(
+                        !metadata.contains("common_prefix="),
+                        "common_prefix must be absent from render metadata \
+                         (auto_insert={auto_insert}): {metadata}"
+                    );
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn send_frame_control_char_in_common_prefix_omitted() {
+        use crate::app::App;
+        use crate::candidate::Candidate;
+        let server = test_server();
+        let app = App::new(
+            vec![Candidate {
+                text: "git-log".to_string(),
+                description: String::new(),
+                kind: "command".to_string(),
+            }],
+            "g".to_string(),
+            5,
+            80,
+        );
+        for ctrl in ["\t", "\r", "\n", "\x1b", "\x7f"] {
+            let prefix = format!("git{ctrl}log");
+            let mut output = Vec::new();
+            server
+                .send_frame(&mut output, &app, &[], true, Some(&prefix))
+                .unwrap();
+            let header = String::from_utf8_lossy(&output);
+            assert!(
+                !header.contains("common_prefix="),
+                "control char {ctrl:?} should suppress common_prefix in: {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_complete_initial_frame_includes_common_prefix_when_enabled() {
+        // With auto_insert_unambiguous=true, the first FRAME header must carry
+        // common_prefix= when candidates share a longer prefix than the typed input.
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = true;
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
+        });
+
+        let mut reader = BufReader::new(&client_stream);
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(
+            header.contains("common_prefix=git-"),
+            "initial FRAME must contain common_prefix=git- when auto_insert enabled: {header}"
+        );
+
+        drop(reader);
+        drop(client_stream);
+        handle.join().unwrap();
     }
 
     #[test]
@@ -1579,5 +1719,49 @@ mod tests {
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
         );
+    }
+
+    #[test]
+    fn handle_complete_cancel_returns_typed_prefix_when_auto_insert_disabled() {
+        // With auto_insert_unambiguous=false, cancel should echo back the typed
+        // prefix ("gi"), not the extended common prefix ("git-").
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = false;
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        // Send Escape (cancel)
+        send_key(&mut writer, b"\x1b");
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
+        // With auto_insert enabled the extended "git-" would have been returned.
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
     }
 }

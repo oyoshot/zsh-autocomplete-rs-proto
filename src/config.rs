@@ -11,6 +11,7 @@ fn config_path() -> Option<PathBuf> {
 
 pub struct Config {
     pub max_visible: usize,
+    pub auto_insert_unambiguous: bool,
     pub keybindings: KeybindingsRaw,
     theme_raw: ThemeRaw,
 }
@@ -19,8 +20,28 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             max_visible: 10,
+            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw::default(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+// Manual Default impl required: bool::default() is false, but this option defaults to true.
+#[derive(Debug, Deserialize)]
+struct CompletionRaw {
+    #[serde(default = "default_true")]
+    auto_insert_unambiguous: bool,
+}
+
+impl Default for CompletionRaw {
+    fn default() -> Self {
+        CompletionRaw {
+            auto_insert_unambiguous: true,
         }
     }
 }
@@ -31,6 +52,8 @@ struct ConfigFile {
     keybindings: KeybindingsRaw,
     #[serde(default)]
     theme: ThemeRaw,
+    #[serde(default)]
+    completion: CompletionRaw,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -161,6 +184,7 @@ impl Config {
         let file: ConfigFile = toml::from_str(&content).unwrap_or_default();
         Config {
             max_visible: 10,
+            auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             keybindings: file.keybindings,
             theme_raw: file.theme,
         }
@@ -278,14 +302,13 @@ mod tests {
     #[test]
     fn key_bindings_overrides() {
         let config = Config {
-            max_visible: 10,
             keybindings: KeybindingsRaw {
                 tab: Some("confirm".to_string()),
                 shift_tab: None,
                 enter: None,
                 space: Some("cancel".to_string()),
             },
-            theme_raw: ThemeRaw::default(),
+            ..Config::default()
         };
         let bindings = config.key_bindings();
         assert_eq!(bindings.tab, Action::Confirm);
@@ -367,8 +390,6 @@ mod tests {
     #[test]
     fn theme_overrides() {
         let config = Config {
-            max_visible: 10,
-            keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("blue".to_string()),
                 selected_fg: Some("black".to_string()),
@@ -377,6 +398,7 @@ mod tests {
                 filter: Some("green".to_string()),
                 candidate: Some("white".to_string()),
             },
+            ..Config::default()
         };
         let theme = config.theme();
         assert_eq!(theme.border, Some(Color::Blue));
@@ -387,16 +409,54 @@ mod tests {
         assert_eq!(theme.candidate, Some(Color::White));
     }
 
+    // --- auto_insert_unambiguous TOML parsing ---
+
+    #[test]
+    fn auto_insert_unambiguous_defaults_true_without_completion_section() {
+        let file: ConfigFile = toml::from_str("").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_defaults_true_when_key_absent() {
+        let file: ConfigFile = toml::from_str("[completion]").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_false_parsed_from_toml() {
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = false").unwrap();
+        assert!(!file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_true_explicit_parsed_from_toml() {
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = true").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_malformed_toml_falls_back_to_default() {
+        // toml::from_str fails → unwrap_or_default() → auto_insert_unambiguous = true
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = 42").unwrap_or_default();
+        assert!(
+            file.completion.auto_insert_unambiguous,
+            "fallback default must be true"
+        );
+    }
+
     #[test]
     fn theme_invalid_falls_back() {
         let config = Config {
-            max_visible: 10,
-            keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("invalid".to_string()),
                 description: Some("also-invalid".to_string()),
                 ..ThemeRaw::default()
             },
+            ..Config::default()
         };
         let theme = config.theme();
         assert_eq!(theme.border, None);

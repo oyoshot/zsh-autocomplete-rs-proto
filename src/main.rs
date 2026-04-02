@@ -43,6 +43,7 @@ fn run_render(
     cursor_col: u16,
     selected: Option<usize>,
     theme: &config::Theme,
+    auto_insert_unambiguous: bool,
 ) -> io::Result<i32> {
     // Read raw stdin before trying daemon (we need it for both paths)
     let raw_stdin: Vec<u8> = {
@@ -81,6 +82,10 @@ fn run_render(
         return Ok(1);
     }
 
+    if !auto_insert_unambiguous {
+        app.reset_filter_to_prefix();
+    }
+
     let mut tty = tty::open_tty_write()?;
     ui::render::ensure_space(&mut tty, &mut app)?;
 
@@ -97,11 +102,14 @@ fn run_render(
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
+    // Render metadata is for popup position only; auto-insert is handled
+    // exclusively via FRAME headers in the complete (interactive) path.
     let meta = popup.format_metadata(
         app.cursor_row,
         reuse_token,
         app.filtered_indices.len(),
         app.selected_original_idx(),
+        None,
     );
     println!("{}", meta);
 
@@ -157,8 +165,17 @@ fn main() {
             cursor_col,
             selected,
         } => {
-            let theme = config::Config::load().theme();
-            match run_render(prefix, cursor_row, cursor_col, selected, &theme) {
+            let cfg = config::Config::load();
+            let auto_insert_unambiguous = cfg.auto_insert_unambiguous;
+            let theme = cfg.theme();
+            match run_render(
+                prefix,
+                cursor_row,
+                cursor_col,
+                selected,
+                &theme,
+                auto_insert_unambiguous,
+            ) {
                 Ok(code) => process::exit(code),
                 Err(e) => {
                     eprintln!("error: {}", e);
