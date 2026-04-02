@@ -784,7 +784,10 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false, None).is_err() {
+                        if self
+                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -802,7 +805,10 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false, None).is_err() {
+                        if self
+                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }

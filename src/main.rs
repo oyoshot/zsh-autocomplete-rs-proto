@@ -167,7 +167,14 @@ fn main() {
             let cfg = config::Config::load();
             let auto_insert_unambiguous = cfg.auto_insert_unambiguous;
             let theme = cfg.theme();
-            match run_render(prefix, cursor_row, cursor_col, selected, &theme, auto_insert_unambiguous) {
+            match run_render(
+                prefix,
+                cursor_row,
+                cursor_col,
+                selected,
+                &theme,
+                auto_insert_unambiguous,
+            ) {
                 Ok(code) => process::exit(code),
                 Err(e) => {
                     eprintln!("error: {}", e);
