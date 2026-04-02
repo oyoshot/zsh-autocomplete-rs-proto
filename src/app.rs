@@ -290,9 +290,7 @@ impl App {
             }
         }
     }
-}
 
-impl App {
     /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
     /// `filter_text` is initialized to the common prefix of all candidates at construction time.
     pub fn unambiguous_prefix(&self) -> Option<&str> {

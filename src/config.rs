@@ -31,6 +31,7 @@ fn default_true() -> bool {
     true
 }
 
+// Manual Default impl required: bool::default() is false, but this option defaults to true.
 #[derive(Debug, Deserialize)]
 struct CompletionRaw {
     #[serde(default = "default_true")]
