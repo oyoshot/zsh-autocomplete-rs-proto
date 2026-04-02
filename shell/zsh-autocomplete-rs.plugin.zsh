@@ -23,6 +23,7 @@ typeset -gi _zacrs_last_render_cursor_row=0
 typeset -gi _zacrs_last_render_cursor_col=0
 typeset -g _zacrs_cached_candidates=""
 typeset -g _zacrs_cached_lbase=""
+typeset -g _zacrs_cached_prefix=""
 typeset -gi _zacrs_chain_retry=0
 typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
@@ -39,7 +40,6 @@ typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_cached_from_gather=0
-typeset -gi _zacrs_cached_prefix_len=0
 typeset -gF _zacrs_debounce_until=0.0
 
 # Render header parse results (set by _zacrs_parse_render_header)
@@ -64,8 +64,9 @@ _zacrs_reset_popup_snapshot() {
 _zacrs_reset_cache() {
     _zacrs_cached_candidates=""
     _zacrs_cached_from_gather=0
-    _zacrs_cached_prefix_len=0
+    _zacrs_cached_prefix=""
     _zacrs_cached_lbase=""
+    _zacrs_chain_retry=0
     _zacrs_debounce_until=0.0
 }
 
@@ -958,7 +959,7 @@ _zacrs_line_pre_redraw() {
     # Rust-side filtering handles the current prefix, so the full candidate
     # list from cache is sufficient.  This eliminates per-keystroke compsys
     # overhead during rapid Backspace (same command context, shrinking prefix).
-    if [[ -n "$_zacrs_cached_candidates" ]] && (( ! _zacrs_chain_retry )) && (( ${#naive_prefix} >= _zacrs_cached_prefix_len )); then
+    if [[ -n "$_zacrs_cached_candidates" ]] && (( ! _zacrs_chain_retry )) && [[ "$naive_prefix" == "${_zacrs_cached_prefix}"* ]]; then
         candidates_str="$_zacrs_cached_candidates"
         from_gather=$_zacrs_cached_from_gather
         prefix="$naive_prefix"
@@ -1021,7 +1022,7 @@ _zacrs_line_pre_redraw() {
         if [[ -n "$candidates_str" ]]; then
             _zacrs_cached_candidates="$candidates_str"
             _zacrs_cached_from_gather=$from_gather
-            _zacrs_cached_prefix_len=$prefix_len
+            _zacrs_cached_prefix="$naive_prefix"
         fi
 
         # Fuzzy fallback: 候補なし → キャッシュから再利用
