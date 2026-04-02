@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775152108977,
+  "lastUpdate": 1775159467987,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -8651,6 +8651,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 755,
             "range": "± 6",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d7f110d6722dcdae6077bec4b8d97b717f1fd75",
+          "message": "feat(daemon): move candidate-set cache ownership from Zsh to Rust daemon (#83) (#87)\n\n* feat(daemon): move candidate-set cache ownership from Zsh to Rust daemon\n\nImplements issue #83: the daemon now owns the primary candidate cache,\nkeyed by `${PID}:${PWD_percent_encoded}:${lbase_percent_encoded}`.\n\n- Add `candidate_cache` (HashMap) + `candidate_cache_order` (Vec) to\n  `DaemonServer`; capped at 8 entries with insertion-order eviction.\n  Re-inserting an existing key moves it to the most-recent position.\n- `render`/`complete` handlers accept optional `context_key=` param.\n  Cache-only request (no TSV) returns `CACHE_MISS` on miss so Zsh\n  can collect candidates and retry with a full payload.\n- `read_prefix_and_candidates` replaces `read_prefix_and_tsv`,\n  returning `Option<String>` to distinguish cache-only from full\n  requests; includes a 1 MB payload guard.\n- Zsh `_zacrs_line_pre_redraw`: cache-first strategy — attempt a\n  daemon cache lookup before running compsys/gather; fall back to the\n  heavy path only on `CACHE_MISS`.  Removes four shell-side cache\n  variables (`_zacrs_cached_candidates`, `_zacrs_cached_lbase`,\n  `_zacrs_cached_prefix`, `_zacrs_cached_from_gather`) and the fuzzy\n  fallback that relied on them.\n- Add 6 integration tests covering hit, miss, isolation, eviction, and\n  cross-command cache sharing.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(daemon): address post-review issues from Codex pass\n\n- read_prefix_and_candidates: add size guard on the first TSV line\n  (previously only subsequent lines were bounded; an oversized first\n  line bypassed the 1 MB cap and was stored in full)\n- _zacrs_invoke_daemon: accept context_key arg ($8); conditionally omit\n  TSV for cache-only requests; handle CACHE_MISS response (return 2)\n- _zacrs_complete_popup: propagate context_key to _zacrs_invoke_daemon;\n  on CACHE_MISS re-run _zacrs_collect_candidates and retry the daemon\n  call with fresh TSV; remove stale _zacrs_popup_snapshot_candidates\n  guard that blocked cache-hit re-entry\n- Replace socket-level cache integration tests with focused unit tests\n  that cover read_prefix_and_candidates (cache-only, payload, oversize)\n  and the LRU re-insert eviction order invariant\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): restrict daemon candidate cache to argument position (lbase non-empty)\n\nAt command name position (lbase=\"\"), all first-word completions shared\nthe same context_key \"PID:PWD:\", causing cross-command cache poisoning:\n- Typing \"l\" → ls/loginctl/latex-git-log cached under \"PID:PWD:\"\n- Typing \"git\" → cache HIT with \"l*\" commands; fuzzy \"git\" matched\n  loginctl (lo-g-i-n-c-t-l) and latex-git-log → wrong candidates\n\nAt command name position, candidates depend on the current prefix word\nso a single shared cache key cannot safely serve multiple first words.\n\nFix: set context_key=\"\" when lbase is empty; guard the cache-first block\nin _zacrs_line_pre_redraw and context_key in _zacrs_complete_popup with\n`[[ -n \"$lbase\" ]]`. Command-level completion always takes the heavy path\n(compsys + gather), which is fast (PATH lookup) and avoids the collision.\nArgument-level completion (lbase non-empty) continues to use the daemon\ncache for fast per-keystroke popup updates.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(daemon): LRU read-refresh, EOF guard on TSV payload, EMPTY fallthrough\n\nThree correctness fixes from second Codex review pass:\n\n- get_cached_tsv: change to &mut self; call touch_cached_key on every\n  read so cache hits refresh recency, not just writes. Previously a\n  frequently-read key could still be evicted ahead of a less-used one.\n  touch_cached_key extracted as a helper reused by store_cached_tsv.\n\n- read_prefix_and_candidates: treat EOF-without-END as a protocol error\n  (ERROR missing END) instead of silently returning a partial TSV.\n  A half-written candidate payload would be stored in cache and corrupt\n  subsequent completions until the entry was evicted.\n\n- _zacrs_line_pre_redraw: EMPTY daemon response in the cache-first block\n  now falls through to the heavy path (compsys + gather) instead of\n  clearing the popup and returning. A stale cache entry that reports\n  EMPTY (e.g. after a directory change invalidates file candidates) no\n  longer suppresses completions that compsys would otherwise provide.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): restore single-candidate apply and fix context_key collision\n\nTwo regressions in the daemon candidate cache path:\n\n1. Single-candidate immediate completion was bypassed when the popup was\n   rendered from a daemon cache hit (_zacrs_popup_snapshot_candidates=\"\").\n   Tab press entered the interactive daemon session instead of calling\n   _zacrs_apply_single_candidate.  Fix: also call _zacrs_collect_candidates\n   when candidates_str is empty at Tab time (reuse_visible=1 but no local\n   candidates).  Also add single-candidate check in the CACHE_MISS retry\n   path for defence-in-depth.\n\n2. context_key encoded only spaces, leaving ':' in PWD or lbase able to\n   produce collisions (e.g. PWD=/tmp/a:b lbase='c ' and PWD=/tmp/a\n   lbase='b:c ' would share the same key).  Fix: encode '%' → %25 first,\n   then ':' → %3A, then ' ' → %20 in both _zacrs_complete_popup and\n   _zacrs_line_pre_redraw.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-03T04:43:12+09:00",
+          "tree_id": "0f6c8cec131af6c3e4755fcc8587c39fbd80436c",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/1d7f110d6722dcdae6077bec4b8d97b717f1fd75"
+        },
+        "date": 1775159467027,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7304,
+            "range": "± 198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74825,
+            "range": "± 4642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 905738,
+            "range": "± 30402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 192898,
+            "range": "± 1864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 101373,
+            "range": "± 395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75742,
+            "range": "± 919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20206,
+            "range": "± 629",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19021,
+            "range": "± 189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12134,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 311876,
+            "range": "± 887",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306344,
+            "range": "± 8762",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 269037,
+            "range": "± 1109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295098,
+            "range": "± 2268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26841,
+            "range": "± 511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 306240,
+            "range": "± 977",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3344903,
+            "range": "± 18002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 152545,
+            "range": "± 4927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 113996,
+            "range": "± 2735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 363536,
+            "range": "± 11050",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 741,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 64,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 136,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 859,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7621,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 756,
+            "range": "± 5",
             "unit": "ns/iter"
           }
         ]
