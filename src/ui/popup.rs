@@ -239,4 +239,22 @@ mod tests {
         let meta = popup.format_metadata(5, 42, 3, None, "foo bar");
         assert!(!meta.contains("common_prefix"));
     }
+
+    #[test]
+    fn format_metadata_control_char_in_common_prefix_omitted() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        for ctrl in ["\t", "\r", "\n", "\x1b", "\x7f"] {
+            let prefix = format!("foo{ctrl}bar");
+            let meta = popup.format_metadata(5, 42, 3, None, &prefix);
+            assert!(
+                !meta.contains("common_prefix"),
+                "control char {ctrl:?} should suppress common_prefix in: {meta}"
+            );
+        }
+    }
 }

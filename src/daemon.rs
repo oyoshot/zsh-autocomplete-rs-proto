@@ -1232,6 +1232,35 @@ mod tests {
     }
 
     #[test]
+    fn send_frame_control_char_in_common_prefix_omitted() {
+        use crate::app::App;
+        use crate::candidate::Candidate;
+        let server = test_server();
+        let app = App::new(
+            vec![Candidate {
+                text: "git-log".to_string(),
+                description: String::new(),
+                kind: "command".to_string(),
+            }],
+            "g".to_string(),
+            5,
+            80,
+        );
+        for ctrl in ["\t", "\r", "\n", "\x1b", "\x7f"] {
+            let prefix = format!("git{ctrl}log");
+            let mut output = Vec::new();
+            server
+                .send_frame(&mut output, &app, &[], true, Some(&prefix))
+                .unwrap();
+            let header = String::from_utf8_lossy(&output);
+            assert!(
+                !header.contains("common_prefix="),
+                "control char {ctrl:?} should suppress common_prefix in: {header}"
+            );
+        }
+    }
+
+    #[test]
     fn handle_complete_sends_initial_frame_for_new_popup() {
         let mut server = test_server();
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
