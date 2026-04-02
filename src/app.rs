@@ -933,12 +933,15 @@ mod tests {
 
     #[test]
     fn reset_filter_to_prefix_restores_and_refilters() {
-        // prefix "gi", candidates share "git-" → filter_text is "git-"
-        let mut app = make_test_app("gi", &["git-log", "git-status", "git-diff"]);
-        assert_eq!(app.filter_text, "git-");
-        app.reset_filter_to_prefix();
+        // prefix "g"; "grep" prevents common prefix from extending past "g".
+        // type_char('i') narrows to 2 matches ("git-log", "gist").
+        // reset_filter_to_prefix() must restore filter_text to "g" and re-expand to 3 matches.
+        let mut app = make_test_app("g", &["git-log", "gist", "grep"]);
+        app.type_char('i');
         assert_eq!(app.filter_text, "gi");
-        // all three candidates still match "gi"
-        assert_eq!(app.filtered_indices.len(), 3);
+        assert_eq!(app.filtered_indices.len(), 2); // git-log, gist
+        app.reset_filter_to_prefix();
+        assert_eq!(app.filter_text, "g");
+        assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
     }
 }

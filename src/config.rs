@@ -439,9 +439,13 @@ mod tests {
 
     #[test]
     fn auto_insert_unambiguous_malformed_toml_falls_back_to_default() {
-        // toml::from_str fails → unwrap_or_default → auto_insert_unambiguous = true
-        let result = toml::from_str::<ConfigFile>("[completion]\nauto_insert_unambiguous = 42");
-        assert!(result.is_err(), "expected parse error for integer value");
+        // toml::from_str fails → unwrap_or_default() → auto_insert_unambiguous = true
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = 42").unwrap_or_default();
+        assert!(
+            file.completion.auto_insert_unambiguous,
+            "fallback default must be true"
+        );
     }
 
     #[test]
