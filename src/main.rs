@@ -102,15 +102,14 @@ fn run_render(
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
-    let common_prefix = auto_insert_unambiguous
-        .then(|| app.unambiguous_prefix())
-        .flatten();
+    // Render metadata is for popup position only; auto-insert is handled
+    // exclusively via FRAME headers in the complete (interactive) path.
     let meta = popup.format_metadata(
         app.cursor_row,
         reuse_token,
         app.filtered_indices.len(),
         app.selected_original_idx(),
-        common_prefix,
+        None,
     );
     println!("{}", meta);
 

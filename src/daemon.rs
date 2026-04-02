@@ -604,11 +604,6 @@ impl DaemonServer {
         match result {
             Ok((mut tty_bytes, popup)) => {
                 let reuse_token = compute_reuse_token(&app.prefix, tsv_str, &app, &popup);
-                let common_prefix: Option<String> = self
-                    .config
-                    .auto_insert_unambiguous
-                    .then(|| app.unambiguous_prefix().map(str::to_string))
-                    .flatten();
                 self.fuzzy = Some(app.take_fuzzy());
                 if !scroll_bytes.is_empty() {
                     let mut combined = scroll_bytes;
@@ -623,12 +618,14 @@ impl DaemonServer {
                     tty_bytes = tty_bytes.len(),
                     "render complete"
                 );
+                // Render metadata is for popup position only; auto-insert is handled
+                // exclusively via FRAME headers in the complete (interactive) path.
                 let metadata = popup.format_metadata(
                     cursor_row_final,
                     reuse_token,
                     filtered_count,
                     selected_original_idx,
-                    common_prefix.as_deref(),
+                    None,
                 );
                 Response::Success {
                     tty_bytes,
