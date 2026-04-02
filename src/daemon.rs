@@ -1764,4 +1764,56 @@ mod tests {
         drop(writer);
         handle.join().unwrap();
     }
+
+    // --- Quoted-prefix regression tests (issue #15) ---
+    //
+    // These tests verify that the Rust daemon correctly handles prefixes that
+    // include an opening quote character (IPREFIX in zsh terms).  The shell
+    // plugin stores `IPREFIX+PREFIX` as the prefix it sends to the daemon, and
+    // candidates are captured with the same IPREFIX prepended by _full_prefix.
+    // A prior bug caused prefix_len=0 on the shell side, but these tests pin
+    // the protocol contract so a regression would be visible from both ends.
+
+    #[test]
+    fn handle_complete_double_quoted_prefix_confirms_candidate() {
+        // Simulates `"s<Tab>`: prefix = `"s`, candidate text = `"src/`
+        // (the shell plugin captures IPREFIX=`"` into _full_prefix, so the
+        // candidate text starts with the opening quote).
+        assert_immediate_confirm(
+            "\"s",
+            "\"src/\t\tdirectory\n",
+            "DONE 0 \"src/",
+        );
+    }
+
+    #[test]
+    fn handle_complete_single_quoted_prefix_confirms_candidate() {
+        // Simulates `'s<Tab>`: single-quote variant of the same quoting case.
+        assert_immediate_confirm(
+            "'s",
+            "'src/\t\tdirectory\n",
+            "DONE 0 'src/",
+        );
+    }
+
+    #[test]
+    fn handle_complete_assignment_prefix_confirms_candidate() {
+        // Simulates `FOO=ba<Tab>`: IPREFIX=`FOO=`, PREFIX=`ba`.
+        // Ensures IPREFIX-prefixed candidates are returned without duplication.
+        assert_immediate_confirm(
+            "FOO=ba",
+            "FOO=bar\t\t\n",
+            "DONE 0 FOO=bar",
+        );
+    }
+
+    #[test]
+    fn handle_complete_option_equals_prefix_confirms_candidate() {
+        // Simulates `--opt=va<Tab>`: IPREFIX=`--opt=`, PREFIX=`va`.
+        assert_immediate_confirm(
+            "--opt=va",
+            "--opt=value\t\t\n",
+            "DONE 0 --opt=value",
+        );
+    }
 }
