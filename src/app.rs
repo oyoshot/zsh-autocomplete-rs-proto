@@ -292,6 +292,18 @@ impl App {
     }
 }
 
+impl App {
+    /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
+    /// `filter_text` is initialized to the common prefix of all candidates at construction time.
+    pub fn unambiguous_prefix(&self) -> Option<&str> {
+        if self.filter_text.len() > self.prefix.len() {
+            Some(&self.filter_text)
+        } else {
+            None
+        }
+    }
+}
+
 pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
     if candidates.is_empty() {
         return prefix.to_string();

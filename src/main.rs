@@ -43,6 +43,7 @@ fn run_render(
     cursor_col: u16,
     selected: Option<usize>,
     theme: &config::Theme,
+    auto_insert_unambiguous: bool,
 ) -> io::Result<i32> {
     // Read raw stdin before trying daemon (we need it for both paths)
     let raw_stdin: Vec<u8> = {
@@ -97,11 +98,8 @@ fn run_render(
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
-    let config = crate::config::Config::load();
-    let common_prefix = if config.auto_insert_unambiguous
-        && app.filter_text.len() > app.prefix.len()
-    {
-        app.filter_text.clone()
+    let common_prefix = if auto_insert_unambiguous {
+        app.unambiguous_prefix().unwrap_or("").to_string()
     } else {
         String::new()
     };
@@ -166,8 +164,10 @@ fn main() {
             cursor_col,
             selected,
         } => {
-            let theme = config::Config::load().theme();
-            match run_render(prefix, cursor_row, cursor_col, selected, &theme) {
+            let cfg = config::Config::load();
+            let auto_insert_unambiguous = cfg.auto_insert_unambiguous;
+            let theme = cfg.theme();
+            match run_render(prefix, cursor_row, cursor_col, selected, &theme, auto_insert_unambiguous) {
                 Ok(code) => process::exit(code),
                 Err(e) => {
                     eprintln!("error: {}", e);

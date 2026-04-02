@@ -521,15 +521,15 @@ impl DaemonServer {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
         let total_len = extra_prefix.len() + tty_bytes.len();
-        let mut frame_header = format!(
+        write!(
+            writer,
             "FRAME popup_row={} popup_height={} cursor_row={}",
             popup.row, popup.height, app.cursor_row
-        );
+        )?;
         if let Some(cp) = common_prefix {
-            frame_header.push_str(&format!(" common_prefix={}", cp));
+            write!(writer, " common_prefix={}", cp)?;
         }
-        frame_header.push_str(&format!(" {}", total_len));
-        writeln!(writer, "{}", frame_header)?;
+        writeln!(writer, " {}", total_len)?;
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
         }
@@ -598,10 +598,8 @@ impl DaemonServer {
         match result {
             Ok((mut tty_bytes, popup)) => {
                 let reuse_token = compute_reuse_token(&app.prefix, tsv_str, &app, &popup);
-                let common_prefix = if self.config.auto_insert_unambiguous
-                    && app.filter_text.len() > app.prefix.len()
-                {
-                    app.filter_text.clone()
+                let common_prefix = if self.config.auto_insert_unambiguous {
+                    app.unambiguous_prefix().unwrap_or("").to_string()
                 } else {
                     String::new()
                 };
@@ -716,13 +714,11 @@ impl DaemonServer {
             None => return,
         };
 
-        let initial_common_prefix = if self.config.auto_insert_unambiguous
-            && app.filter_text.len() > app.prefix.len()
-        {
-            Some(app.filter_text.clone())
-        } else {
-            None
-        };
+        let initial_common_prefix = self
+            .config
+            .auto_insert_unambiguous
+            .then(|| app.unambiguous_prefix().map(str::to_string))
+            .flatten();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         if self

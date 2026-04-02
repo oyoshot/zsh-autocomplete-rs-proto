@@ -484,10 +484,8 @@ _zacrs_popup_session_loop() {
         _zacrs_popup_visible=1
         _zacrs_popup_row=$_f_popup_row
         _zacrs_popup_height=$_f_popup_height
-        # Auto-insert unambiguous prefix: update LBUFFER when common prefix extends prefix
         if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt ${#prefix} ]]; then
-            local _aiu_base="${LBUFFER%${prefix}}"
-            LBUFFER="${_aiu_base}${_f_common_prefix}"
+            LBUFFER="${LBUFFER:0:$(( ${#LBUFFER} - ${#prefix} ))}${_f_common_prefix}"
             CURSOR=$#LBUFFER
         fi
     fi
