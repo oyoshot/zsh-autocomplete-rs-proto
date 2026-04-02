@@ -82,6 +82,11 @@ fn run_render(
         return Ok(1);
     }
 
+    if !auto_insert_unambiguous && app.filter_text != app.prefix {
+        app.filter_text = app.prefix.clone();
+        app.update_filter();
+    }
+
     let mut tty = tty::open_tty_write()?;
     ui::render::ensure_space(&mut tty, &mut app)?;
 

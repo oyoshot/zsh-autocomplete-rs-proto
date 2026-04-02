@@ -579,6 +579,11 @@ impl DaemonServer {
             return Response::Empty;
         }
 
+        if !self.config.auto_insert_unambiguous && app.filter_text != app.prefix {
+            app.filter_text = app.prefix.clone();
+            app.update_filter();
+        }
+
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
         if app.max_visible == 0 {
@@ -1193,6 +1198,34 @@ mod tests {
             crate::protocol::Response::Success { metadata, .. } => {
                 let metadata = metadata.unwrap();
                 assert!(metadata.contains("reuse_token="));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_render_no_common_prefix_when_auto_insert_disabled() {
+        let mut server = test_server();
+        server.config.auto_insert_unambiguous = false;
+        let response = server.handle_render(
+            RenderParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+            },
+            b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+        );
+
+        match response {
+            crate::protocol::Response::Success { metadata, .. } => {
+                let metadata = metadata.unwrap();
+                assert!(
+                    !metadata.contains("common_prefix="),
+                    "common_prefix must be absent when auto_insert_unambiguous=false: {metadata}"
+                );
             }
             other => panic!("unexpected response: {other:?}"),
         }
