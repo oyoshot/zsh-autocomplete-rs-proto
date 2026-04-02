@@ -672,6 +672,13 @@ impl DaemonServer {
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
 
+        // When auto_insert_unambiguous is disabled, keep filter_text at the typed
+        // prefix so that cancel/passthrough paths never return an extended value.
+        if !self.config.auto_insert_unambiguous && app.filter_text != app.prefix {
+            app.filter_text = app.prefix.clone();
+            app.update_filter();
+        }
+
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = writeln!(writer, "DONE 1 ");
@@ -1610,5 +1617,49 @@ mod tests {
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
         );
+    }
+
+    #[test]
+    fn handle_complete_cancel_returns_typed_prefix_when_auto_insert_disabled() {
+        // With auto_insert_unambiguous=false, cancel should echo back the typed
+        // prefix ("gi"), not the extended common prefix ("git-").
+        let (server_stream, client_stream) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = false;
+            let mut reader = BufReader::new(&server_stream);
+            let mut writer = std::io::BufWriter::new(&server_stream);
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "gi".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            );
+        });
+
+        let mut writer = client_stream.try_clone().unwrap();
+        let mut reader = BufReader::new(client_stream);
+
+        let _ = read_frame(&mut reader);
+        // Send Escape (cancel)
+        send_key(&mut writer, b"\x1b");
+
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
+        // With auto_insert enabled the extended "git-" would have been returned.
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
+
+        drop(reader);
+        drop(writer);
+        handle.join().unwrap();
     }
 }
