@@ -11,6 +11,7 @@ fn config_path() -> Option<PathBuf> {
 
 pub struct Config {
     pub max_visible: usize,
+    pub auto_insert_unambiguous: bool,
     pub keybindings: KeybindingsRaw,
     theme_raw: ThemeRaw,
 }
@@ -19,8 +20,27 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             max_visible: 10,
+            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw::default(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct CompletionRaw {
+    #[serde(default = "default_true")]
+    auto_insert_unambiguous: bool,
+}
+
+impl Default for CompletionRaw {
+    fn default() -> Self {
+        CompletionRaw {
+            auto_insert_unambiguous: true,
         }
     }
 }
@@ -31,6 +51,8 @@ struct ConfigFile {
     keybindings: KeybindingsRaw,
     #[serde(default)]
     theme: ThemeRaw,
+    #[serde(default)]
+    completion: CompletionRaw,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -161,6 +183,7 @@ impl Config {
         let file: ConfigFile = toml::from_str(&content).unwrap_or_default();
         Config {
             max_visible: 10,
+            auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             keybindings: file.keybindings,
             theme_raw: file.theme,
         }
@@ -279,6 +302,7 @@ mod tests {
     fn key_bindings_overrides() {
         let config = Config {
             max_visible: 10,
+            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw {
                 tab: Some("confirm".to_string()),
                 shift_tab: None,
@@ -368,6 +392,7 @@ mod tests {
     fn theme_overrides() {
         let config = Config {
             max_visible: 10,
+            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("blue".to_string()),
@@ -391,6 +416,7 @@ mod tests {
     fn theme_invalid_falls_back() {
         let config = Config {
             max_visible: 10,
+            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("invalid".to_string()),

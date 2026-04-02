@@ -97,11 +97,20 @@ fn run_render(
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
     let reuse_token = compute_reuse_token(&app.prefix, candidates_tsv, &app, &popup);
+    let config = crate::config::Config::load();
+    let common_prefix = if config.auto_insert_unambiguous
+        && app.filter_text.len() > app.prefix.len()
+    {
+        app.filter_text.clone()
+    } else {
+        String::new()
+    };
     let meta = popup.format_metadata(
         app.cursor_row,
         reuse_token,
         app.filtered_indices.len(),
         app.selected_original_idx(),
+        &common_prefix,
     );
     println!("{}", meta);
 

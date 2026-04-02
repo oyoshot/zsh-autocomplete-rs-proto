@@ -19,6 +19,7 @@ impl Popup {
         reuse_token: u64,
         filtered_count: usize,
         selected_original_idx: Option<usize>,
+        common_prefix: &str,
     ) -> String {
         let mut meta = format!(
             "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
@@ -26,6 +27,9 @@ impl Popup {
         );
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
+        }
+        if !common_prefix.is_empty() {
+            meta.push_str(&format!(" common_prefix={}", common_prefix));
         }
         meta
     }
@@ -172,7 +176,7 @@ mod tests {
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 12345, 10, None);
+        let meta = popup.format_metadata(5, 12345, 10, None, "");
         assert_eq!(
             meta,
             "popup_row=6 popup_height=5 cursor_row=5 reuse_token=12345 filtered_count=10"
@@ -187,10 +191,37 @@ mod tests {
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 99, 3, Some(2));
+        let meta = popup.format_metadata(5, 99, 3, Some(2), "");
         assert_eq!(
             meta,
             "popup_row=6 popup_height=5 cursor_row=5 reuse_token=99 filtered_count=3 selected_original_idx=2"
         );
+    }
+
+    #[test]
+    fn format_metadata_with_common_prefix() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 42, 3, None, "git-");
+        assert_eq!(
+            meta,
+            "popup_row=6 popup_height=5 cursor_row=5 reuse_token=42 filtered_count=3 common_prefix=git-"
+        );
+    }
+
+    #[test]
+    fn format_metadata_empty_common_prefix_omitted() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        let meta = popup.format_metadata(5, 42, 3, None, "");
+        assert!(!meta.contains("common_prefix"));
     }
 }

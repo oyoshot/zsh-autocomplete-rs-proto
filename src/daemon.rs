@@ -513,6 +513,7 @@ impl DaemonServer {
         app: &App,
         extra_prefix: &[u8],
         popup_only: bool,
+        common_prefix: Option<&str>,
     ) -> io::Result<()> {
         let (tty_bytes, popup) = if popup_only {
             ui::render::render_popup_to_bytes(app, &self.theme)?
@@ -520,11 +521,15 @@ impl DaemonServer {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
         let total_len = extra_prefix.len() + tty_bytes.len();
-        writeln!(
-            writer,
-            "FRAME popup_row={} popup_height={} cursor_row={} {}",
-            popup.row, popup.height, app.cursor_row, total_len
-        )?;
+        let mut frame_header = format!(
+            "FRAME popup_row={} popup_height={} cursor_row={}",
+            popup.row, popup.height, app.cursor_row
+        );
+        if let Some(cp) = common_prefix {
+            frame_header.push_str(&format!(" common_prefix={}", cp));
+        }
+        frame_header.push_str(&format!(" {}", total_len));
+        writeln!(writer, "{}", frame_header)?;
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
         }
@@ -593,6 +598,13 @@ impl DaemonServer {
         match result {
             Ok((mut tty_bytes, popup)) => {
                 let reuse_token = compute_reuse_token(&app.prefix, tsv_str, &app, &popup);
+                let common_prefix = if self.config.auto_insert_unambiguous
+                    && app.filter_text.len() > app.prefix.len()
+                {
+                    app.filter_text.clone()
+                } else {
+                    String::new()
+                };
                 self.fuzzy = Some(app.take_fuzzy());
                 if !scroll_bytes.is_empty() {
                     let mut combined = scroll_bytes;
@@ -612,6 +624,7 @@ impl DaemonServer {
                     reuse_token,
                     filtered_count,
                     selected_original_idx,
+                    &common_prefix,
                 );
                 Response::Success {
                     tty_bytes,
@@ -703,9 +716,23 @@ impl DaemonServer {
             None => return,
         };
 
+        let initial_common_prefix = if self.config.auto_insert_unambiguous
+            && app.filter_text.len() > app.prefix.len()
+        {
+            Some(app.filter_text.clone())
+        } else {
+            None
+        };
+
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         if self
-            .send_frame(writer, &app, &scroll_bytes, reuse_fast_path)
+            .send_frame(
+                writer,
+                &app,
+                &scroll_bytes,
+                reuse_fast_path,
+                initial_common_prefix.as_deref(),
+            )
             .is_err()
         {
             self.fuzzy = Some(app.take_fuzzy());
@@ -749,7 +776,7 @@ impl DaemonServer {
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
                         apply_navigation(&mut app, action);
-                        if self.send_frame(writer, &app, &[], false).is_err() {
+                        if self.send_frame(writer, &app, &[], false, None).is_err() {
                             break;
                         }
                     }
@@ -761,7 +788,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false, None).is_err() {
                             break;
                         }
                     }
@@ -779,7 +806,7 @@ impl DaemonServer {
                             let _ = writer.flush();
                             break;
                         }
-                        if self.send_frame(writer, &app, &clear_bytes, false).is_err() {
+                        if self.send_frame(writer, &app, &clear_bytes, false, None).is_err() {
                             break;
                         }
                     }

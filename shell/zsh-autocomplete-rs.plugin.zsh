@@ -397,18 +397,19 @@ _zacrs_apply_result() {
 
 # === Daemon-based popup session (Rust owns input after Tab) ===
 
-# Parse FRAME header into _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len
+# Parse FRAME header into _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len, _f_common_prefix
 _zacrs_complete_parse_frame() {
     local header="$1"
-    _f_popup_row=0 _f_popup_height=0 _f_cursor_row=0 _f_tty_len=0
+    _f_popup_row=0 _f_popup_height=0 _f_cursor_row=0 _f_tty_len=0 _f_common_prefix=""
     local token
     local last_token=""
     for token in ${(s: :)header}; do
         local key="${token%%=*}" val="${token#*=}"
         case "$key" in
-            popup_row)    _f_popup_row=$val ;;
-            popup_height) _f_popup_height=$val ;;
-            cursor_row)   _f_cursor_row=$val ;;
+            popup_row)      _f_popup_row=$val ;;
+            popup_height)   _f_popup_height=$val ;;
+            cursor_row)     _f_cursor_row=$val ;;
+            common_prefix)  _f_common_prefix=$val ;;
         esac
         last_token="$token"
     done
@@ -462,7 +463,7 @@ _zacrs_popup_session_loop() {
     exec {tty_rfd}</dev/tty
     exec {tty_wfd}>/dev/tty
 
-    local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len
+    local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len _f_common_prefix
     if (( have_initial_frame )); then
         _zacrs_complete_parse_frame "$header"
         # Clear stale rows from previous popup that the new frame won't cover
@@ -483,6 +484,12 @@ _zacrs_popup_session_loop() {
         _zacrs_popup_visible=1
         _zacrs_popup_row=$_f_popup_row
         _zacrs_popup_height=$_f_popup_height
+        # Auto-insert unambiguous prefix: update LBUFFER when common prefix extends prefix
+        if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt ${#prefix} ]]; then
+            local _aiu_base="${LBUFFER%${prefix}}"
+            LBUFFER="${_aiu_base}${_f_common_prefix}"
+            CURSOR=$#LBUFFER
+        fi
     fi
 
     # Enter raw mode
