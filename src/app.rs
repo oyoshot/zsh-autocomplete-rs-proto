@@ -300,6 +300,15 @@ impl App {
             None
         }
     }
+
+    /// Resets `filter_text` to the original typed prefix and re-runs filtering.
+    /// No-op if `filter_text` already equals `prefix`.
+    pub fn reset_filter_to_prefix(&mut self) {
+        if self.filter_text != self.prefix {
+            self.filter_text = self.prefix.clone();
+            self.update_filter();
+        }
+    }
 }
 
 pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {

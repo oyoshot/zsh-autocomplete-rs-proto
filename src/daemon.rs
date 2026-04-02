@@ -579,9 +579,8 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        if !self.config.auto_insert_unambiguous && app.filter_text != app.prefix {
-            app.filter_text = app.prefix.clone();
-            app.update_filter();
+        if !self.config.auto_insert_unambiguous {
+            app.reset_filter_to_prefix();
         }
 
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
@@ -679,9 +678,8 @@ impl DaemonServer {
 
         // When auto_insert_unambiguous is disabled, keep filter_text at the typed
         // prefix so that cancel/passthrough paths never return an extended value.
-        if !self.config.auto_insert_unambiguous && app.filter_text != app.prefix {
-            app.filter_text = app.prefix.clone();
-            app.update_filter();
+        if !self.config.auto_insert_unambiguous {
+            app.reset_filter_to_prefix();
         }
 
         if app.filtered_indices.is_empty() {
