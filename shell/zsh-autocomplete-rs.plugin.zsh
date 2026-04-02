@@ -487,6 +487,9 @@ _zacrs_popup_session_loop() {
         if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt ${#prefix} ]]; then
             LBUFFER="${LBUFFER:0:$(( ${#LBUFFER} - ${#prefix} ))}${_f_common_prefix}"
             CURSOR=$#LBUFFER
+            # Update prefix_len in caller scope so _zacrs_apply_result strips the
+            # right amount when the user confirms a candidate.
+            prefix_len=${#_f_common_prefix}
         fi
     fi
 
