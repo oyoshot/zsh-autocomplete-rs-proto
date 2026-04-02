@@ -923,7 +923,8 @@ _zacrs_line_pre_redraw() {
     _zacrs_prev_lbuffer="$LBUFFER"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
-    [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_clear_popup; return }
+    # キャッシュもリセット: "cargo" → 全BS → "git" でcargoキャッシュが再利用されるバグを防ぐ
+    [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }
 
     # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
     local naive_prefix="${LBUFFER##* }"
