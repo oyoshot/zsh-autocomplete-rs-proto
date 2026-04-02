@@ -25,7 +25,7 @@ impl Popup {
         reuse_token: u64,
         filtered_count: usize,
         selected_original_idx: Option<usize>,
-        common_prefix: &str,
+        common_prefix: Option<&str>,
     ) -> String {
         let mut meta = format!(
             "popup_row={} popup_height={} cursor_row={} reuse_token={} filtered_count={}",
@@ -34,8 +34,10 @@ impl Popup {
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
         }
-        if is_safe_prefix(common_prefix) {
-            meta.push_str(&format!(" common_prefix={}", common_prefix));
+        if let Some(cp) = common_prefix {
+            if is_safe_prefix(cp) {
+                meta.push_str(&format!(" common_prefix={}", cp));
+            }
         }
         meta
     }
@@ -182,7 +184,7 @@ mod tests {
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 12345, 10, None, "");
+        let meta = popup.format_metadata(5, 12345, 10, None, None);
         assert_eq!(
             meta,
             "popup_row=6 popup_height=5 cursor_row=5 reuse_token=12345 filtered_count=10"
@@ -197,7 +199,7 @@ mod tests {
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 99, 3, Some(2), "");
+        let meta = popup.format_metadata(5, 99, 3, Some(2), None);
         assert_eq!(
             meta,
             "popup_row=6 popup_height=5 cursor_row=5 reuse_token=99 filtered_count=3 selected_original_idx=2"
@@ -212,7 +214,7 @@ mod tests {
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 42, 3, None, "git-");
+        let meta = popup.format_metadata(5, 42, 3, None, Some("git-"));
         assert_eq!(
             meta,
             "popup_row=6 popup_height=5 cursor_row=5 reuse_token=42 filtered_count=3 common_prefix=git-"
@@ -220,14 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn format_metadata_empty_common_prefix_omitted() {
+    fn format_metadata_none_common_prefix_omitted() {
         let popup = Popup {
             row: 6,
             col: 0,
             width: 30,
             height: 5,
         };
-        let meta = popup.format_metadata(5, 42, 3, None, "");
+        let meta = popup.format_metadata(5, 42, 3, None, None);
         assert!(!meta.contains("common_prefix"));
     }
 
@@ -240,7 +242,7 @@ mod tests {
             height: 5,
         };
         // Space-containing prefix would break the space-delimited header protocol
-        let meta = popup.format_metadata(5, 42, 3, None, "foo bar");
+        let meta = popup.format_metadata(5, 42, 3, None, Some("foo bar"));
         assert!(!meta.contains("common_prefix"));
     }
 
@@ -254,7 +256,7 @@ mod tests {
         };
         for ctrl in ["\t", "\r", "\n", "\x1b", "\x7f"] {
             let prefix = format!("foo{ctrl}bar");
-            let meta = popup.format_metadata(5, 42, 3, None, &prefix);
+            let meta = popup.format_metadata(5, 42, 3, None, Some(prefix.as_str()));
             assert!(
                 !meta.contains("common_prefix"),
                 "control char {ctrl:?} should suppress common_prefix in: {meta}"

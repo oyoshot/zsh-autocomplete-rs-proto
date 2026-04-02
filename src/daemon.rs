@@ -604,11 +604,11 @@ impl DaemonServer {
         match result {
             Ok((mut tty_bytes, popup)) => {
                 let reuse_token = compute_reuse_token(&app.prefix, tsv_str, &app, &popup);
-                let common_prefix = if self.config.auto_insert_unambiguous {
-                    app.unambiguous_prefix().unwrap_or("").to_string()
-                } else {
-                    String::new()
-                };
+                let common_prefix: Option<String> = self
+                    .config
+                    .auto_insert_unambiguous
+                    .then(|| app.unambiguous_prefix().map(str::to_string))
+                    .flatten();
                 self.fuzzy = Some(app.take_fuzzy());
                 if !scroll_bytes.is_empty() {
                     let mut combined = scroll_bytes;
@@ -628,7 +628,7 @@ impl DaemonServer {
                     reuse_token,
                     filtered_count,
                     selected_original_idx,
-                    &common_prefix,
+                    common_prefix.as_deref(),
                 );
                 Response::Success {
                     tty_bytes,

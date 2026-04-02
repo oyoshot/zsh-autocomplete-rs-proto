@@ -302,15 +302,13 @@ mod tests {
     #[test]
     fn key_bindings_overrides() {
         let config = Config {
-            max_visible: 10,
-            auto_insert_unambiguous: true,
             keybindings: KeybindingsRaw {
                 tab: Some("confirm".to_string()),
                 shift_tab: None,
                 enter: None,
                 space: Some("cancel".to_string()),
             },
-            theme_raw: ThemeRaw::default(),
+            ..Config::default()
         };
         let bindings = config.key_bindings();
         assert_eq!(bindings.tab, Action::Confirm);
@@ -392,9 +390,6 @@ mod tests {
     #[test]
     fn theme_overrides() {
         let config = Config {
-            max_visible: 10,
-            auto_insert_unambiguous: true,
-            keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("blue".to_string()),
                 selected_fg: Some("black".to_string()),
@@ -403,6 +398,7 @@ mod tests {
                 filter: Some("green".to_string()),
                 candidate: Some("white".to_string()),
             },
+            ..Config::default()
         };
         let theme = config.theme();
         assert_eq!(theme.border, Some(Color::Blue));
@@ -416,14 +412,12 @@ mod tests {
     #[test]
     fn theme_invalid_falls_back() {
         let config = Config {
-            max_visible: 10,
-            auto_insert_unambiguous: true,
-            keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw {
                 border: Some("invalid".to_string()),
                 description: Some("also-invalid".to_string()),
                 ..ThemeRaw::default()
             },
+            ..Config::default()
         };
         let theme = config.theme();
         assert_eq!(theme.border, None);
