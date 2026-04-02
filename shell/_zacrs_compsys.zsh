@@ -132,8 +132,10 @@ _zacrs_compsys_func() {
         # text, producing doubled output like `"ssrc`.
         # _zacrs_ctx_prefix (IPREFIX+PREFIX) is exactly what this implementation
         # uses for candidate reconstruction and LBUFFER trimming, so its length
-        # is the correct character count to strip — even in quoted contexts where
-        # compset -q or similar transforms may affect QIPREFIX separately.
+        # is the correct character count to strip.
+        # Caveat: when compset -q further splits the prefix, zsh stores the
+        # additional dequoted text in QIPREFIX; this implementation does not
+        # model QIPREFIX, so deeply-nested quoting paths are untested.
         _zacrs_ctx_prefix_len=${#_zacrs_ctx_prefix}
 
         _zacrs_dbg "context: PREFIX='$PREFIX' IPREFIX='$IPREFIX' ctx_prefix='$_zacrs_ctx_prefix' raw_len=$_zacrs_ctx_prefix_len"
