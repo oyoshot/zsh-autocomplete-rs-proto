@@ -409,6 +409,41 @@ mod tests {
         assert_eq!(theme.candidate, Some(Color::White));
     }
 
+    // --- auto_insert_unambiguous TOML parsing ---
+
+    #[test]
+    fn auto_insert_unambiguous_defaults_true_without_completion_section() {
+        let file: ConfigFile = toml::from_str("").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_defaults_true_when_key_absent() {
+        let file: ConfigFile = toml::from_str("[completion]").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_false_parsed_from_toml() {
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = false").unwrap();
+        assert!(!file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_true_explicit_parsed_from_toml() {
+        let file: ConfigFile =
+            toml::from_str("[completion]\nauto_insert_unambiguous = true").unwrap();
+        assert!(file.completion.auto_insert_unambiguous);
+    }
+
+    #[test]
+    fn auto_insert_unambiguous_malformed_toml_falls_back_to_default() {
+        // toml::from_str fails → unwrap_or_default → auto_insert_unambiguous = true
+        let result = toml::from_str::<ConfigFile>("[completion]\nauto_insert_unambiguous = 42");
+        assert!(result.is_err(), "expected parse error for integer value");
+    }
+
     #[test]
     fn theme_invalid_falls_back() {
         let config = Config {
