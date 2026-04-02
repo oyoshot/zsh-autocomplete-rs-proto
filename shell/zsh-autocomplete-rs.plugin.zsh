@@ -21,9 +21,6 @@ typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
 typeset -gi _zacrs_last_render_cursor_row=0
 typeset -gi _zacrs_last_render_cursor_col=0
-typeset -g _zacrs_cached_candidates=""
-typeset -g _zacrs_cached_lbase=""
-typeset -g _zacrs_cached_prefix=""
 typeset -gi _zacrs_chain_retry=0
 typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
@@ -39,7 +36,6 @@ typeset -g _zacrs_popup_snapshot_reuse_token=""
 typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
-typeset -gi _zacrs_cached_from_gather=0
 typeset -gF _zacrs_debounce_until=0.0
 
 # Render header parse results (set by _zacrs_parse_render_header)
@@ -62,10 +58,6 @@ _zacrs_reset_popup_snapshot() {
 }
 
 _zacrs_reset_cache() {
-    _zacrs_cached_candidates=""
-    _zacrs_cached_from_gather=0
-    _zacrs_cached_prefix=""
-    _zacrs_cached_lbase=""
     _zacrs_chain_retry=0
     _zacrs_debounce_until=0.0
 }
@@ -170,12 +162,15 @@ _zacrs_parse_render_header() {
 }
 
 # Connect to daemon, send a render request, and parse the response header.
-# Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional)
-# On OK  (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
-# On EMPTY (return 1): fd already closed.
+# Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional)
+# When $4 (candidates) is empty and $6 (context_key) is non-empty the request is
+# a cache-only attempt: no TSV is sent and the daemon resolves from its own cache.
+# On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
+# On EMPTY     (return 1): fd already closed.
+# On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
 # On ERROR/connect failure (return 2): fd already closed, daemon marked unavailable.
 _zacrs_daemon_send_render() {
-    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="$5"
+    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}"
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
         _zacrs_mark_daemon_unavailable
@@ -183,10 +178,13 @@ _zacrs_daemon_send_render() {
     fi
     fd=$REPLY
     local render_cmd="render $_cr $_cc $COLUMNS $LINES"
+    [[ -n "$_ctx_key" ]] && render_cmd+=" context_key=$_ctx_key"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
     print -u $fd -- "$render_cmd"
     printf '%s\n' "$_pfx" >&$fd
-    printf '%s\n' "$_cands" >&$fd
+    if [[ -n "$_cands" ]]; then
+        printf '%s\n' "$_cands" >&$fd
+    fi
     print -u $fd "END"
     local header
     IFS= read -r -u $fd header
@@ -197,6 +195,9 @@ _zacrs_daemon_send_render() {
     elif [[ "$header" == EMPTY ]]; then
         exec {fd}<&-
         return 1
+    elif [[ "$header" == CACHE_MISS ]]; then
+        exec {fd}<&-
+        return 3
     else
         exec {fd}<&-
         _zacrs_mark_daemon_unavailable
@@ -250,7 +251,7 @@ _zacrs_daemon_draw_atomic() {
 # === Non-blocking render (auto-trigger) ===
 
 _zacrs_render() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}" selected="${5:-}"
+    local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}" selected="${5:-}" context_key="${6:-}"
     local cursor_row=0 cursor_col=0
     # When the popup is already on screen and the terminal hasn't resized,
     # reuse the previous cursor position instead of querying the terminal.
@@ -274,7 +275,7 @@ _zacrs_render() {
     # Try zsocket daemon path (no subprocess spawn)
     if (( _zacrs_daemon_available )); then
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
-        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$prefix" "$candidates_str" "$selected"
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$prefix" "$candidates_str" "$selected" "$context_key"
         local _send_rc=$?
         if (( _send_rc == 0 )); then
             local fd=$_zacrs_send_render_fd
@@ -297,6 +298,8 @@ _zacrs_render() {
             return
         fi
         # _send_rc == 2: daemon unavailable, fall through to subprocess
+        # _send_rc == 3: CACHE_MISS — should not happen here (candidates were provided),
+        #                fall through to subprocess as a safety measure
     fi
 
     # Fallback: subprocess (clear stale popup before spawning)
@@ -769,7 +772,7 @@ _zacrs_encode_hex_input() {
 
 # === Shared completion helpers ===
 
-# Collect candidates: compsys → gather → fuzzy cache fallback.
+# Collect candidates: compsys → gather.
 # Caller must declare: local prefix prefix_len candidates_str
 # (zsh dynamic scoping lets us write to these from here)
 _zacrs_collect_candidates() {
@@ -795,18 +798,6 @@ _zacrs_collect_candidates() {
         if [[ -n "$candidates_str" ]]; then
             prefix="${LBUFFER##* }"
             prefix_len=${#prefix}
-        fi
-    fi
-    # Fuzzy fallback from auto-trigger cache
-    if [[ -z "$candidates_str" && -n "$prefix" ]]; then
-        local lbase
-        if [[ "$LBUFFER" == *" "* ]]; then
-            lbase="${LBUFFER% *} "
-        else
-            lbase=""
-        fi
-        if [[ "$lbase" == "$_zacrs_cached_lbase" && -n "$_zacrs_cached_candidates" ]]; then
-            candidates_str="$_zacrs_cached_candidates"
         fi
     fi
 }
@@ -924,7 +915,6 @@ _zacrs_line_pre_redraw() {
     _zacrs_prev_lbuffer="$LBUFFER"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
-    # キャッシュもリセット: "cargo" → 全BS → "git" でcargoキャッシュが再利用されるバグを防ぐ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }
 
     # DismissWithSpace 後の抑制: 非空 prefix 入力で解除 (naive prefix で十分)
@@ -938,104 +928,124 @@ _zacrs_line_pre_redraw() {
     fi
 
     # lbase 計算: 最後のスペースより前の部分（コマンド＋引数の文脈）
+    # context_key にはシェルの PID + PWD + lbase を含め、
+    # セッションをまたいだキャッシュ干渉とディレクトリ変化に対応する。
+    # スペースは %20 に変換してプロトコルのスペース区切りと衝突しないようにする。
     local lbase
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "
     else
         lbase=""
     fi
+    local _ctx_lbase="${lbase// /%20}"
+    local _ctx_pwd="${PWD// /%20}"
+    local context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
 
-    # lbase が変わったらキャッシュ無効化
-    if [[ "$lbase" != "$_zacrs_cached_lbase" ]]; then
-        _zacrs_reset_cache
-        _zacrs_cached_lbase="$lbase"
-    fi
-
-    # 候補収集: cache-first → compsys → gather fallback
+    # 候補収集変数
     local candidates_str="" from_gather=0
     local prefix prefix_len
+    prefix="$naive_prefix"
+    prefix_len=${#naive_prefix}
 
-    # Cache-first: lbase unchanged + cache available → skip compsys/gather.
-    # Rust-side filtering handles the current prefix, so the full candidate
-    # list from cache is sufficient.  This eliminates per-keystroke compsys
-    # overhead during rapid Backspace (same command context, shrinking prefix).
-    if [[ -n "$_zacrs_cached_candidates" ]] && (( ! _zacrs_chain_retry )) && [[ "$naive_prefix" == "${_zacrs_cached_prefix}"* ]]; then
-        candidates_str="$_zacrs_cached_candidates"
-        from_gather=$_zacrs_cached_from_gather
-        prefix="$naive_prefix"
-        prefix_len=${#naive_prefix}
-        _zacrs_chain_retry=0
-    else
-        # Heavy path: compsys + gather (no cache available).
-        # Debounce: when keystrokes arrive faster than compsys can complete,
-        # skip this cycle and let the next line-pre-redraw retry.
-        if (( ${+EPOCHREALTIME} )) && (( EPOCHREALTIME < _zacrs_debounce_until )); then
+    if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
+        _zacrs_maybe_retry_daemon
+    fi
+
+    # Cache-first: デーモンにキャッシュのみで render を試みる。
+    # キャッシュヒット時はコマンドシステム呼び出しをスキップできる（最速パス）。
+    if (( _zacrs_daemon_available )); then
+        local cursor_row=0 cursor_col=0
+        if (( _zacrs_popup_visible
+                && _zacrs_last_render_cursor_row > 0
+                && COLUMNS == _zacrs_popup_snapshot_columns
+                && LINES == _zacrs_popup_snapshot_lines )); then
+            cursor_row=$_zacrs_last_render_cursor_row
+            cursor_col=$_zacrs_last_render_cursor_col
+        else
+            _zacrs_get_cursor_pos
+            _zacrs_cursor_stale=""
+        fi
+        local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
+        # candidates 引数を空にして送信 → デーモンがキャッシュを探す
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key"
+        local _cache_rc=$?
+        if (( _cache_rc == 0 )); then
+            # キャッシュヒット: 描画完了
+            local fd=$_zacrs_send_render_fd
+            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
+            local tty_ok=1
+            _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
+            if (( tty_ok )); then
+                _zacrs_popup_visible=1
+                _zacrs_last_render_cursor_row=$cursor_row
+                _zacrs_last_render_cursor_col=$cursor_col
+                _zacrs_record_popup_snapshot "$naive_prefix" "$prefix_len" "" "$cursor_col" "$reuse_token" 0
+            else
+                _zacrs_clear_popup
+                _zacrs_mark_daemon_unavailable
+            fi
+            exec {fd}<&-
+            return
+        elif (( _cache_rc == 1 )); then
+            # EMPTY: デーモンキャッシュに候補なし → ポップアップを消す
             _zacrs_clear_popup
-            _zacrs_prev_lbuffer=""
             return
         fi
+        # _cache_rc == 3: CACHE_MISS → heavy path (compsys + gather) へ
+        # _cache_rc == 2: daemon unavailable → heavy path へ
+    fi
 
+    # Heavy path: compsys + gather (no cache available).
+    # Debounce: when keystrokes arrive faster than compsys can complete,
+    # skip this cycle and let the next line-pre-redraw retry.
+    if (( ${+EPOCHREALTIME} )) && (( EPOCHREALTIME < _zacrs_debounce_until )); then
+        _zacrs_clear_popup
+        _zacrs_prev_lbuffer=""
+        return
+    fi
+
+    _zacrs_captured=()
+    local _zacrs_fd2
+    exec {_zacrs_fd2}>&2
+    zle _zacrs_compsys 2>/dev/null
+    exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
+
+    if (( _zacrs_ctx_valid )); then
+        prefix="$_zacrs_ctx_prefix"
+        prefix_len=$_zacrs_ctx_prefix_len
+    fi
+
+    if (( ${#_zacrs_captured} > 0 )); then
+        candidates_str="${(pj:\n:)_zacrs_captured}"
+    fi
+    # compsys 0 件 → 遅延ロード補完のためリトライ1回
+    # チェーン時 or サブコマンド位置 (naive_prefix 空) で発動
+    if (( ${#_zacrs_captured} == 0 )) && { (( _zacrs_chain_retry )) || [[ -z "$naive_prefix" ]]; }; then
+        _zacrs_chain_retry=0
         _zacrs_captured=()
-        local _zacrs_fd2
         exec {_zacrs_fd2}>&2
         zle _zacrs_compsys 2>/dev/null
         exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-
         if (( _zacrs_ctx_valid )); then
             prefix="$_zacrs_ctx_prefix"
             prefix_len=$_zacrs_ctx_prefix_len
-        else
-            prefix="$naive_prefix"
-            prefix_len=${#naive_prefix}
         fi
-
         if (( ${#_zacrs_captured} > 0 )); then
             candidates_str="${(pj:\n:)_zacrs_captured}"
         fi
-        # compsys 0 件 → 遅延ロード補完のためリトライ1回
-        # チェーン時 or サブコマンド位置 (naive_prefix 空) で発動
-        if (( ${#_zacrs_captured} == 0 )) && { (( _zacrs_chain_retry )) || [[ -z "$naive_prefix" ]]; }; then
-            _zacrs_chain_retry=0
-            _zacrs_captured=()
-            exec {_zacrs_fd2}>&2
-            zle _zacrs_compsys 2>/dev/null
-            exec 2>&$_zacrs_fd2 {_zacrs_fd2}>&-
-            if (( _zacrs_ctx_valid )); then
-                prefix="$_zacrs_ctx_prefix"
-                prefix_len=$_zacrs_ctx_prefix_len
-            fi
-            if (( ${#_zacrs_captured} > 0 )); then
-                candidates_str="${(pj:\n:)_zacrs_captured}"
-            fi
-        fi
-        _zacrs_chain_retry=0
-        if [[ -z "$candidates_str" ]]; then
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-            if [[ -n "$candidates_str" ]]; then
-                prefix="$naive_prefix"
-                prefix_len=${#naive_prefix}
-                from_gather=1
-            fi
-        fi
-
-        # キャッシュ更新: heavy path で初めて候補が見つかった場合
+    fi
+    _zacrs_chain_retry=0
+    if [[ -z "$candidates_str" ]]; then
+        candidates_str="$(_zacrs_gather "$LBUFFER")"
         if [[ -n "$candidates_str" ]]; then
-            _zacrs_cached_candidates="$candidates_str"
-            _zacrs_cached_from_gather=$from_gather
-            _zacrs_cached_prefix="$naive_prefix"
-        fi
-
-        # Fuzzy fallback: 候補なし → キャッシュから再利用
-        if [[ -z "$candidates_str" && -n "$_zacrs_cached_candidates" ]]; then
-            candidates_str="$_zacrs_cached_candidates"
-            from_gather=$_zacrs_cached_from_gather
             prefix="$naive_prefix"
             prefix_len=${#naive_prefix}
+            from_gather=1
         fi
-
-        # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)
-        (( ${+EPOCHREALTIME} )) && _zacrs_debounce_until=$(( EPOCHREALTIME + 0.050 ))
     fi
+
+    # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)
+    (( ${+EPOCHREALTIME} )) && _zacrs_debounce_until=$(( EPOCHREALTIME + 0.050 ))
 
     [[ -z "$candidates_str" ]] && { _zacrs_clear_popup; return }
 
@@ -1051,7 +1061,8 @@ _zacrs_line_pre_redraw() {
         return
     fi
 
-    _zacrs_render "$prefix" "$prefix_len" "$candidates_str" "$from_gather"
+    # 候補あり: デーモンのキャッシュを更新しながら render
+    _zacrs_render "$prefix" "$prefix_len" "$candidates_str" "$from_gather" "" "$context_key"
 }
 
 # === Widget wrappers: Enter/Ctrl-C でポップアップクリア ===
