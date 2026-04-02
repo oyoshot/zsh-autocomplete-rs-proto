@@ -4,6 +4,12 @@ use unicode_width::UnicodeWidthStr;
 const MAX_POPUP_WIDTH: u16 = 60;
 const PADDING: u16 = 2;
 
+/// Returns `true` if `s` is safe to embed as a space-delimited header token.
+/// Rejects empty strings, spaces, and ASCII control characters.
+pub fn is_safe_prefix(s: &str) -> bool {
+    !s.is_empty() && !s.contains(|c: char| c == ' ' || c.is_ascii_control())
+}
+
 pub struct Popup {
     pub row: u16,
     pub col: u16,
@@ -28,9 +34,7 @@ impl Popup {
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
         }
-        if !common_prefix.is_empty()
-            && !common_prefix.contains(|c: char| c == ' ' || c.is_ascii_control())
-        {
+        if is_safe_prefix(common_prefix) {
             meta.push_str(&format!(" common_prefix={}", common_prefix));
         }
         meta
