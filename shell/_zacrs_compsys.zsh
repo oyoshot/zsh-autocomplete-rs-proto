@@ -130,8 +130,10 @@ _zacrs_compsys_func() {
         # empty array, leaving prefix_len=0.  With prefix_len=0 the apply step
         # treats the whole LBUFFER as the base and prepends it to the candidate
         # text, producing doubled output like `"ssrc`.
-        # IPREFIX+PREFIX always equals the raw LBUFFER suffix that compsys is
-        # completing, so its length is the precise number of characters to strip.
+        # _zacrs_ctx_prefix (IPREFIX+PREFIX) is exactly what this implementation
+        # uses for candidate reconstruction and LBUFFER trimming, so its length
+        # is the correct character count to strip — even in quoted contexts where
+        # compset -q or similar transforms may affect QIPREFIX separately.
         _zacrs_ctx_prefix_len=${#_zacrs_ctx_prefix}
 
         _zacrs_dbg "context: PREFIX='$PREFIX' IPREFIX='$IPREFIX' ctx_prefix='$_zacrs_ctx_prefix' raw_len=$_zacrs_ctx_prefix_len"
