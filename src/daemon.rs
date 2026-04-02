@@ -191,10 +191,19 @@ pub fn status() -> bool {
 }
 
 impl DaemonServer {
+    fn touch_cached_key(&mut self, context_key: &str) {
+        if self.candidate_cache.contains_key(context_key) {
+            self.candidate_cache_order.retain(|k| k != context_key);
+            self.candidate_cache_order.push(context_key.to_string());
+        }
+    }
+
     /// Look up a cached TSV payload by `context_key`.
-    /// Returns `Some(&tsv)` on hit, `None` on miss.
-    fn get_cached_tsv(&self, context_key: &str) -> Option<&str> {
-        self.candidate_cache.get(context_key).map(String::as_str)
+    /// Returns `Some(tsv)` on hit, `None` on miss. Cache hits refresh recency.
+    fn get_cached_tsv(&mut self, context_key: &str) -> Option<String> {
+        let tsv = self.candidate_cache.get(context_key).cloned()?;
+        self.touch_cached_key(context_key);
+        Some(tsv)
     }
 
     /// Store `tsv` in the candidate cache under `context_key`.
@@ -203,8 +212,7 @@ impl DaemonServer {
     fn store_cached_tsv(&mut self, context_key: &str, tsv: String) {
         if self.candidate_cache.contains_key(context_key) {
             self.candidate_cache.insert(context_key.to_string(), tsv);
-            self.candidate_cache_order.retain(|k| k != context_key);
-            self.candidate_cache_order.push(context_key.to_string());
+            self.touch_cached_key(context_key);
             return;
         }
         if self.candidate_cache_order.len() >= CANDIDATE_CACHE_MAX_ENTRIES {
@@ -420,7 +428,7 @@ impl DaemonServer {
                 // Cache-only request: TSV absent, context_key present.
                 if tsv_opt.is_none() {
                     if let Some(ref key) = context_key {
-                        if let Some(cached_tsv) = self.get_cached_tsv(key).map(str::to_string) {
+                        if let Some(cached_tsv) = self.get_cached_tsv(key) {
                             let _span = info_span!(
                                 "render",
                                 protocol = "text",
@@ -549,7 +557,7 @@ impl DaemonServer {
                 let tsv = match tsv_opt {
                     None => {
                         if let Some(ref key) = context_key {
-                            match self.get_cached_tsv(key).map(str::to_string) {
+                            match self.get_cached_tsv(key) {
                                 Some(cached) => {
                                     debug!(context_key = key.as_str(), "complete cache hit");
                                     cached
@@ -1121,10 +1129,12 @@ fn read_prefix_and_candidates(
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line).is_err() || line.is_empty() {
-            break;
+            let _ = writeln!(writer, "ERROR missing END");
+            let _ = writer.flush();
+            return Err(());
         }
         if line.trim_end() == "END" {
-            break;
+            return Ok((prefix, Some(tsv)));
         }
         if tsv.len() + line.len() > MAX_TSV_BYTES {
             loop {
@@ -1142,7 +1152,6 @@ fn read_prefix_and_candidates(
         }
         tsv.push_str(&line);
     }
-    Ok((prefix, Some(tsv)))
 }
 
 fn apply_navigation(app: &mut App, action: Action) {
@@ -2045,12 +2054,22 @@ mod tests {
     }
 
     #[test]
+    fn read_prefix_and_candidates_rejects_payload_without_end_marker() {
+        let data = Cursor::new(b"gi\ngit\tcommand\tcommand\n");
+        let mut reader = BufReader::new(data);
+        let mut writer = Vec::new();
+        let result = read_prefix_and_candidates(&mut reader, &mut writer, "render");
+        assert!(result.is_err());
+        assert_eq!(String::from_utf8(writer).unwrap(), "ERROR missing END\n");
+    }
+
+    #[test]
     fn candidate_cache_get_returns_stored_payload() {
         let mut server = test_server();
         server.store_cached_tsv("123:/tmp:git%20", "git\tcommand\tcommand\n".to_string());
         assert_eq!(
             server.get_cached_tsv("123:/tmp:git%20"),
-            Some("git\tcommand\tcommand\n")
+            Some("git\tcommand\tcommand\n".to_string())
         );
         assert_eq!(server.get_cached_tsv("missing"), None);
     }
@@ -2109,7 +2128,33 @@ mod tests {
         );
         assert_eq!(
             server.get_cached_tsv("pid0:git%20"),
-            Some("git0-new\tcommand\tcommand\n")
+            Some("git0-new\tcommand\tcommand\n".to_string())
+        );
+    }
+
+    #[test]
+    fn candidate_cache_hit_moves_key_to_most_recent_position() {
+        let mut server = test_server();
+        for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
+            server.store_cached_tsv(
+                &format!("pid{}:git%20", i),
+                format!("git{}\tcommand\tcommand\n", i),
+            );
+        }
+
+        assert_eq!(
+            server.get_cached_tsv("pid0:git%20"),
+            Some("git0\tcommand\tcommand\n".to_string())
+        );
+        server.store_cached_tsv("new_key:git%20", "new\tcommand\tcommand\n".to_string());
+
+        assert!(
+            server.candidate_cache.contains_key("pid0:git%20"),
+            "recently read key should not be evicted"
+        );
+        assert!(
+            !server.candidate_cache.contains_key("pid1:git%20"),
+            "oldest untouched key should be evicted after pid0 is read"
         );
     }
 }

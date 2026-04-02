@@ -1026,10 +1026,12 @@ _zacrs_line_pre_redraw() {
             exec {fd}<&-
             return
         elif (( _cache_rc == 1 )); then
-            # EMPTY: デーモンキャッシュに候補なし → ポップアップを消す
-            _zacrs_clear_popup
-            return
+            # EMPTY: 現在のキャッシュでは候補なし。
+            # 外部状態変化でキャッシュが古い可能性があるため、
+            # heavy path にフォールスルーして候補を再収集する。
+            :
         fi
+        # _cache_rc == 1: EMPTY      → heavy path (compsys + gather) へ
         # _cache_rc == 3: CACHE_MISS → heavy path (compsys + gather) へ
         # _cache_rc == 2: daemon unavailable → heavy path へ
     fi
