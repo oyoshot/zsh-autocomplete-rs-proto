@@ -860,8 +860,14 @@ _zacrs_complete_popup() {
     fi
     local context_key=""
     if [[ -n "$lbase" ]]; then
-        local _ctx_lbase="${lbase// /%20}"
-        local _ctx_pwd="${PWD// /%20}"
+        local _ctx_lbase="$lbase"
+        _ctx_lbase="${_ctx_lbase//%/%25}"
+        _ctx_lbase="${_ctx_lbase//:/%3A}"
+        _ctx_lbase="${_ctx_lbase// /%20}"
+        local _ctx_pwd="$PWD"
+        _ctx_pwd="${_ctx_pwd//%/%25}"
+        _ctx_pwd="${_ctx_pwd//:/%3A}"
+        _ctx_pwd="${_ctx_pwd// /%20}"
         context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
     fi
 
@@ -879,7 +885,7 @@ _zacrs_complete_popup() {
         reuse_token="$_zacrs_popup_snapshot_reuse_token"
     fi
 
-    if (( ! reuse_visible )); then
+    if (( ! reuse_visible )) || [[ -z "$candidates_str" ]]; then
         _zacrs_collect_candidates
     fi
 
@@ -914,6 +920,13 @@ _zacrs_complete_popup() {
             if [[ -z "$candidates_str" ]]; then
                 _zacrs_clear_popup
                 zle expand-or-complete
+                return
+            fi
+            local -a _cands_retry
+            _cands_retry=( ${(f)candidates_str} )
+            _cands_retry=( ${_cands_retry:#} )
+            if [[ ${#_cands_retry[@]} -eq 1 ]]; then
+                _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${_cands_retry[1]}"
                 return
             fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
@@ -975,8 +988,14 @@ _zacrs_line_pre_redraw() {
     # 異なるコマンド間で同一キー "PID:PWD:" を共有するとキャッシュ汚染が起きる。
     local context_key=""
     if [[ -n "$lbase" ]]; then
-        local _ctx_lbase="${lbase// /%20}"
-        local _ctx_pwd="${PWD// /%20}"
+        local _ctx_lbase="$lbase"
+        _ctx_lbase="${_ctx_lbase//%/%25}"
+        _ctx_lbase="${_ctx_lbase//:/%3A}"
+        _ctx_lbase="${_ctx_lbase// /%20}"
+        local _ctx_pwd="$PWD"
+        _ctx_pwd="${_ctx_pwd//%/%25}"
+        _ctx_pwd="${_ctx_pwd//:/%3A}"
+        _ctx_pwd="${_ctx_pwd// /%20}"
         context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
     fi
 
