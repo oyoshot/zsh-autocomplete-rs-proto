@@ -484,8 +484,8 @@ _zacrs_popup_session_loop() {
         _zacrs_popup_visible=1
         _zacrs_popup_row=$_f_popup_row
         _zacrs_popup_height=$_f_popup_height
-        if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt ${#prefix} ]]; then
-            LBUFFER="${LBUFFER:0:$(( ${#LBUFFER} - ${#prefix} ))}${_f_common_prefix}"
+        if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt $prefix_len ]]; then
+            LBUFFER="${LBUFFER:0:$(( ${#LBUFFER} - prefix_len ))}${_f_common_prefix}"
             CURSOR=$#LBUFFER
             # Update prefix_len in caller scope so _zacrs_apply_result strips the
             # right amount when the user confirms a candidate.
