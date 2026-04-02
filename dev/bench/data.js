@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774940384234,
+  "lastUpdate": 1775093223679,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -7283,6 +7283,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 757,
             "range": "± 1",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "00c6ca617e295e5766db22363eb355896db97cc9",
+          "message": "fix(shell): add cache-first lookup and debounce to auto-trigger path (#77)\n\n* fix(shell): add cache-first lookup and debounce to auto-trigger path\n\nSkip compsys/gather when cached candidates exist for the same lbase,\neliminating per-keystroke completion-system overhead during rapid\nBackspace.  When no cache is available (new command context), throttle\nthe heavy path with a 50 ms EPOCHREALTIME-based debounce so compsys\nis not hammered faster than it can complete.\n\nCloses #26\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): clear stale popup on debounce, reset debounce on cache/resize\n\n- Clear visible popup when debounce skips the heavy path (lbase just\n  changed, so the old popup content is stale)\n- Reset debounce timer in _zacrs_reset_cache so accept-line / send-break\n  do not suppress the first keystroke of a new prompt\n- Invalidate candidate cache on terminal resize (TRAPWINCH) to prevent\n  rendering from stale layout assumptions\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): invalidate candidate cache when prefix shrinks past cache point\n\nTrack the prefix length at cache population time.  When the current\nnaive_prefix is shorter than what compsys used to build the cache, the\ncached set may be incomplete (compsys filters by PREFIX).  Fall through\nto the heavy path so compsys can return the broader candidate set.\n\nPrevents stale narrow results after fast-paste then Backspace, e.g.\npasting \"git log\" then Backspacing to \"git l\" would only show log-\nrelated candidates instead of all l-prefixed subcommands.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(shell): bypass cache when chain-retry is pending\n\nAfter a directory completion (e.g. \"src/\"), _zacrs_chain_retry is set\nso the next redraw runs compsys fresh to discover the directory's\nchildren.  The cache-first path was consuming and clearing this flag,\ncausing the popup to show stale parent-context candidates instead of\nthe new directory contents.\n\nSkip the cache-first path when chain_retry is active so compsys can\npopulate candidates for the new completion context.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-02T10:19:08+09:00",
+          "tree_id": "1219bfc3362c567435b29c85441df60663e688b2",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/00c6ca617e295e5766db22363eb355896db97cc9"
+        },
+        "date": 1775093223259,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7281,
+            "range": "± 152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74444,
+            "range": "± 3005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 895531,
+            "range": "± 72466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 189093,
+            "range": "± 1334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100990,
+            "range": "± 329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75111,
+            "range": "± 882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20296,
+            "range": "± 152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19018,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12140,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 310875,
+            "range": "± 916",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 306079,
+            "range": "± 4142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 268110,
+            "range": "± 3896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 294635,
+            "range": "± 2103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26758,
+            "range": "± 438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 305963,
+            "range": "± 1091",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3334932,
+            "range": "± 8117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 152685,
+            "range": "± 7385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 113412,
+            "range": "± 419",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 362376,
+            "range": "± 9217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 745,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 112,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 35,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 40,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 65,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 137,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 859,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7593,
+            "range": "± 372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 754,
+            "range": "± 11",
             "unit": "ns/iter"
           }
         ]
