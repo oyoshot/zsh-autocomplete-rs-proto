@@ -28,7 +28,7 @@ impl Popup {
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
         }
-        if !common_prefix.is_empty() {
+        if !common_prefix.is_empty() && !common_prefix.contains(' ') {
             meta.push_str(&format!(" common_prefix={}", common_prefix));
         }
         meta
@@ -222,6 +222,19 @@ mod tests {
             height: 5,
         };
         let meta = popup.format_metadata(5, 42, 3, None, "");
+        assert!(!meta.contains("common_prefix"));
+    }
+
+    #[test]
+    fn format_metadata_space_in_common_prefix_omitted() {
+        let popup = Popup {
+            row: 6,
+            col: 0,
+            width: 30,
+            height: 5,
+        };
+        // Space-containing prefix would break the space-delimited header protocol
+        let meta = popup.format_metadata(5, 42, 3, None, "foo bar");
         assert!(!meta.contains("common_prefix"));
     }
 }

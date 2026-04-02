@@ -527,7 +527,9 @@ impl DaemonServer {
             popup.row, popup.height, app.cursor_row
         )?;
         if let Some(cp) = common_prefix {
-            write!(writer, " common_prefix={}", cp)?;
+            if !cp.contains(' ') {
+                write!(writer, " common_prefix={}", cp)?;
+            }
         }
         writeln!(writer, " {}", total_len)?;
         if !extra_prefix.is_empty() {
