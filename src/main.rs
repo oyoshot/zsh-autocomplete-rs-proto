@@ -15,25 +15,35 @@ fn run_complete(
     cols: u16,
     rows: u16,
     shift_tab_sequence: Option<Vec<u8>>,
+    stale_bytes: Vec<u8>,
 ) -> io::Result<()> {
+    // Read candidates TSV from stdin
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
     let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
+    drop(reader);
 
-    let stdout = io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-
-    daemon::run_stdio_complete(
-        &mut reader,
-        &mut writer,
+    // Run tty-owned session (Rust owns raw mode and key reading)
+    let result = daemon::run_tty_session(
         prefix,
         cursor_row,
         cursor_col,
         cols,
         rows,
         shift_tab_sequence,
+        stale_bytes,
         &tsv,
-    );
+    )?;
+
+    // Write 5-line structured result to stdout
+    let stdout = io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    writeln!(writer, "DONE")?;
+    writeln!(writer, "{}", result.code)?;
+    writeln!(writer, "{}", if result.chain { 1 } else { 0 })?;
+    writeln!(writer, "{}", if result.execute { 1 } else { 0 })?;
+    writeln!(writer, "{}", result.replace_text)?;
+    writer.flush()?;
     Ok(())
 }
 
@@ -141,6 +151,7 @@ fn main() {
             cursor_row,
             cursor_col,
             shift_tab_hex,
+            stale_hex,
             cols,
             rows,
         } => match run_complete(
@@ -152,6 +163,10 @@ fn main() {
             shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
+            stale_hex
+                .as_deref()
+                .and_then(protocol::decode_hex_bytes)
+                .unwrap_or_default(),
         ) {
             Ok(()) => process::exit(0),
             Err(e) => {

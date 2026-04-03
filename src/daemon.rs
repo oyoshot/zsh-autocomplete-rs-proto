@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::RawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -16,6 +17,429 @@ use crate::protocol::{self, Request, Response};
 use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
+
+/// Result returned by a completed popup session (tty-owned path).
+pub struct CompleteResult {
+    /// 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
+    pub code: u8,
+    /// codes 0-2: literal replacement text (may have trailing space/slash)
+    /// code 3: hex-encoded passthrough key bytes (e.g. "1b5b44")
+    pub replace_text: String,
+    pub chain: bool,
+    pub execute: bool,
+}
+
+impl CompleteResult {
+    fn cancel_empty() -> Self {
+        CompleteResult {
+            code: 1,
+            replace_text: String::new(),
+            chain: false,
+            execute: false,
+        }
+    }
+}
+
+/// Enable raw mode on a tty fd, returning the saved termios for later restore.
+fn tty_enable_raw(fd: RawFd) -> io::Result<libc::termios> {
+    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+    if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let saved = termios;
+    unsafe { libc::cfmakeraw(&mut termios) };
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(saved)
+}
+
+/// Restore a tty fd to a previously saved termios state.
+fn tty_restore(fd: RawFd, saved: &libc::termios) {
+    unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, saved as *const _) };
+}
+
+/// Read one key sequence (possibly multi-byte) from a raw fd.
+fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
+    let mut byte = [0u8; 1];
+    let n = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+    if n <= 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "tty read failed",
+        ));
+    }
+
+    let first = byte[0];
+    let mut buf = vec![first];
+
+    if first == 0x1b {
+        // ESC: try to read continuation bytes with 50ms timeout
+        let mut tv = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 50_000,
+        };
+        loop {
+            let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
+            unsafe { libc::FD_SET(fd, &mut readfds) };
+            let ret = unsafe {
+                libc::select(
+                    fd + 1,
+                    &mut readfds,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut tv,
+                )
+            };
+            if ret <= 0 {
+                break;
+            }
+            let n2 = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+            if n2 <= 0 {
+                break;
+            }
+            buf.push(byte[0]);
+            // Stop at terminal byte or if we've reached 32 bytes
+            if byte[0].is_ascii_alphabetic() || byte[0] == b'~' || buf.len() >= 32 {
+                break;
+            }
+        }
+    } else if first >= 0xc0 {
+        // UTF-8 multi-byte start: read continuation bytes
+        let expected_extra = if first >= 0xf0 {
+            3
+        } else if first >= 0xe0 {
+            2
+        } else {
+            1
+        };
+        for _ in 0..expected_extra {
+            let n2 = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+            if n2 <= 0 {
+                break;
+            }
+            buf.push(byte[0]);
+        }
+    }
+
+    Ok(buf)
+}
+
+/// Parse a single key sequence from a byte slice starting at `*pos`, advancing `*pos`.
+fn extract_single_key_from_buf(buf: &[u8], pos: &mut usize) -> Vec<u8> {
+    if *pos >= buf.len() {
+        return Vec::new();
+    }
+    let first = buf[*pos];
+    *pos += 1;
+    let mut key = vec![first];
+
+    if first == 0x1b {
+        // ESC sequence: consume until ASCII alpha or '~' or 32 bytes total
+        while *pos < buf.len() && key.len() < 32 {
+            let b = buf[*pos];
+            *pos += 1;
+            key.push(b);
+            if b.is_ascii_alphabetic() || b == b'~' {
+                break;
+            }
+        }
+    } else if first >= 0xc0 {
+        let expected_extra = if first >= 0xf0 {
+            3
+        } else if first >= 0xe0 {
+            2
+        } else {
+            1
+        };
+        for _ in 0..expected_extra {
+            if *pos >= buf.len() {
+                break;
+            }
+            key.push(buf[*pos]);
+            *pos += 1;
+        }
+    }
+
+    key
+}
+
+/// Hex-encode a byte slice (e.g. `[0x1b, 0x5b, 0x44]` → `"1b5b44"`).
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{:02x}", b);
+        s
+    })
+}
+
+/// Run a complete popup session with the tty owned by Rust.
+///
+/// Parses candidates from `tsv`, renders the popup on `/dev/tty`,
+/// handles key events internally, and returns a `CompleteResult`.
+#[allow(clippy::too_many_arguments)]
+pub fn run_tty_session(
+    prefix: String,
+    cursor_row: u16,
+    cursor_col: u16,
+    term_cols: u16,
+    term_rows: u16,
+    shift_tab_sequence: Option<Vec<u8>>,
+    stale_bytes: Vec<u8>,
+    tsv: &str,
+) -> io::Result<CompleteResult> {
+    let config = Config::load();
+    let theme = config.theme();
+    let key_bindings = config.key_bindings();
+
+    let candidates: Vec<Candidate> = tsv
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(Candidate::parse_line)
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(CompleteResult::cancel_empty());
+    }
+
+    let fuzzy = FuzzyMatcher::new();
+    let mut app = App::new_with_matcher(
+        candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
+    );
+
+    if !config.auto_insert_unambiguous {
+        app.reset_filter_to_prefix();
+    }
+
+    if app.filtered_indices.is_empty() {
+        return Ok(CompleteResult::cancel_empty());
+    }
+
+    let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+
+    if app.max_visible == 0 {
+        return Ok(CompleteResult::cancel_empty());
+    }
+
+    app.select_first();
+
+    // Open /dev/tty read+write
+    let tty_fd = crate::tty::open_tty_rw()?;
+
+    // Enable raw mode
+    let saved_termios = match tty_enable_raw(tty_fd) {
+        Ok(t) => t,
+        Err(e) => {
+            unsafe { libc::close(tty_fd) };
+            return Err(e);
+        }
+    };
+
+    // Helper to write bytes to tty
+    let write_tty = |bytes: &[u8]| -> io::Result<()> {
+        let mut written = 0;
+        while written < bytes.len() {
+            let n = unsafe {
+                libc::write(
+                    tty_fd,
+                    bytes[written..].as_ptr() as *const libc::c_void,
+                    bytes.len() - written,
+                )
+            };
+            if n <= 0 {
+                return Err(io::Error::last_os_error());
+            }
+            written += n as usize;
+        }
+        Ok(())
+    };
+
+    // Render initial popup
+    let (mut initial_bytes, mut popup) = ui::render::draw_to_bytes(&app, &theme)?;
+    if !scroll_bytes.is_empty() {
+        let mut combined = scroll_bytes;
+        combined.append(&mut initial_bytes);
+        initial_bytes = combined;
+    }
+    let _ = write_tty(&initial_bytes);
+
+    // Process stale bytes as initial key inputs
+    let result = 'session: {
+        if !stale_bytes.is_empty() {
+            let mut pos = 0;
+            while pos < stale_bytes.len() {
+                let key_bytes = extract_single_key_from_buf(&stale_bytes, &mut pos);
+                if key_bytes.is_empty() {
+                    break;
+                }
+                let action = input::parse_tty_bytes_with_shift_tab(
+                    &key_bytes,
+                    &key_bindings,
+                    shift_tab_sequence.as_deref(),
+                )
+                .unwrap_or(Action::None);
+
+                match dispatch_action(action, &key_bytes, &mut app, &theme, &mut popup, &write_tty)
+                {
+                    DispatchResult::Continue => {}
+                    DispatchResult::Done(r) => break 'session r,
+                }
+            }
+        }
+
+        // Main key loop
+        loop {
+            let key_bytes = match read_key_from_fd(tty_fd) {
+                Ok(k) => k,
+                Err(_) => break CompleteResult::cancel_empty(),
+            };
+            let action = input::parse_tty_bytes_with_shift_tab(
+                &key_bytes,
+                &key_bindings,
+                shift_tab_sequence.as_deref(),
+            )
+            .unwrap_or(Action::None);
+
+            match dispatch_action(action, &key_bytes, &mut app, &theme, &mut popup, &write_tty) {
+                DispatchResult::Continue => {}
+                DispatchResult::Done(r) => break r,
+            }
+        }
+    };
+
+    // Disable raw mode before returning
+    tty_restore(tty_fd, &saved_termios);
+
+    // Clear the popup
+    if let Ok(clear_bytes) =
+        ui::render::clear_rect_to_bytes(popup.row, popup.height, app.cursor_row)
+    {
+        let _ = write_tty(&clear_bytes);
+    }
+
+    unsafe { libc::close(tty_fd) };
+
+    Ok(result)
+}
+
+enum DispatchResult {
+    Continue,
+    Done(CompleteResult),
+}
+
+fn dispatch_action(
+    action: Action,
+    key_bytes: &[u8],
+    app: &mut App,
+    theme: &Theme,
+    popup: &mut crate::ui::popup::Popup,
+    write_tty: &impl Fn(&[u8]) -> io::Result<()>,
+) -> DispatchResult {
+    match action {
+        Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+            apply_navigation(app, action);
+            if let Ok((bytes, new_popup)) = ui::render::draw_to_bytes(app, theme) {
+                let _ = write_tty(&bytes);
+                *popup = new_popup;
+            }
+            DispatchResult::Continue
+        }
+        Action::TypeChar(c) => {
+            let clear_bytes = ui::render::clear_to_bytes(app).unwrap_or_default();
+            app.type_char(c);
+            if app.filtered_indices.is_empty() {
+                return DispatchResult::Done(CompleteResult {
+                    code: 1,
+                    replace_text: app.filter_text.clone(),
+                    chain: false,
+                    execute: false,
+                });
+            }
+            let mut bytes = clear_bytes;
+            if let Ok((mut render_bytes, new_popup)) = ui::render::draw_to_bytes(app, theme) {
+                bytes.append(&mut render_bytes);
+                *popup = new_popup;
+            }
+            let _ = write_tty(&bytes);
+            DispatchResult::Continue
+        }
+        Action::Backspace => {
+            let clear_bytes = ui::render::clear_to_bytes(app).unwrap_or_default();
+            if !app.backspace() {
+                return DispatchResult::Done(CompleteResult {
+                    code: 1,
+                    replace_text: String::new(),
+                    chain: false,
+                    execute: false,
+                });
+            }
+            if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
+                return DispatchResult::Done(CompleteResult {
+                    code: 1,
+                    replace_text: app.filter_text.clone(),
+                    chain: false,
+                    execute: false,
+                });
+            }
+            let mut bytes = clear_bytes;
+            if let Ok((mut render_bytes, new_popup)) = ui::render::draw_to_bytes(app, theme) {
+                bytes.append(&mut render_bytes);
+                *popup = new_popup;
+            }
+            let _ = write_tty(&bytes);
+            DispatchResult::Continue
+        }
+        Action::Confirm => {
+            let (replace_text, execute) = match app.selected_candidate() {
+                Some(c) => (c.text_with_suffix(), true),
+                None => (app.filter_text.clone(), false),
+            };
+            DispatchResult::Done(CompleteResult {
+                code: 0,
+                replace_text,
+                chain: false,
+                execute,
+            })
+        }
+        Action::DismissWithSpace => {
+            let text = match app.selected_candidate() {
+                Some(c) => c.text_for_dismiss_with_space(),
+                None => {
+                    let mut t = app.filter_text.clone();
+                    t.push(' ');
+                    t
+                }
+            };
+            let chain = text.ends_with([' ', '/']);
+            DispatchResult::Done(CompleteResult {
+                code: 2,
+                replace_text: text,
+                chain,
+                execute: false,
+            })
+        }
+        Action::Cancel => {
+            let replace_text = if app.filter_text != app.prefix {
+                app.filter_text.clone()
+            } else {
+                String::new()
+            };
+            DispatchResult::Done(CompleteResult {
+                code: 1,
+                replace_text,
+                chain: false,
+                execute: false,
+            })
+        }
+        Action::None => DispatchResult::Done(CompleteResult {
+            code: 3,
+            replace_text: hex_encode(key_bytes),
+            chain: false,
+            execute: false,
+        }),
+        Action::Resize(_, _) => DispatchResult::Continue,
+    }
+}
 
 const MAX_INLINE_KEY_BYTES: usize = 16;
 
@@ -930,6 +1354,7 @@ impl DaemonServer {
                         break;
                     }
                     let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                    let _ = writeln!(writer, "APPLY chain=0 execute=0");
                     let _ = writer.flush();
                     break;
                 }
@@ -957,6 +1382,7 @@ impl DaemonServer {
                         app.type_char(c);
                         if app.filtered_indices.is_empty() {
                             let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                            let _ = writeln!(writer, "APPLY chain=0 execute=0");
                             let _ = writer.flush();
                             break;
                         }
@@ -971,6 +1397,7 @@ impl DaemonServer {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         if !app.backspace() {
                             let _ = writeln!(writer, "DONE 1 ");
+                            let _ = writeln!(writer, "APPLY chain=0 execute=0");
                             let _ = writer.flush();
                             break;
                         }
@@ -978,6 +1405,7 @@ impl DaemonServer {
                             || app.filter_text.len() < app.prefix.len()
                         {
                             let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                            let _ = writeln!(writer, "APPLY chain=0 execute=0");
                             let _ = writer.flush();
                             break;
                         }
@@ -992,9 +1420,11 @@ impl DaemonServer {
                         match app.selected_candidate() {
                             Some(c) => {
                                 let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                                let _ = writeln!(writer, "APPLY chain=0 execute=1");
                             }
                             None => {
                                 let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                                let _ = writeln!(writer, "APPLY chain=0 execute=0");
                             }
                         }
                         let _ = writer.flush();
@@ -1003,11 +1433,16 @@ impl DaemonServer {
                     Action::DismissWithSpace => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ =
-                                    writeln!(writer, "DONE 2 {}", c.text_for_dismiss_with_space());
+                                let text = c.text_for_dismiss_with_space();
+                                let chain = u8::from(text.ends_with([' ', '/']));
+                                let _ = writeln!(writer, "DONE 2 {}", text);
+                                let _ = writeln!(writer, "APPLY chain={} execute=0", chain);
                             }
                             None => {
-                                let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                                let text = format!("{} ", app.filter_text);
+                                let chain = u8::from(text.ends_with([' ', '/']));
+                                let _ = writeln!(writer, "DONE 2 {}", text);
+                                let _ = writeln!(writer, "APPLY chain={} execute=0", chain);
                             }
                         }
                         let _ = writer.flush();
@@ -1020,6 +1455,7 @@ impl DaemonServer {
                             ""
                         };
                         let _ = writeln!(writer, "DONE 1 {}", text);
+                        let _ = writeln!(writer, "APPLY chain=0 execute=0");
                         let _ = writer.flush();
                         break;
                     }
@@ -1029,6 +1465,7 @@ impl DaemonServer {
                     }
                     Action::None => {
                         let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
+                        let _ = writeln!(writer, "APPLY chain=0 execute=0");
                         let _ = writer.flush();
                         break;
                     }
@@ -1874,6 +2311,15 @@ mod tests {
         reader.read_line(&mut done).unwrap();
         assert_eq!(done, "DONE 3 gi\n");
 
+        // The APPLY line follows immediately after DONE for passthrough
+        let mut apply = String::new();
+        reader.read_line(&mut apply).unwrap();
+        assert_eq!(
+            apply, "APPLY chain=0 execute=0\n",
+            "expected APPLY line after DONE 3: {apply:?}"
+        );
+
+        // No further protocol lines should follow
         let mut extra = String::new();
         reader.read_line(&mut extra).unwrap();
         assert!(
@@ -2204,5 +2650,39 @@ mod tests {
             !server.candidate_cache.contains_key("pid1:git%20"),
             "oldest untouched key should be evicted after pid0 is read"
         );
+    }
+
+    // --- run_tty_session early-return tests ---
+    //
+    // These tests cover the non-interactive paths that return without opening /dev/tty.
+
+    #[test]
+    fn run_tty_session_empty_tsv_returns_cancel() {
+        let result =
+            super::run_tty_session("gi".to_string(), 5, 2, 80, 24, None, Vec::new(), "").unwrap();
+        assert_eq!(result.code, 1);
+        assert!(result.replace_text.is_empty());
+        assert!(!result.chain);
+        assert!(!result.execute);
+    }
+
+    #[test]
+    fn run_tty_session_no_matching_candidates_returns_cancel() {
+        // Candidates exist but prefix "zzz" matches none after fuzzy filter.
+        let result = super::run_tty_session(
+            "zzz".to_string(),
+            5,
+            2,
+            80,
+            24,
+            None,
+            Vec::new(),
+            "git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
+        )
+        .unwrap();
+        assert_eq!(result.code, 1);
+        assert!(result.replace_text.is_empty());
+        assert!(!result.chain);
+        assert!(!result.execute);
     }
 }

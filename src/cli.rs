@@ -23,6 +23,9 @@ pub enum Command {
         #[arg(long)]
         shift_tab_hex: Option<String>,
 
+        #[arg(long)]
+        stale_hex: Option<String>,
+
         #[arg(long, default_value_t = 80)]
         cols: u16,
 
