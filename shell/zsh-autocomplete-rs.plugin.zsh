@@ -987,6 +987,12 @@ _zacrs_line_pre_redraw() {
     else
         lbase=""
     fi
+    # Non-empty argument prefixes have no cache-only retry path.  If we skip
+    # the heavy path here, there may be no later redraw for the final buffer.
+    local needs_final_retry=0
+    if [[ -n "$lbase" && -n "$naive_prefix" ]]; then
+        needs_final_retry=1
+    fi
     # context_key は「引数位置かつ空 prefix」のときだけ設定する。
     # 非空 prefix の補完候補は compsys が prefix で事前に絞り込む場合があり、
     # 文脈単位の候補キャッシュを fuzzy 再フィルタすると Tab の候補集合とずれる。
@@ -1063,7 +1069,11 @@ _zacrs_line_pre_redraw() {
     # Heavy path: compsys + gather (no cache available).
     # Debounce: when keystrokes arrive faster than compsys can complete,
     # skip this cycle and let the next line-pre-redraw retry.
-    if (( ${+EPOCHREALTIME} )) && (( EPOCHREALTIME < _zacrs_debounce_until )); then
+    # Non-empty argument prefixes cannot rely on that later redraw, so bypass
+    # debounce for those buffers and complete the final prefix immediately.
+    if (( ! needs_final_retry )) \
+        && (( ${+EPOCHREALTIME} )) \
+        && (( EPOCHREALTIME < _zacrs_debounce_until )); then
         _zacrs_clear_popup
         _zacrs_prev_lbuffer=""
         return
@@ -1124,6 +1134,10 @@ _zacrs_line_pre_redraw() {
     if (( PENDING > 0 )); then
         _zacrs_clear_popup
         _zacrs_prev_lbuffer=""
+        # Non-empty argument prefixes have no cache reuse path, so request one
+        # more redraw for the final buffer instead of waiting for an implicit
+        # later redisplay that may never happen.
+        (( needs_final_retry )) && zle -R
         return
     fi
 
