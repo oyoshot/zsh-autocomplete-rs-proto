@@ -854,12 +854,13 @@ _zacrs_complete_popup() {
     local cursor_row="" cursor_col=""
     local reuse_visible=0
     local reuse_token=""
+    local naive_prefix="${LBUFFER##* }"
     local lbase=""
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "
     fi
     local context_key=""
-    if [[ -n "$lbase" ]]; then
+    if [[ -n "$lbase" && -z "$naive_prefix" ]]; then
         local _ctx_lbase="$lbase"
         _ctx_lbase="${_ctx_lbase//%/%25}"
         _ctx_lbase="${_ctx_lbase//:/%3A}"
@@ -959,7 +960,10 @@ _zacrs_line_pre_redraw() {
     fi
     # Type-ahead detected: skip heavy work.  Do NOT update
     # _zacrs_prev_lbuffer so the next redraw retries this buffer.
-    (( PENDING > 0 )) && return
+    if (( PENDING > 0 )); then
+        _zacrs_clear_popup
+        return
+    fi
 
     _zacrs_prev_lbuffer="$LBUFFER"
 
@@ -983,11 +987,12 @@ _zacrs_line_pre_redraw() {
     else
         lbase=""
     fi
-    # context_key はコマンド引数位置 (lbase 非空) のみ設定する。
-    # コマンド名位置 (lbase 空) では候補がカレントプレフィクスに依存するため
-    # 異なるコマンド間で同一キー "PID:PWD:" を共有するとキャッシュ汚染が起きる。
+    # context_key は「引数位置かつ空 prefix」のときだけ設定する。
+    # 非空 prefix の補完候補は compsys が prefix で事前に絞り込む場合があり、
+    # 文脈単位の候補キャッシュを fuzzy 再フィルタすると Tab の候補集合とずれる。
+    # git サブコマンド補完 (git s / git st) が典型例。
     local context_key=""
-    if [[ -n "$lbase" ]]; then
+    if [[ -n "$lbase" && -z "$naive_prefix" ]]; then
         local _ctx_lbase="$lbase"
         _ctx_lbase="${_ctx_lbase//%/%25}"
         _ctx_lbase="${_ctx_lbase//:/%3A}"
@@ -1009,8 +1014,8 @@ _zacrs_line_pre_redraw() {
         _zacrs_maybe_retry_daemon
     fi
 
-    # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置のみ）。
-    # コマンド名位置 (context_key="") はキャッシュを使わず常に heavy path へ。
+    # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置の空 prefix のみ）。
+    # コマンド名位置や非空 prefix ではキャッシュを使わず常に heavy path へ。
     if (( _zacrs_daemon_available )) && [[ -n "$context_key" ]]; then
         local cursor_row=0 cursor_col=0
         if (( _zacrs_popup_visible
@@ -1117,6 +1122,7 @@ _zacrs_line_pre_redraw() {
     # Type-ahead arrived during candidate gathering: skip render.
     # Reset prev_lbuffer so the next redraw retries this buffer.
     if (( PENDING > 0 )); then
+        _zacrs_clear_popup
         _zacrs_prev_lbuffer=""
         return
     fi
