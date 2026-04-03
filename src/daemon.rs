@@ -214,8 +214,8 @@ fn extract_single_key_from_buf(buf: &[u8], pos: &mut usize) -> Vec<u8> {
 
 /// Hex-encode a byte slice (e.g. `[0x1b, 0x5b, 0x44]` → `"1b5b44"`).
 fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut s, b| {
-        use std::fmt::Write;
         let _ = write!(s, "{:02x}", b);
         s
     })
