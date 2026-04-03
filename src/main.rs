@@ -8,6 +8,20 @@ use clap::Parser;
 use std::io::{self, BufWriter, Read, Write};
 use std::process;
 
+fn write_complete_result(
+    mut writer: impl Write,
+    result: &daemon::CompleteResult,
+) -> io::Result<()> {
+    writeln!(writer, "DONE")?;
+    writeln!(writer, "{}", result.code)?;
+    writeln!(writer, "{}", if result.chain { 1 } else { 0 })?;
+    writeln!(writer, "{}", if result.execute { 1 } else { 0 })?;
+    writeln!(writer, "{}", result.restore_text)?;
+    writeln!(writer, "{}", result.replace_text)?;
+    writeln!(writer, "END")?;
+    writer.flush()
+}
+
 fn run_complete(
     prefix: String,
     cursor_row: u16,
@@ -35,15 +49,10 @@ fn run_complete(
         &tsv,
     )?;
 
-    // Write 5-line structured result to stdout
+    // Write the structured result to stdout for the shell plugin.
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
-    writeln!(writer, "DONE")?;
-    writeln!(writer, "{}", result.code)?;
-    writeln!(writer, "{}", if result.chain { 1 } else { 0 })?;
-    writeln!(writer, "{}", if result.execute { 1 } else { 0 })?;
-    writeln!(writer, "{}", result.replace_text)?;
-    writer.flush()?;
+    write_complete_result(&mut writer, &result)?;
     Ok(())
 }
 
@@ -234,5 +243,46 @@ fn main() {
                 }
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_complete_result;
+    use zsh_autocomplete_rs::daemon::CompleteResult;
+
+    #[test]
+    fn write_complete_result_preserves_empty_payload_lines() {
+        let mut buf = Vec::new();
+        let result = CompleteResult {
+            code: 1,
+            replace_text: String::new(),
+            chain: false,
+            execute: false,
+            restore_text: String::new(),
+        };
+
+        write_complete_result(&mut buf, &result).unwrap();
+
+        assert_eq!(String::from_utf8(buf).unwrap(), "DONE\n1\n0\n0\n\n\nEND\n");
+    }
+
+    #[test]
+    fn write_complete_result_includes_restore_text_for_passthrough() {
+        let mut buf = Vec::new();
+        let result = CompleteResult {
+            code: 3,
+            replace_text: "1b5b44".to_string(),
+            chain: false,
+            execute: false,
+            restore_text: "git".to_string(),
+        };
+
+        write_complete_result(&mut buf, &result).unwrap();
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "DONE\n3\n0\n0\ngit\n1b5b44\nEND\n"
+        );
     }
 }

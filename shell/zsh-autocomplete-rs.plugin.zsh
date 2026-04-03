@@ -750,8 +750,9 @@ _zacrs_invoke() {
         _zacrs_get_cursor_pos
     fi
 
+    local stale_input="$_zacrs_cursor_stale"
     local stale_hex=""
-    [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
+    [[ -n "$stale_input" ]] && stale_hex="$(_zacrs_encode_hex_input "$stale_input")"
     _zacrs_cursor_stale=""
 
     local shift_tab_hex=""
@@ -773,11 +774,12 @@ _zacrs_invoke() {
     local output
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || true
 
-    # Parse 5-line result: DONE / code / chain / execute / replace_text
+    # Parse 7-line result: DONE / code / chain / execute / restore_text / replace_text / END
     local -a _lines
     _lines=("${(@f)output}")
 
-    if [[ "${_lines[1]}" != "DONE" ]] || (( ${#_lines[@]} < 5 )); then
+    if [[ "${_lines[1]}" != "DONE" ]] || (( ${#_lines[@]} < 7 )) || [[ "${_lines[7]}" != "END" ]]; then
+        [[ -n "$stale_input" ]] && zle -U "$stale_input"
         _zacrs_clear_popup
         return
     fi
@@ -785,10 +787,11 @@ _zacrs_invoke() {
     local _code="${_lines[2]}"
     local _chain="${_lines[3]}"
     local _execute="${_lines[4]}"
-    local _replace="${_lines[5]}"
+    local _restore="${_lines[5]}"
+    local _replace="${_lines[6]}"
 
     _zacrs_clear_popup
-    _zacrs_apply "$_code" "$prefix_len" "$_replace" "$_chain" "$_execute"
+    _zacrs_apply "$_code" "$prefix_len" "$_replace" "$_chain" "$_execute" "$_restore"
 }
 
 _zacrs_send_key_input() {

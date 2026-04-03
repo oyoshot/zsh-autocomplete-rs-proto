@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -27,6 +28,7 @@ pub struct CompleteResult {
     pub replace_text: String,
     pub chain: bool,
     pub execute: bool,
+    pub restore_text: String,
 }
 
 impl CompleteResult {
@@ -36,6 +38,20 @@ impl CompleteResult {
             replace_text: String::new(),
             chain: false,
             execute: false,
+            restore_text: String::new(),
+        }
+    }
+}
+
+fn retry_on_eintr(mut f: impl FnMut() -> libc::c_int) -> io::Result<libc::c_int> {
+    loop {
+        let rc = f();
+        if rc >= 0 {
+            return Ok(rc);
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
         }
     }
 }
@@ -43,20 +59,16 @@ impl CompleteResult {
 /// Enable raw mode on a tty fd, returning the saved termios for later restore.
 fn tty_enable_raw(fd: RawFd) -> io::Result<libc::termios> {
     let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
-    if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    retry_on_eintr(|| unsafe { libc::tcgetattr(fd, &mut termios) })?;
     let saved = termios;
     unsafe { libc::cfmakeraw(&mut termios) };
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    retry_on_eintr(|| unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) })?;
     Ok(saved)
 }
 
 /// Restore a tty fd to a previously saved termios state.
 fn tty_restore(fd: RawFd, saved: &libc::termios) {
-    unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, saved as *const _) };
+    let _ = retry_on_eintr(|| unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, saved as *const _) });
 }
 
 struct RawModeGuard {
@@ -92,8 +104,10 @@ impl Drop for RawModeGuard {
 /// Read one key sequence (possibly multi-byte) from a raw fd.
 fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
     let mut byte = [0u8; 1];
-    let n = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
-    if n <= 0 {
+    let n = retry_on_eintr(|| unsafe {
+        libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
+    })?;
+    if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "tty read failed",
@@ -112,7 +126,7 @@ fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
         loop {
             let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
             unsafe { libc::FD_SET(fd, &mut readfds) };
-            let ret = unsafe {
+            let ret = retry_on_eintr(|| unsafe {
                 libc::select(
                     fd + 1,
                     &mut readfds,
@@ -120,12 +134,14 @@ fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
                     std::ptr::null_mut(),
                     &mut tv,
                 )
-            };
-            if ret <= 0 {
+            })?;
+            if ret == 0 {
                 break;
             }
-            let n2 = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
-            if n2 <= 0 {
+            let n2 = retry_on_eintr(|| unsafe {
+                libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
+            })?;
+            if n2 == 0 {
                 break;
             }
             buf.push(byte[0]);
@@ -144,8 +160,10 @@ fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
             1
         };
         for _ in 0..expected_extra {
-            let n2 = unsafe { libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
-            if n2 <= 0 {
+            let n2 = retry_on_eintr(|| unsafe {
+                libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
+            })?;
+            if n2 == 0 {
                 break;
             }
             buf.push(byte[0]);
@@ -264,30 +282,25 @@ pub fn run_tty_session(
     app.select_first();
 
     // Open /dev/tty read+write
-    let tty_fd = crate::tty::open_tty_rw()?;
+    let tty = crate::tty::open_tty_rw()?;
+    let tty_fd = tty.as_raw_fd();
 
     // Enable raw mode
-    let mut raw_mode = match RawModeGuard::new(tty_fd) {
-        Ok(guard) => guard,
-        Err(e) => {
-            unsafe { libc::close(tty_fd) };
-            return Err(e);
-        }
-    };
+    let mut raw_mode = RawModeGuard::new(tty_fd)?;
 
     // Helper to write bytes to tty
     let write_tty = |bytes: &[u8]| -> io::Result<()> {
         let mut written = 0;
         while written < bytes.len() {
-            let n = unsafe {
+            let n = retry_on_eintr(|| unsafe {
                 libc::write(
                     tty_fd,
                     bytes[written..].as_ptr() as *const libc::c_void,
                     bytes.len() - written,
-                )
-            };
-            if n <= 0 {
-                return Err(io::Error::last_os_error());
+                ) as libc::c_int
+            })?;
+            if n == 0 {
+                return Err(io::Error::new(io::ErrorKind::WriteZero, "tty write failed"));
             }
             written += n as usize;
         }
@@ -357,8 +370,6 @@ pub fn run_tty_session(
         let _ = write_tty(&clear_bytes);
     }
 
-    unsafe { libc::close(tty_fd) };
-
     Ok(result)
 }
 
@@ -393,6 +404,7 @@ fn dispatch_action(
                     replace_text: app.filter_text.clone(),
                     chain: false,
                     execute: false,
+                    restore_text: String::new(),
                 });
             }
             let mut bytes = clear_bytes;
@@ -411,6 +423,7 @@ fn dispatch_action(
                     replace_text: String::new(),
                     chain: false,
                     execute: false,
+                    restore_text: String::new(),
                 });
             }
             if app.filtered_indices.is_empty() || app.filter_text.len() < app.prefix.len() {
@@ -419,6 +432,7 @@ fn dispatch_action(
                     replace_text: app.filter_text.clone(),
                     chain: false,
                     execute: false,
+                    restore_text: String::new(),
                 });
             }
             let mut bytes = clear_bytes;
@@ -439,6 +453,7 @@ fn dispatch_action(
                 replace_text,
                 chain: false,
                 execute,
+                restore_text: String::new(),
             })
         }
         Action::DismissWithSpace => {
@@ -456,6 +471,7 @@ fn dispatch_action(
                 replace_text: text,
                 chain,
                 execute: false,
+                restore_text: String::new(),
             })
         }
         Action::Cancel => {
@@ -469,6 +485,7 @@ fn dispatch_action(
                 replace_text,
                 chain: false,
                 execute: false,
+                restore_text: String::new(),
             })
         }
         Action::None => DispatchResult::Done(CompleteResult {
@@ -476,6 +493,7 @@ fn dispatch_action(
             replace_text: hex_encode(key_bytes),
             chain: false,
             execute: false,
+            restore_text: app.filter_text.clone(),
         }),
         Action::Resize(_, _) => DispatchResult::Continue,
     }
@@ -1742,9 +1760,7 @@ mod tests {
     use crate::fuzzy::FuzzyMatcher;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
-    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
-    use std::thread;
 
     fn read_frame<R: BufRead + Read>(reader: &mut R) -> (String, String) {
         let mut header = String::new();
@@ -1768,12 +1784,6 @@ mod tests {
             input.extend_from_slice(key);
         }
         input
-    }
-
-    fn send_key(writer: &mut UnixStream, bytes: &[u8]) {
-        writeln!(writer, "KEY {}", bytes.len()).unwrap();
-        writer.write_all(bytes).unwrap();
-        writer.flush().unwrap();
     }
 
     fn run_complete_session(
@@ -1842,10 +1852,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
 
         let apply = read_protocol_line(&mut reader);
-        assert_eq!(
-            apply.strip_suffix('\n').unwrap_or(&apply),
-            expected_apply,
-        );
+        assert_eq!(apply.strip_suffix('\n').unwrap_or(&apply), expected_apply,);
     }
 
     #[test]
@@ -1980,133 +1987,57 @@ mod tests {
 
     #[test]
     fn handle_complete_initial_frame_includes_common_prefix_when_enabled() {
-        // With auto_insert_unambiguous=true, the first FRAME header must carry
-        // common_prefix= when candidates share a longer prefix than the typed input.
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            server.config.auto_insert_unambiguous = true;
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let output = run_complete_session(
+            "gi",
+            "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            &[],
+            |server| server.config.auto_insert_unambiguous = true,
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(
             header.contains("common_prefix=git-"),
             "initial FRAME must contain common_prefix=git- when auto_insert enabled: {header}"
         );
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_sends_initial_frame_for_new_popup() {
-        let mut server = test_server();
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let output = run_complete_session(
+            "gi",
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "));
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_reuse_popup_redraws_popup_without_filter_line() {
-        let mut server = test_server();
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: true,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(client_stream);
+        let output = run_complete_session(
+            "gi",
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[],
+            |_| {},
+            true,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let (header, tty) = read_frame(&mut reader);
         assert!(header.starts_with("FRAME "));
         assert!(tty.contains("┌"));
         assert!(!tty.contains("\u{1b}[6;1Hgi"));
-
-        drop(reader);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_initial_frame_includes_popup_border() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let output = run_complete_session("gi", "git\tcommand\tcommand\n", &[], |_| {}, false);
+        let mut reader = BufReader::new(Cursor::new(output));
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "));
@@ -2121,93 +2052,39 @@ mod tests {
         let tty = String::from_utf8_lossy(&tty_bytes);
         assert!(tty.contains("┌"));
         assert!(tty.contains("git"));
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_tab_after_typing_selects_top_filtered_candidate() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "",
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[b"a", b"\t", b"\r"],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\t");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_confirm_after_typing_returns_filter_text() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "",
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[b"a", b"\r"],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2242,82 +2119,34 @@ mod tests {
 
     #[test]
     fn handle_complete_space_after_selection_returns_selected_candidate() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "",
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[b"a", b"\t", b" "],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\t");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_space_after_empty_kind_selection_appends_space() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\t\ngizmo\tcommand\t\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "gi",
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+            &[b" "],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2334,32 +2163,15 @@ mod tests {
 
     #[test]
     fn handle_complete_ctrl_j_passthrough_does_not_inject_newline() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "gi",
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[b"\n"],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"\n");
 
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
@@ -2380,10 +2192,6 @@ mod tests {
             extra.is_empty(),
             "unexpected extra protocol line: {extra:?}"
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2396,41 +2204,11 @@ mod tests {
     }
 
     fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let prefix = prefix.to_string();
-        let candidates_tsv = candidates_tsv.to_string();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix,
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                &candidates_tsv,
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(prefix, candidates_tsv, &[b"\r"], |_| {}, false);
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2453,46 +2231,19 @@ mod tests {
 
     #[test]
     fn handle_complete_cancel_returns_typed_prefix_when_auto_insert_disabled() {
-        // With auto_insert_unambiguous=false, cancel should echo back the typed
-        // prefix ("gi"), not the extended common prefix ("git-").
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            server.config.auto_insert_unambiguous = false;
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = &server_stream;
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let output = run_complete_session(
+            "gi",
+            "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            &[b"\x1b"],
+            |server| server.config.auto_insert_unambiguous = false,
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        // Send Escape (cancel)
-        send_key(&mut writer, b"\x1b");
-
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
         // With auto_insert enabled the extended "git-" would have been returned.
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     // --- Quoted-prefix regression tests (issue #15) ---
@@ -2722,6 +2473,7 @@ mod tests {
         assert!(result.replace_text.is_empty());
         assert!(!result.chain);
         assert!(!result.execute);
+        assert!(result.restore_text.is_empty());
     }
 
     #[test]
@@ -2742,5 +2494,6 @@ mod tests {
         assert!(result.replace_text.is_empty());
         assert!(!result.chain);
         assert!(!result.execute);
+        assert!(result.restore_text.is_empty());
     }
 }
