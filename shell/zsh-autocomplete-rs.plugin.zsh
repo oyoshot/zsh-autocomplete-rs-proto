@@ -860,7 +860,7 @@ _zacrs_complete_popup() {
         lbase="${LBUFFER% *} "
     fi
     local context_key=""
-    if [[ -n "$lbase" && -z "$naive_prefix" ]]; then
+    if [[ -n "$lbase" ]]; then
         local _ctx_lbase="$lbase"
         _ctx_lbase="${_ctx_lbase//%/%25}"
         _ctx_lbase="${_ctx_lbase//:/%3A}"
@@ -987,18 +987,17 @@ _zacrs_line_pre_redraw() {
     else
         lbase=""
     fi
-    # Non-empty argument prefixes have no cache-only retry path.  If we skip
-    # the heavy path here, there may be no later redraw for the final buffer.
+    # Even with cache-first enabled, a cache miss for a non-empty argument
+    # prefix may have no implicit later redraw. Keep a retry signal for that
+    # final heavy-path attempt.
     local needs_final_retry=0
     if [[ -n "$lbase" && -n "$naive_prefix" ]]; then
         needs_final_retry=1
     fi
-    # context_key は「引数位置かつ空 prefix」のときだけ設定する。
-    # 非空 prefix の補完候補は compsys が prefix で事前に絞り込む場合があり、
-    # 文脈単位の候補キャッシュを fuzzy 再フィルタすると Tab の候補集合とずれる。
-    # git サブコマンド補完 (git s / git st) が典型例。
+    # context_key は引数位置で設定する。候補キャッシュ自体の安全性は
+    # daemon 側が cached_prefix/current_prefix を比較して判定する。
     local context_key=""
-    if [[ -n "$lbase" && -z "$naive_prefix" ]]; then
+    if [[ -n "$lbase" ]]; then
         local _ctx_lbase="$lbase"
         _ctx_lbase="${_ctx_lbase//%/%25}"
         _ctx_lbase="${_ctx_lbase//:/%3A}"
@@ -1020,8 +1019,8 @@ _zacrs_line_pre_redraw() {
         _zacrs_maybe_retry_daemon
     fi
 
-    # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置の空 prefix のみ）。
-    # コマンド名位置や非空 prefix ではキャッシュを使わず常に heavy path へ。
+    # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置のみ）。
+    # 非空 prefix の再利用可否は daemon 側の prefix-aware cache が判定する。
     if (( _zacrs_daemon_available )) && [[ -n "$context_key" ]]; then
         local cursor_row=0 cursor_col=0
         if (( _zacrs_popup_visible
