@@ -59,6 +59,36 @@ fn tty_restore(fd: RawFd, saved: &libc::termios) {
     unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, saved as *const _) };
 }
 
+struct RawModeGuard {
+    fd: RawFd,
+    saved: libc::termios,
+    active: bool,
+}
+
+impl RawModeGuard {
+    fn new(fd: RawFd) -> io::Result<Self> {
+        let saved = tty_enable_raw(fd)?;
+        Ok(Self {
+            fd,
+            saved,
+            active: true,
+        })
+    }
+
+    fn restore(&mut self) {
+        if self.active {
+            tty_restore(self.fd, &self.saved);
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
 /// Read one key sequence (possibly multi-byte) from a raw fd.
 fn read_key_from_fd(fd: RawFd) -> io::Result<Vec<u8>> {
     let mut byte = [0u8; 1];
@@ -173,6 +203,16 @@ fn hex_encode(bytes: &[u8]) -> String {
     })
 }
 
+fn write_passthrough_result<W: Write>(
+    writer: &mut W,
+    key_bytes: &[u8],
+    restore_text: &str,
+) -> io::Result<()> {
+    writeln!(writer, "DONE 3 {}", hex_encode(key_bytes))?;
+    writeln!(writer, "APPLY chain=0 execute=0 restore={}", restore_text)?;
+    writer.flush()
+}
+
 /// Run a complete popup session with the tty owned by Rust.
 ///
 /// Parses candidates from `tsv`, renders the popup on `/dev/tty`,
@@ -227,8 +267,8 @@ pub fn run_tty_session(
     let tty_fd = crate::tty::open_tty_rw()?;
 
     // Enable raw mode
-    let saved_termios = match tty_enable_raw(tty_fd) {
-        Ok(t) => t,
+    let mut raw_mode = match RawModeGuard::new(tty_fd) {
+        Ok(guard) => guard,
         Err(e) => {
             unsafe { libc::close(tty_fd) };
             return Err(e);
@@ -308,7 +348,7 @@ pub fn run_tty_session(
     };
 
     // Disable raw mode before returning
-    tty_restore(tty_fd, &saved_termios);
+    raw_mode.restore();
 
     // Clear the popup
     if let Ok(clear_bytes) =
@@ -1350,12 +1390,13 @@ impl DaemonServer {
                     continue;
                 }
                 if byte_count > MAX_INLINE_KEY_BYTES {
-                    if drain_key_payload(reader, byte_count).is_err() {
+                    let key_buf = match read_key_payload(reader, byte_count) {
+                        Ok(key_buf) => key_buf,
+                        Err(_) => break,
+                    };
+                    if write_passthrough_result(writer, &key_buf, &app.filter_text).is_err() {
                         break;
                     }
-                    let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                    let _ = writeln!(writer, "APPLY chain=0 execute=0");
-                    let _ = writer.flush();
                     break;
                 }
                 let mut key_buf = vec![0u8; byte_count];
@@ -1464,9 +1505,7 @@ impl DaemonServer {
                         let _ = writer.flush();
                     }
                     Action::None => {
-                        let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                        let _ = writeln!(writer, "APPLY chain=0 execute=0");
-                        let _ = writer.flush();
+                        let _ = write_passthrough_result(writer, &key_buf, &app.filter_text);
                         break;
                     }
                 }
@@ -1497,23 +1536,10 @@ impl DaemonServer {
     }
 }
 
-fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<()> {
-    let mut remaining = byte_count;
-    let mut buf = [0u8; 256];
-
-    while remaining > 0 {
-        let chunk_len = remaining.min(buf.len());
-        let read = reader.read(&mut buf[..chunk_len])?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "short KEY payload while draining passthrough bytes",
-            ));
-        }
-        remaining -= read;
-    }
-
-    Ok(())
+fn read_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; byte_count];
+    reader.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
@@ -1709,7 +1735,8 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompleteParams, DaemonServer, RenderParams, read_prefix_and_candidates, read_text_line,
+        CompleteParams, DaemonServer, RenderParams, hex_encode, read_prefix_and_candidates,
+        read_text_line,
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
@@ -1719,7 +1746,7 @@ mod tests {
     use std::path::PathBuf;
     use std::thread;
 
-    fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
+    fn read_frame<R: BufRead + Read>(reader: &mut R) -> (String, String) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "), "header was: {header:?}");
@@ -1734,10 +1761,54 @@ mod tests {
         (header, String::from_utf8_lossy(&tty_bytes).into_owned())
     }
 
+    fn encode_key_messages(keys: &[&[u8]]) -> Vec<u8> {
+        let mut input = Vec::new();
+        for key in keys {
+            writeln!(&mut input, "KEY {}", key.len()).unwrap();
+            input.extend_from_slice(key);
+        }
+        input
+    }
+
     fn send_key(writer: &mut UnixStream, bytes: &[u8]) {
         writeln!(writer, "KEY {}", bytes.len()).unwrap();
         writer.write_all(bytes).unwrap();
         writer.flush().unwrap();
+    }
+
+    fn run_complete_session(
+        prefix: &str,
+        candidates_tsv: &str,
+        keys: &[&[u8]],
+        configure: impl FnOnce(&mut DaemonServer),
+        reuse_popup: bool,
+    ) -> Vec<u8> {
+        let mut server = test_server();
+        configure(&mut server);
+        let input = encode_key_messages(keys);
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: prefix.to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                reuse_popup,
+                shift_tab_sequence: None,
+            },
+            candidates_tsv,
+        );
+        writer
+    }
+
+    fn read_protocol_line<R: BufRead>(reader: &mut R) -> String {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        line
     }
 
     fn test_server() -> DaemonServer {
@@ -1757,41 +1828,24 @@ mod tests {
     }
 
     fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let prefix = prefix.to_string();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix,
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let expected_apply = format!("APPLY chain=0 execute=0 restore={prefix}");
+        let output = run_complete_session(
+            prefix,
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[key],
+            |_| {},
+            false,
+        );
+        let mut reader = BufReader::new(Cursor::new(output));
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, key);
-
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let done = read_protocol_line(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
 
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
+        let apply = read_protocol_line(&mut reader);
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            expected_apply,
+        );
     }
 
     #[test]
@@ -1933,7 +1987,7 @@ mod tests {
             let mut server = test_server();
             server.config.auto_insert_unambiguous = true;
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -1969,7 +2023,7 @@ mod tests {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2002,7 +2056,7 @@ mod tests {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2035,7 +2089,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2079,7 +2133,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2122,7 +2176,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2192,7 +2246,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2235,7 +2289,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2268,13 +2322,13 @@ mod tests {
 
     #[test]
     fn handle_complete_unknown_key_passthroughs_filter_text() {
-        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 gi");
+        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 1b5b44");
     }
 
     #[test]
     fn handle_complete_ctrl_bindings_passthrough_filter_text() {
         for key in [b"\x01".as_slice(), b"\x05", b"\x0b"] {
-            assert_passthrough_key("gi", key, "DONE 3 gi");
+            assert_passthrough_key("gi", key, &format!("DONE 3 {}", hex_encode(key)));
         }
     }
 
@@ -2284,7 +2338,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2309,13 +2363,13 @@ mod tests {
 
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
-        assert_eq!(done, "DONE 3 gi\n");
+        assert_eq!(done, "DONE 3 0a\n");
 
         // The APPLY line follows immediately after DONE for passthrough
         let mut apply = String::new();
         reader.read_line(&mut apply).unwrap();
         assert_eq!(
-            apply, "APPLY chain=0 execute=0\n",
+            apply, "APPLY chain=0 execute=0 restore=gi\n",
             "expected APPLY line after DONE 3: {apply:?}"
         );
 
@@ -2334,7 +2388,11 @@ mod tests {
 
     #[test]
     fn handle_complete_oversized_key_drains_payload_and_passthroughs() {
-        assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
+        assert_passthrough_key(
+            "gi",
+            b"\x1b[200~git status --short\x1b[201~",
+            "DONE 3 1b5b3230307e67697420737461747573202d2d73686f72741b5b3230317e",
+        );
     }
 
     fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
@@ -2344,7 +2402,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut server = test_server();
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
@@ -2402,7 +2460,7 @@ mod tests {
             let mut server = test_server();
             server.config.auto_insert_unambiguous = false;
             let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
+            let mut writer = &server_stream;
             server.handle_complete(
                 &mut reader,
                 &mut writer,
