@@ -42,6 +42,12 @@ struct CompleteParams {
 /// When this limit is reached the oldest entry is evicted to bound memory use.
 const CANDIDATE_CACHE_MAX_ENTRIES: usize = 8;
 
+#[derive(Clone)]
+struct CandidateCacheEntry {
+    source_prefix: String,
+    tsv: String,
+}
+
 struct DaemonServer {
     config: Config,
     theme: Theme,
@@ -50,9 +56,9 @@ struct DaemonServer {
     socket_path: PathBuf,
     fuzzy: Option<FuzzyMatcher>,
     /// Candidate-set cache keyed by `context_key` supplied by the shell.
-    /// Stores the raw TSV string so that `compute_reuse_token` can reuse the
-    /// same signature it would compute from a fresh payload.
-    candidate_cache: HashMap<String, String>,
+    /// Each entry also records the prefix used to gather it so cache-only
+    /// reuse can reject lookups that would broaden a compsys-prefiltered set.
+    candidate_cache: HashMap<String, CandidateCacheEntry>,
     /// Insertion-order tracking for LRU eviction.
     candidate_cache_order: Vec<String>,
 }
@@ -199,19 +205,25 @@ impl DaemonServer {
     }
 
     /// Look up a cached TSV payload by `context_key`.
-    /// Returns `Some(tsv)` on hit, `None` on miss. Cache hits refresh recency.
-    fn get_cached_tsv(&mut self, context_key: &str) -> Option<String> {
-        let tsv = self.candidate_cache.get(context_key).cloned()?;
+    /// Returns `Some(tsv)` only when `current_prefix` extends the cached
+    /// `source_prefix`; otherwise the lookup is treated as a miss because the
+    /// cached set may already be narrowed by compsys.
+    fn get_cached_tsv(&mut self, context_key: &str, current_prefix: &str) -> Option<String> {
+        let entry = self.candidate_cache.get(context_key)?.clone();
+        if !current_prefix.starts_with(&entry.source_prefix) {
+            return None;
+        }
         self.touch_cached_key(context_key);
-        Some(tsv)
+        Some(entry.tsv)
     }
 
     /// Store `tsv` in the candidate cache under `context_key`.
     /// Evicts the oldest entry when `CANDIDATE_CACHE_MAX_ENTRIES` is exceeded.
     /// Re-inserting an existing key moves it to the most-recent position.
-    fn store_cached_tsv(&mut self, context_key: &str, tsv: String) {
+    fn store_cached_tsv(&mut self, context_key: &str, source_prefix: String, tsv: String) {
+        let entry = CandidateCacheEntry { source_prefix, tsv };
         if self.candidate_cache.contains_key(context_key) {
-            self.candidate_cache.insert(context_key.to_string(), tsv);
+            self.candidate_cache.insert(context_key.to_string(), entry);
             self.touch_cached_key(context_key);
             return;
         }
@@ -222,7 +234,7 @@ impl DaemonServer {
             }
         }
         self.candidate_cache_order.push(context_key.to_string());
-        self.candidate_cache.insert(context_key.to_string(), tsv);
+        self.candidate_cache.insert(context_key.to_string(), entry);
     }
 
     fn maybe_reload_config(&mut self) {
@@ -428,7 +440,7 @@ impl DaemonServer {
                 // Cache-only request: TSV absent, context_key present.
                 if tsv_opt.is_none() {
                     if let Some(ref key) = context_key {
-                        if let Some(cached_tsv) = self.get_cached_tsv(key) {
+                        if let Some(cached_tsv) = self.get_cached_tsv(key, &prefix) {
                             let _span = info_span!(
                                 "render",
                                 protocol = "text",
@@ -487,7 +499,7 @@ impl DaemonServer {
                 let tsv = tsv_opt.unwrap();
                 // Update cache when context_key is provided with fresh TSV.
                 if let Some(ref key) = context_key {
-                    self.store_cached_tsv(key, tsv.clone());
+                    self.store_cached_tsv(key, prefix.clone(), tsv.clone());
                 }
 
                 let _span = info_span!(
@@ -557,7 +569,7 @@ impl DaemonServer {
                 let tsv = match tsv_opt {
                     None => {
                         if let Some(ref key) = context_key {
-                            match self.get_cached_tsv(key) {
+                            match self.get_cached_tsv(key, &prefix) {
                                 Some(cached) => {
                                     debug!(context_key = key.as_str(), "complete cache hit");
                                     cached
@@ -577,7 +589,7 @@ impl DaemonServer {
                     }
                     Some(tsv) => {
                         if let Some(ref key) = context_key {
-                            self.store_cached_tsv(key, tsv.clone());
+                            self.store_cached_tsv(key, prefix.clone(), tsv.clone());
                         }
                         tsv
                     }
@@ -2066,12 +2078,33 @@ mod tests {
     #[test]
     fn candidate_cache_get_returns_stored_payload() {
         let mut server = test_server();
-        server.store_cached_tsv("123:/tmp:git%20", "git\tcommand\tcommand\n".to_string());
+        server.store_cached_tsv(
+            "123:/tmp:git%20",
+            "gi".to_string(),
+            "git\tcommand\tcommand\n".to_string(),
+        );
         assert_eq!(
-            server.get_cached_tsv("123:/tmp:git%20"),
+            server.get_cached_tsv("123:/tmp:git%20", "git"),
             Some("git\tcommand\tcommand\n".to_string())
         );
-        assert_eq!(server.get_cached_tsv("missing"), None);
+        assert_eq!(server.get_cached_tsv("missing", "git"), None);
+    }
+
+    #[test]
+    fn candidate_cache_rejects_prefixes_that_do_not_extend_cached_prefix() {
+        let mut server = test_server();
+        server.store_cached_tsv(
+            "123:/tmp:git%20",
+            "st".to_string(),
+            "status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string(),
+        );
+
+        assert_eq!(
+            server.get_cached_tsv("123:/tmp:git%20", "sta"),
+            Some("status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string())
+        );
+        assert_eq!(server.get_cached_tsv("123:/tmp:git%20", "s"), None);
+        assert_eq!(server.get_cached_tsv("123:/tmp:git%20", "re"), None);
     }
 
     #[test]
@@ -2082,7 +2115,7 @@ mod tests {
         // Fill up to the eviction limit.
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             let key = format!("pid{}:git%20", i);
-            server.store_cached_tsv(&key, tsv.to_string());
+            server.store_cached_tsv(&key, "".to_string(), tsv.to_string());
         }
         assert_eq!(
             server.candidate_cache.len(),
@@ -2090,7 +2123,7 @@ mod tests {
         );
 
         // Insert one more entry — the oldest (pid0) should be evicted.
-        server.store_cached_tsv("new_key:git%20", tsv.to_string());
+        server.store_cached_tsv("new_key:git%20", "".to_string(), tsv.to_string());
         assert_eq!(
             server.candidate_cache.len(),
             super::CANDIDATE_CACHE_MAX_ENTRIES
@@ -2111,12 +2144,21 @@ mod tests {
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             server.store_cached_tsv(
                 &format!("pid{}:git%20", i),
+                "".to_string(),
                 format!("git{}\tcommand\tcommand\n", i),
             );
         }
 
-        server.store_cached_tsv("pid0:git%20", "git0-new\tcommand\tcommand\n".to_string());
-        server.store_cached_tsv("new_key:git%20", "new\tcommand\tcommand\n".to_string());
+        server.store_cached_tsv(
+            "pid0:git%20",
+            "".to_string(),
+            "git0-new\tcommand\tcommand\n".to_string(),
+        );
+        server.store_cached_tsv(
+            "new_key:git%20",
+            "".to_string(),
+            "new\tcommand\tcommand\n".to_string(),
+        );
 
         assert!(
             server.candidate_cache.contains_key("pid0:git%20"),
@@ -2127,7 +2169,7 @@ mod tests {
             "oldest untouched key should be evicted after pid0 is refreshed"
         );
         assert_eq!(
-            server.get_cached_tsv("pid0:git%20"),
+            server.get_cached_tsv("pid0:git%20", "git0-new"),
             Some("git0-new\tcommand\tcommand\n".to_string())
         );
     }
@@ -2138,15 +2180,20 @@ mod tests {
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             server.store_cached_tsv(
                 &format!("pid{}:git%20", i),
+                "".to_string(),
                 format!("git{}\tcommand\tcommand\n", i),
             );
         }
 
         assert_eq!(
-            server.get_cached_tsv("pid0:git%20"),
+            server.get_cached_tsv("pid0:git%20", "git0"),
             Some("git0\tcommand\tcommand\n".to_string())
         );
-        server.store_cached_tsv("new_key:git%20", "new\tcommand\tcommand\n".to_string());
+        server.store_cached_tsv(
+            "new_key:git%20",
+            "".to_string(),
+            "new\tcommand\tcommand\n".to_string(),
+        );
 
         assert!(
             server.candidate_cache.contains_key("pid0:git%20"),
