@@ -205,12 +205,12 @@ impl DaemonServer {
     }
 
     /// Look up a cached TSV payload by `context_key`.
-    /// Returns `Some(tsv)` only when `current_prefix` extends the cached
-    /// `source_prefix`; otherwise the lookup is treated as a miss because the
-    /// cached set may already be narrowed by compsys.
+    /// Returns `Some(tsv)` only when `current_prefix` exactly matches the
+    /// cached `source_prefix`; otherwise the lookup is treated as a miss
+    /// because the cached set may already be narrowed by compsys.
     fn get_cached_tsv(&mut self, context_key: &str, current_prefix: &str) -> Option<String> {
         let entry = self.candidate_cache.get(context_key)?.clone();
-        if !current_prefix.starts_with(&entry.source_prefix) {
+        if current_prefix != entry.source_prefix {
             return None;
         }
         self.touch_cached_key(context_key);
@@ -2080,7 +2080,7 @@ mod tests {
         let mut server = test_server();
         server.store_cached_tsv(
             "123:/tmp:git%20",
-            "gi".to_string(),
+            "git".to_string(),
             "git\tcommand\tcommand\n".to_string(),
         );
         assert_eq!(
@@ -2091,7 +2091,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_cache_rejects_prefixes_that_do_not_extend_cached_prefix() {
+    fn candidate_cache_rejects_prefixes_that_do_not_exactly_match_cached_prefix() {
         let mut server = test_server();
         server.store_cached_tsv(
             "123:/tmp:git%20",
@@ -2100,9 +2100,10 @@ mod tests {
         );
 
         assert_eq!(
-            server.get_cached_tsv("123:/tmp:git%20", "sta"),
+            server.get_cached_tsv("123:/tmp:git%20", "st"),
             Some("status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string())
         );
+        assert_eq!(server.get_cached_tsv("123:/tmp:git%20", "sta"), None);
         assert_eq!(server.get_cached_tsv("123:/tmp:git%20", "s"), None);
         assert_eq!(server.get_cached_tsv("123:/tmp:git%20", "re"), None);
     }
@@ -2144,14 +2145,14 @@ mod tests {
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             server.store_cached_tsv(
                 &format!("pid{}:git%20", i),
-                "".to_string(),
+                format!("git{}", i),
                 format!("git{}\tcommand\tcommand\n", i),
             );
         }
 
         server.store_cached_tsv(
             "pid0:git%20",
-            "".to_string(),
+            "git0-new".to_string(),
             "git0-new\tcommand\tcommand\n".to_string(),
         );
         server.store_cached_tsv(
@@ -2180,7 +2181,7 @@ mod tests {
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             server.store_cached_tsv(
                 &format!("pid{}:git%20", i),
-                "".to_string(),
+                format!("git{}", i),
                 format!("git{}\tcommand\tcommand\n", i),
             );
         }
