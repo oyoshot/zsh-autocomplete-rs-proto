@@ -24,10 +24,18 @@ impl Candidate {
         let Some(suffix) = suffixes.suffix_for_kind(&self.kind) else {
             return self.text.clone();
         };
-        if suffix.is_empty() || self.text.ends_with(suffix) {
-            self.text.clone()
+        let base_text = self
+            .kind
+            .eq("directory")
+            .then(|| self.text.strip_suffix('/'))
+            .flatten()
+            .filter(|base| !base.is_empty())
+            .unwrap_or(&self.text);
+
+        if suffix.is_empty() || base_text.ends_with(suffix) {
+            base_text.to_string()
         } else {
-            format!("{}{}", self.text, suffix)
+            format!("{}{}", base_text, suffix)
         }
     }
 
@@ -115,6 +123,20 @@ mod tests {
     fn text_with_suffix_directory_already_slashed() {
         let c = Candidate::parse_line("src/\t\tdirectory");
         assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "src/");
+    }
+
+    #[test]
+    fn text_with_suffix_directory_empty_override_removes_trailing_slash() {
+        let c = Candidate::parse_line("src/\t\tdirectory");
+        let suffixes = SuffixConfig::default().with_override("directory", "");
+        assert_eq!(c.text_with_suffix(&suffixes), "src");
+    }
+
+    #[test]
+    fn text_with_suffix_directory_custom_override_replaces_trailing_slash() {
+        let c = Candidate::parse_line("src/\t\tdirectory");
+        let suffixes = SuffixConfig::default().with_override("directory", " ");
+        assert_eq!(c.text_with_suffix(&suffixes), "src ");
     }
 
     #[test]
