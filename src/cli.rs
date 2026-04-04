@@ -73,6 +73,14 @@ pub enum Command {
         #[arg(long)]
         cursor_row: u16,
     },
+    /// Resolve single-candidate completion text using config-driven suffix rules
+    ResolveSingle {
+        #[arg(long, allow_hyphen_values = true)]
+        text: String,
+
+        #[arg(long, default_value = "")]
+        kind: String,
+    },
     /// Daemon management
     Daemon {
         #[command(subcommand)]
@@ -122,6 +130,26 @@ mod tests {
                 assert_eq!(context_key.as_deref(), Some("ctx"));
                 assert_eq!(prev_popup_row, Some(6));
                 assert_eq!(prev_popup_height, Some(12));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn resolve_single_accepts_hyphenated_text() {
+        let cli = Cli::parse_from([
+            "zsh-autocomplete-rs",
+            "resolve-single",
+            "--text",
+            "--watch",
+            "--kind",
+            "command",
+        ]);
+
+        match cli.command {
+            Command::ResolveSingle { text, kind } => {
+                assert_eq!(text, "--watch");
+                assert_eq!(kind, "command");
             }
             _ => panic!("unexpected command"),
         }

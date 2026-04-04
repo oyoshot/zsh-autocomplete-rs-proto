@@ -219,6 +219,26 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
     Ok(0)
 }
 
+fn run_resolve_single(text: String, kind: String) -> io::Result<()> {
+    let cfg = config::Config::load();
+    let candidate = Candidate {
+        text,
+        description: String::new(),
+        kind,
+    };
+    let resolved = candidate.text_with_suffix(&cfg.suffixes);
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    TextCompleteResult {
+        code: 0,
+        chain: resolved.ends_with([' ', '/']),
+        execute: false,
+        restore_text: String::new(),
+        text: resolved,
+    }
+    .write_to(&mut writer)
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -290,6 +310,13 @@ fn main() {
             cursor_row,
         } => match run_clear(popup_row, popup_height, cursor_row) {
             Ok(code) => process::exit(code),
+            Err(e) => {
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        },
+        Command::ResolveSingle { text, kind } => match run_resolve_single(text, kind) {
+            Ok(()) => process::exit(0),
             Err(e) => {
                 eprintln!("error: {}", e);
                 process::exit(1);

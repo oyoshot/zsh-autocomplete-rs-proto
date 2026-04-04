@@ -1089,7 +1089,9 @@ impl DaemonServer {
                             Some(c) => {
                                 let _ = write_apply_result(
                                     writer,
-                                    &ApplyResult::confirm(c.text_with_suffix()),
+                                    &ApplyResult::confirm(
+                                        c.text_with_suffix(&self.config.suffixes),
+                                    ),
                                 );
                             }
                             None => {
@@ -1107,7 +1109,7 @@ impl DaemonServer {
                                 let _ = write_apply_result(
                                     writer,
                                     &ApplyResult::dismiss_with_space(
-                                        c.text_for_dismiss_with_space(),
+                                        c.text_for_dismiss_with_space(&self.config.suffixes),
                                     ),
                                 );
                             }
@@ -1393,7 +1395,7 @@ mod tests {
     use std::path::PathBuf;
     use std::thread;
 
-    fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
+    fn read_frame<R: BufRead>(reader: &mut R) -> (String, String) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "), "header was: {header:?}");
@@ -1414,7 +1416,7 @@ mod tests {
         writer.flush().unwrap();
     }
 
-    fn read_done(reader: &mut BufReader<UnixStream>) -> (String, String) {
+    fn read_done<R: BufRead>(reader: &mut R) -> (String, String) {
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
         let mut apply = String::new();
@@ -2103,6 +2105,44 @@ mod tests {
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
             "APPLY chain=1 execute=1 restore_hex=",
+        );
+    }
+
+    #[test]
+    fn handle_complete_confirm_uses_configured_suffix() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b"\r");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "ca".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 cargo!");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=1 restore_hex="
         );
     }
 

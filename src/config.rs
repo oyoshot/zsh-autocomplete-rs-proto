@@ -1,5 +1,6 @@
 use crossterm::style::Color;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -12,6 +13,7 @@ fn config_path() -> Option<PathBuf> {
 pub struct Config {
     pub max_visible: usize,
     pub auto_insert_unambiguous: bool,
+    pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
     theme_raw: ThemeRaw,
 }
@@ -21,6 +23,7 @@ impl Default for Config {
         Config {
             max_visible: 10,
             auto_insert_unambiguous: true,
+            suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
             theme_raw: ThemeRaw::default(),
         }
@@ -54,6 +57,8 @@ struct ConfigFile {
     theme: ThemeRaw,
     #[serde(default)]
     completion: CompletionRaw,
+    #[serde(default)]
+    suffix: SuffixRaw,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -75,6 +80,49 @@ struct ThemeRaw {
     description: Option<String>,
     filter: Option<String>,
     candidate: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SuffixRaw {
+    #[serde(flatten)]
+    by_kind: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuffixConfig {
+    by_kind: HashMap<String, String>,
+}
+
+impl Default for SuffixConfig {
+    fn default() -> Self {
+        let mut by_kind = HashMap::new();
+        by_kind.insert("directory".to_string(), "/".to_string());
+        by_kind.insert("command".to_string(), " ".to_string());
+        by_kind.insert("alias".to_string(), " ".to_string());
+        by_kind.insert("builtin".to_string(), " ".to_string());
+        by_kind.insert("function".to_string(), " ".to_string());
+        by_kind.insert("file".to_string(), " ".to_string());
+        Self { by_kind }
+    }
+}
+
+impl SuffixConfig {
+    fn from_raw(raw: SuffixRaw) -> Self {
+        let mut suffixes = Self::default();
+        for (kind, suffix) in raw.by_kind {
+            suffixes.by_kind.insert(kind, suffix);
+        }
+        suffixes
+    }
+
+    pub fn suffix_for_kind(&self, kind: &str) -> Option<&str> {
+        self.by_kind.get(kind).map(String::as_str)
+    }
+
+    pub fn with_override(mut self, kind: impl Into<String>, suffix: impl Into<String>) -> Self {
+        self.by_kind.insert(kind.into(), suffix.into());
+        self
+    }
 }
 
 /// Parsed keybindings passed to read_action
@@ -185,6 +233,7 @@ impl Config {
         Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
+            suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
             theme_raw: file.theme,
         }
@@ -446,6 +495,30 @@ mod tests {
             file.completion.auto_insert_unambiguous,
             "fallback default must be true"
         );
+    }
+
+    #[test]
+    fn suffix_defaults_match_current_behavior() {
+        let suffixes = SuffixConfig::default();
+        assert_eq!(suffixes.suffix_for_kind("directory"), Some("/"));
+        assert_eq!(suffixes.suffix_for_kind("command"), Some(" "));
+        assert_eq!(suffixes.suffix_for_kind("alias"), Some(" "));
+        assert_eq!(suffixes.suffix_for_kind("builtin"), Some(" "));
+        assert_eq!(suffixes.suffix_for_kind("function"), Some(" "));
+        assert_eq!(suffixes.suffix_for_kind("file"), Some(" "));
+        assert_eq!(suffixes.suffix_for_kind("other"), None);
+    }
+
+    #[test]
+    fn suffix_overrides_parse_from_toml() {
+        let file: ConfigFile =
+            toml::from_str("[suffix]\ndirectory = \"\"\ncommand = \"!\"\nparameter = \"=\"\n")
+                .unwrap();
+        let suffixes = SuffixConfig::from_raw(file.suffix);
+        assert_eq!(suffixes.suffix_for_kind("directory"), Some(""));
+        assert_eq!(suffixes.suffix_for_kind("command"), Some("!"));
+        assert_eq!(suffixes.suffix_for_kind("parameter"), Some("="));
+        assert_eq!(suffixes.suffix_for_kind("file"), Some(" "));
     }
 
     #[test]
