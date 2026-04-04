@@ -340,6 +340,39 @@ fn open_tty_writer(tty_fd: &OwnedFd) -> io::Result<File> {
     File::options().write(true).open("/dev/tty")
 }
 
+const MAX_ESCAPE_SEQUENCE_LEN: usize = 32;
+const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
+const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
+
+fn is_escape_sequence_complete(buf: &[u8]) -> bool {
+    if buf.starts_with(BRACKETED_PASTE_START) && !buf.ends_with(BRACKETED_PASTE_END) {
+        return false;
+    }
+
+    buf.last()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'~')
+        || buf.len() >= MAX_ESCAPE_SEQUENCE_LEN
+}
+
+fn poll_fd_for_read(fd: i32) -> Result<bool, DaemonUnavailable> {
+    let mut tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 50_000,
+    };
+    let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
+    unsafe { libc::FD_SET(fd, &mut readfds) };
+    let ret = retry_on_eintr(|| unsafe {
+        libc::select(
+            fd + 1,
+            &mut readfds,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut tv,
+        )
+    })?;
+    Ok(ret != 0)
+}
+
 fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
     let mut byte = [0u8; 1];
     let n = retry_on_eintr(|| unsafe {
@@ -352,23 +385,8 @@ fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
     let first = byte[0];
     let mut buf = vec![first];
     if first == 0x1b {
-        let mut tv = libc::timeval {
-            tv_sec: 0,
-            tv_usec: 50_000,
-        };
         loop {
-            let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
-            unsafe { libc::FD_SET(fd, &mut readfds) };
-            let ret = retry_on_eintr(|| unsafe {
-                libc::select(
-                    fd + 1,
-                    &mut readfds,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    &mut tv,
-                )
-            })?;
-            if ret == 0 {
+            if !poll_fd_for_read(fd)? {
                 break;
             }
             let n2 = retry_on_eintr(|| unsafe {
@@ -378,7 +396,7 @@ fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
                 break;
             }
             buf.push(byte[0]);
-            if byte[0].is_ascii_alphabetic() || byte[0] == b'~' || buf.len() >= 32 {
+            if is_escape_sequence_complete(&buf) {
                 break;
             }
         }
@@ -414,11 +432,11 @@ fn extract_single_key(buf: &[u8], pos: &mut usize) -> Vec<u8> {
     *pos += 1;
     let mut key = vec![first];
     if first == 0x1b {
-        while *pos < buf.len() && key.len() < 32 {
-            let b = buf[*pos];
+        while *pos < buf.len() {
+            let next = buf[*pos];
             *pos += 1;
-            key.push(b);
-            if b.is_ascii_alphabetic() || b == b'~' {
+            key.push(next);
+            if is_escape_sequence_complete(&key) {
                 break;
             }
         }
@@ -494,6 +512,7 @@ impl Drop for RawModeGuard {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::fd::FromRawFd;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_file_path(label: &str) -> std::path::PathBuf {
@@ -539,5 +558,32 @@ mod tests {
 
         assert_eq!(result.code, 1);
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn extract_single_key_keeps_bracketed_paste_together() {
+        let buf = b"\x1b[200~git status --short\x1b[201~x";
+        let mut pos = 0;
+
+        let key = extract_single_key(buf, &mut pos);
+
+        assert_eq!(key, b"\x1b[200~git status --short\x1b[201~");
+        assert_eq!(pos, key.len());
+    }
+
+    #[test]
+    fn read_key_from_fd_keeps_bracketed_paste_together() {
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let reader = unsafe { File::from_raw_fd(fds[0]) };
+        let mut writer = unsafe { File::from_raw_fd(fds[1]) };
+        writer
+            .write_all(b"\x1b[200~git status --short\x1b[201~")
+            .unwrap();
+        drop(writer);
+
+        let key = read_key_from_fd(reader.as_raw_fd()).unwrap();
+
+        assert_eq!(key, b"\x1b[200~git status --short\x1b[201~");
     }
 }
