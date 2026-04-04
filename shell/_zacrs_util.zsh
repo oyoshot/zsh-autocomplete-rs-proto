@@ -62,10 +62,10 @@ _zacrs_command_kind() {
 
     if (( ${+aliases[$name]} )); then
         REPLY="alias"
-    elif (( ${+builtins[$name]} )); then
-        REPLY="builtin"
     elif (( ${+functions[$name]} )) && [[ "$name" != _* ]]; then
         REPLY="function"
+    elif (( ${+builtins[$name]} )); then
+        REPLY="builtin"
     elif (( ${+commands[$name]} )); then
         REPLY="command"
     else
