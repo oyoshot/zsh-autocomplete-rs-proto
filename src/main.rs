@@ -2,6 +2,7 @@ use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
+use zsh_autocomplete_rs::protocol::TextCompleteResult;
 use zsh_autocomplete_rs::{client, config, daemon, protocol, tty, ui};
 
 use clap::Parser;
@@ -14,19 +15,8 @@ fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
 }
 
-fn write_done_result(
-    mut writer: impl Write,
-    result: &client::CompleteSessionResult,
-) -> io::Result<()> {
-    writeln!(writer, "DONE {} {}", result.code, result.text)?;
-    writeln!(
-        writer,
-        "APPLY chain={} execute={} restore={}",
-        if result.chain { 1 } else { 0 },
-        if result.execute { 1 } else { 0 },
-        result.restore_text
-    )?;
-    writer.flush()
+fn write_done_result(writer: impl Write, result: &TextCompleteResult) -> io::Result<()> {
+    result.write_to(writer)
 }
 
 struct CompleteCommand {

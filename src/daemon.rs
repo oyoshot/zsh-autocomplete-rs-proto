@@ -12,7 +12,10 @@ use crate::config::{Config, KeyBindings, Theme};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
-use crate::protocol::{self, Request, Response};
+use crate::protocol::{
+    self, Request, Response, TextClearRequest, TextCompleteRequest, TextCompleteResult,
+    TextFrameHeader, TextRenderRequest, TextRequest,
+};
 use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
@@ -75,15 +78,14 @@ fn encode_hex_bytes(bytes: &[u8]) -> String {
 }
 
 fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
-    writeln!(writer, "DONE {} {}", result.code, result.text)?;
-    writeln!(
-        writer,
-        "APPLY chain={} execute={} restore={}",
-        if result.chain { 1 } else { 0 },
-        if result.execute { 1 } else { 0 },
-        result.restore_text
-    )?;
-    writer.flush()
+    TextCompleteResult {
+        code: result.code,
+        text: result.text.clone(),
+        chain: result.chain,
+        execute: result.execute,
+        restore_text: result.restore_text.clone(),
+    }
+    .write_to(writer)
 }
 
 struct RenderParams {
@@ -485,26 +487,22 @@ impl DaemonServer {
             return false;
         }
         let header = header.trim_end();
-        let parts: Vec<&str> = header.split(' ').collect();
-
-        if parts.is_empty() {
-            warn!("received empty text request");
+        let Some(request) = TextRequest::parse_header(header) else {
+            warn!(header = header, "unknown text request");
             return false;
-        }
+        };
 
         let mut writer = io::BufWriter::new(stream);
 
-        match parts[0] {
-            "render" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
-                let selected: Option<usize> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("selected="))
-                    .and_then(|v| v.parse().ok());
-                let context_key: Option<String> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("context_key="))
-                    .map(str::to_string);
+        match request {
+            TextRequest::Render(TextRenderRequest {
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                selected,
+                context_key,
+            }) => {
                 let (prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
                         Ok(v) => v,
@@ -545,8 +543,11 @@ impl DaemonServer {
                                     metadata,
                                 } => {
                                     let meta = metadata.unwrap_or_default();
-                                    let _ =
-                                        writeln!(writer, "OK {} tty_len={}", meta, tty_bytes.len());
+                                    let _ = protocol::write_text_ok(
+                                        &mut writer,
+                                        &meta,
+                                        tty_bytes.len(),
+                                    );
                                     let _ = writer.write_all(&tty_bytes);
                                     let _ = writer.flush();
                                 }
@@ -607,7 +608,7 @@ impl DaemonServer {
                         metadata,
                     } => {
                         let meta = metadata.unwrap_or_default();
-                        let _ = writeln!(writer, "OK {} tty_len={}", meta, tty_bytes.len());
+                        let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
                         let _ = writer.write_all(&tty_bytes);
                         let _ = writer.flush();
                     }
@@ -620,27 +621,16 @@ impl DaemonServer {
                 }
                 false
             }
-            "complete" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
-                let reuse_popup = parts[5..]
-                    .iter()
-                    .any(|part| part.starts_with("reuse_token="));
-                let prev_popup_row = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("prev_popup_row="))
-                    .and_then(|value| value.parse().ok());
-                let prev_popup_height = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("prev_popup_height="))
-                    .and_then(|value| value.parse().ok());
-                let shift_tab_sequence = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("shift_tab_hex="))
-                    .and_then(crate::protocol::decode_hex_bytes);
-                let context_key: Option<String> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("context_key="))
-                    .map(str::to_string);
+            TextRequest::Complete(TextCompleteRequest {
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                prev_popup,
+                reuse_token,
+                shift_tab_sequence,
+                context_key,
+            }) => {
                 let (prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "complete") {
                         Ok(v) => v,
@@ -687,8 +677,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_popup,
-                    extra_parts = parts.len().saturating_sub(5),
+                    reuse_popup = reuse_token.is_some(),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -706,20 +695,20 @@ impl DaemonServer {
                         cursor_col,
                         term_cols,
                         term_rows,
-                        prev_popup_row,
-                        prev_popup_height,
-                        reuse_popup,
+                        prev_popup_row: prev_popup.map(|(row, _)| row),
+                        prev_popup_height: prev_popup.map(|(_, height)| height),
+                        reuse_popup: reuse_token.is_some(),
                         shift_tab_sequence,
                     },
                     &tsv,
                 );
                 false
             }
-            "clear" if parts.len() == 4 => {
-                let popup_row: u16 = parts[1].parse().unwrap_or(0);
-                let popup_height: u16 = parts[2].parse().unwrap_or(0);
-                let cursor_row: u16 = parts[3].parse().unwrap_or(0);
-
+            TextRequest::Clear(TextClearRequest {
+                popup_row,
+                popup_height,
+                cursor_row,
+            }) => {
                 let _span = info_span!(
                     "clear",
                     protocol = "text",
@@ -741,21 +730,17 @@ impl DaemonServer {
                 }
                 false
             }
-            "ping" => {
+            TextRequest::Ping => {
                 let _span = info_span!("ping", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 false
             }
-            "shutdown" => {
+            TextRequest::Shutdown => {
                 let _span = info_span!("shutdown", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 true
-            }
-            _ => {
-                warn!(header = header, "unknown text request");
-                false
             }
         }
     }
@@ -781,17 +766,16 @@ impl DaemonServer {
             .transpose()?
             .unwrap_or_default();
         let total_len = stale_clear_bytes.len() + extra_prefix.len() + tty_bytes.len();
-        write!(
-            writer,
-            "FRAME popup_row={} popup_height={} cursor_row={}",
-            popup.row, popup.height, app.cursor_row
-        )?;
-        if let Some(cp) = common_prefix {
-            if ui::popup::is_safe_prefix(cp) {
-                write!(writer, " common_prefix={}", cp)?;
-            }
+        TextFrameHeader {
+            popup_row: popup.row,
+            popup_height: popup.height,
+            cursor_row: app.cursor_row,
+            common_prefix: common_prefix
+                .filter(|value| ui::popup::is_safe_prefix(value))
+                .map(str::to_string),
+            tty_len: total_len,
         }
-        writeln!(writer, " {}", total_len)?;
+        .write_to(writer)?;
         if !stale_clear_bytes.is_empty() {
             writer.write_all(&stale_clear_bytes)?;
         }
@@ -1212,14 +1196,6 @@ fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io:
     }
 
     Ok(payload)
-}
-
-fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
-    let cursor_row: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let cursor_col: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let term_cols: u16 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(80);
-    let term_rows: u16 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(24);
-    (cursor_row, cursor_col, term_cols, term_rows)
 }
 
 /// Reads prefix line and optional TSV candidate payload from the text protocol stream.

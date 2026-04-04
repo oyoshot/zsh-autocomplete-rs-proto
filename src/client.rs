@@ -4,7 +4,9 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-use crate::protocol::{self, Request, Response};
+use crate::protocol::{
+    self, Request, Response, TextCompleteRequest, TextCompleteResult, TextFrameHeader,
+};
 use crate::tty;
 use crate::ui;
 
@@ -13,16 +15,8 @@ pub struct RenderResponse {
     pub metadata: Option<String>,
 }
 
-pub struct CompleteSessionResult {
-    pub code: u8,
-    pub text: String,
-    pub chain: bool,
-    pub execute: bool,
-    pub restore_text: String,
-}
-
 pub enum CompleteSessionOutcome {
-    Done(CompleteSessionResult),
+    Done(TextCompleteResult),
     CacheMiss,
 }
 
@@ -104,20 +98,17 @@ pub fn try_daemon_complete(
         .map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut reader = BufReader::new(stream);
 
-    let mut req = format!("complete {cursor_row} {cursor_col} {term_cols} {term_rows}");
-    if let Some((row, height)) = prev_popup {
-        req.push_str(&format!(" prev_popup_row={row} prev_popup_height={height}"));
-    }
-    if let Some(token) = reuse_token {
-        req.push_str(&format!(" reuse_token={token}"));
-    }
-    if let Some(key) = context_key {
-        req.push_str(&format!(" context_key={key}"));
-    }
-    if let Some(shift_tab_hex) = shift_tab_sequence.as_deref().map(encode_hex_bytes) {
-        req.push_str(&format!(" shift_tab_hex={shift_tab_hex}"));
-    }
-    writeln!(writer, "{req}").map_err(|_| DaemonUnavailable::NotRunning)?;
+    let request = TextCompleteRequest {
+        cursor_row,
+        cursor_col,
+        term_cols,
+        term_rows,
+        prev_popup,
+        reuse_token: reuse_token.map(str::to_string),
+        shift_tab_sequence,
+        context_key: context_key.map(str::to_string),
+    };
+    writeln!(writer, "{}", request.header_line()).map_err(|_| DaemonUnavailable::NotRunning)?;
     writeln!(writer, "{prefix}").map_err(|_| DaemonUnavailable::NotRunning)?;
     if !candidates_tsv.trim().is_empty() {
         writeln!(writer, "{candidates_tsv}").map_err(|_| DaemonUnavailable::NotRunning)?;
@@ -143,7 +134,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     writer: &mut W,
     initial_header: &str,
     stale_bytes: Vec<u8>,
-) -> Result<CompleteSessionResult, DaemonUnavailable> {
+) -> Result<TextCompleteResult, DaemonUnavailable> {
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
 
@@ -153,7 +144,8 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
             state.handle_frame(reader, &mut tty_writer, value)?;
         }
         value if value.starts_with("DONE ") => {
-            return read_done_response(reader, value);
+            return TextCompleteResult::read_from(reader, value)
+                .map_err(|_| DaemonUnavailable::NotRunning);
         }
         "NONE" => return Err(DaemonUnavailable::EmptyResult),
         _ => return Err(DaemonUnavailable::NotRunning),
@@ -240,8 +232,11 @@ impl SessionState {
         tty_writer: &mut File,
         header: &str,
     ) -> Result<(), DaemonUnavailable> {
-        let tty_len = parse_frame_header(self, header).ok_or(DaemonUnavailable::NotRunning)?;
-        relay_tty_bytes(reader, tty_writer, tty_len)?;
+        let frame = TextFrameHeader::parse(header).ok_or(DaemonUnavailable::NotRunning)?;
+        self.popup_row = frame.popup_row;
+        self.popup_height = frame.popup_height;
+        self.cursor_row = frame.cursor_row;
+        relay_tty_bytes(reader, tty_writer, frame.tty_len)?;
         Ok(())
     }
 
@@ -251,7 +246,7 @@ impl SessionState {
         writer: &mut W,
         tty_writer: &mut File,
         key: &[u8],
-    ) -> Result<Option<CompleteSessionResult>, DaemonUnavailable> {
+    ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
         writeln!(writer, "KEY {}", key.len()).map_err(|_| DaemonUnavailable::NotRunning)?;
         writer
             .write_all(key)
@@ -268,7 +263,9 @@ impl SessionState {
                 self.handle_frame(reader, tty_writer, value)?;
                 Ok(None)
             }
-            value if value.starts_with("DONE ") => read_done_response(reader, value).map(Some),
+            value if value.starts_with("DONE ") => TextCompleteResult::read_from(reader, value)
+                .map(Some)
+                .map_err(|_| DaemonUnavailable::NotRunning),
             "NONE" => Ok(None),
             _ => Err(DaemonUnavailable::NotRunning),
         }
@@ -288,64 +285,8 @@ impl SessionState {
     }
 }
 
-fn parse_frame_header(state: &mut SessionState, header: &str) -> Option<usize> {
-    let mut tty_len = None;
-    for token in header.split_whitespace().skip(1) {
-        if let Some(value) = token.strip_prefix("popup_row=") {
-            state.popup_row = value.parse().ok()?;
-        } else if let Some(value) = token.strip_prefix("popup_height=") {
-            state.popup_height = value.parse().ok()?;
-        } else if let Some(value) = token.strip_prefix("cursor_row=") {
-            state.cursor_row = value.parse().ok()?;
-        } else if !token.contains('=') {
-            tty_len = token.parse().ok();
-        }
-    }
-    tty_len
-}
-
 fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
-}
-
-fn read_done_response<R: BufRead>(
-    reader: &mut R,
-    header: &str,
-) -> Result<CompleteSessionResult, DaemonUnavailable> {
-    let mut parts = header.splitn(3, ' ');
-    let _ = parts.next();
-    let code = parts
-        .next()
-        .and_then(|value| value.parse().ok())
-        .ok_or(DaemonUnavailable::NotRunning)?;
-    let text = parts.next().unwrap_or_default().to_string();
-
-    let mut apply = String::new();
-    reader
-        .read_line(&mut apply)
-        .map_err(|_| DaemonUnavailable::NotRunning)?;
-    let apply = trim_line_end(&apply);
-    let mut chain = false;
-    let mut execute = false;
-    let mut restore_text = String::new();
-    for token in apply.split_whitespace().skip(1) {
-        if let Some(value) = token.strip_prefix("chain=") {
-            chain = value == "1";
-        } else if let Some(value) = token.strip_prefix("execute=") {
-            execute = value == "1";
-        }
-    }
-    if let Some(value) = apply.split_once(" restore=").map(|(_, value)| value) {
-        restore_text = value.to_string();
-    }
-
-    Ok(CompleteSessionResult {
-        code,
-        text,
-        chain,
-        execute,
-        restore_text,
-    })
 }
 
 fn relay_tty_bytes<R: Read>(
@@ -364,16 +305,6 @@ fn relay_tty_bytes<R: Read>(
         .write_all(&buf)
         .and_then(|_| tty_writer.flush())
         .map_err(|_| DaemonUnavailable::NotRunning)
-}
-
-fn encode_hex_bytes(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    encoded
 }
 
 fn open_tty_writer(tty_fd: &OwnedFd) -> io::Result<File> {
@@ -544,7 +475,7 @@ mod tests {
     #[test]
     fn read_done_response_preserves_text_and_restore_spaces() {
         let mut reader = BufReader::new("APPLY chain=1 execute=0 restore=cargo \n".as_bytes());
-        let result = read_done_response(&mut reader, "DONE 2 cargo ").unwrap();
+        let result = TextCompleteResult::read_from(&mut reader, "DONE 2 cargo ").unwrap();
         assert_eq!(result.code, 2);
         assert_eq!(result.text, "cargo ");
         assert!(result.chain);
