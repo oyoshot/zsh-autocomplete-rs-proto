@@ -23,6 +23,12 @@ pub enum Command {
         #[arg(long)]
         shift_tab_hex: Option<String>,
 
+        #[arg(long)]
+        prev_popup_row: Option<u16>,
+
+        #[arg(long)]
+        prev_popup_height: Option<u16>,
+
         #[arg(long, default_value_t = 80)]
         cols: u16,
 
@@ -73,11 +79,22 @@ mod tests {
             "complete",
             "--shift-tab-hex",
             "1b5b32373b323b397e",
+            "--prev-popup-row",
+            "6",
+            "--prev-popup-height",
+            "12",
         ]);
 
         match cli.command {
-            Command::Complete { shift_tab_hex, .. } => {
+            Command::Complete {
+                shift_tab_hex,
+                prev_popup_row,
+                prev_popup_height,
+                ..
+            } => {
                 assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
+                assert_eq!(prev_popup_row, Some(6));
+                assert_eq!(prev_popup_height, Some(12));
             }
             _ => panic!("unexpected command"),
         }

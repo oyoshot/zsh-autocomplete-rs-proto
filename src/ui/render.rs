@@ -323,6 +323,43 @@ pub fn clear_rect_to_bytes(
     Ok(buf)
 }
 
+pub fn clear_stale_rows_to_bytes(
+    prev_popup_row: u16,
+    prev_popup_height: u16,
+    new_popup_row: u16,
+    new_popup_height: u16,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(128);
+
+    if prev_popup_height == 0 {
+        return Ok(buf);
+    }
+
+    let prev_end = prev_popup_row.saturating_add(prev_popup_height);
+    let new_end = new_popup_row.saturating_add(new_popup_height);
+    let mut wrote_any = false;
+
+    for row in prev_popup_row..prev_end {
+        if row < new_popup_row || row >= new_end {
+            if !wrote_any {
+                crossterm::queue!(&mut buf, cursor::SavePosition)?;
+                wrote_any = true;
+            }
+            crossterm::queue!(
+                &mut buf,
+                cursor::MoveTo(0, row),
+                terminal::Clear(terminal::ClearType::CurrentLine),
+            )?;
+        }
+    }
+
+    if wrote_any {
+        crossterm::queue!(&mut buf, cursor::RestorePosition)?;
+    }
+
+    Ok(buf)
+}
+
 #[inline]
 pub fn truncate_to_width(s: &str, max_width: usize) -> String {
     // Fast path: most candidates fit without truncation
@@ -463,5 +500,20 @@ mod tests {
         assert_eq!(popup.width, 1);
         assert_eq!(popup.row, 0);
         assert_eq!(popup.col, 0);
+    }
+
+    #[test]
+    fn clear_stale_rows_to_bytes_is_empty_when_ranges_match() {
+        let bytes = clear_stale_rows_to_bytes(6, 4, 6, 4).unwrap();
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn clear_stale_rows_to_bytes_clears_non_overlapping_rows() {
+        let bytes = clear_stale_rows_to_bytes(6, 4, 7, 2).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
+        assert!(ansi.contains("[7;1H"));
+        assert!(ansi.contains("[10;1H"));
     }
 }

@@ -101,6 +101,8 @@ struct CompleteParams {
     cursor_col: u16,
     term_cols: u16,
     term_rows: u16,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
     reuse_popup: bool,
     shift_tab_sequence: Option<Vec<u8>>,
 }
@@ -163,6 +165,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     term_cols: u16,
     term_rows: u16,
     shift_tab_sequence: Option<Vec<u8>>,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
     tsv: &str,
 ) {
     let config = Config::load();
@@ -184,6 +188,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         cursor_col,
         term_cols,
         term_rows,
+        prev_popup_row,
+        prev_popup_height,
         reuse_popup: false,
         shift_tab_sequence,
     };
@@ -619,6 +625,14 @@ impl DaemonServer {
                 let reuse_popup = parts[5..]
                     .iter()
                     .any(|part| part.starts_with("reuse_token="));
+                let prev_popup_row = parts[5..]
+                    .iter()
+                    .find_map(|part| part.strip_prefix("prev_popup_row="))
+                    .and_then(|value| value.parse().ok());
+                let prev_popup_height = parts[5..]
+                    .iter()
+                    .find_map(|part| part.strip_prefix("prev_popup_height="))
+                    .and_then(|value| value.parse().ok());
                 let shift_tab_sequence = parts[5..]
                     .iter()
                     .find_map(|part| part.strip_prefix("shift_tab_hex="))
@@ -692,6 +706,8 @@ impl DaemonServer {
                         cursor_col,
                         term_cols,
                         term_rows,
+                        prev_popup_row,
+                        prev_popup_height,
                         reuse_popup,
                         shift_tab_sequence,
                     },
@@ -749,6 +765,7 @@ impl DaemonServer {
         writer: &mut W,
         app: &App,
         extra_prefix: &[u8],
+        prev_popup: Option<(u16, u16)>,
         popup_only: bool,
         common_prefix: Option<&str>,
     ) -> io::Result<()> {
@@ -757,7 +774,13 @@ impl DaemonServer {
         } else {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
-        let total_len = extra_prefix.len() + tty_bytes.len();
+        let stale_clear_bytes = prev_popup
+            .map(|(row, height)| {
+                ui::render::clear_stale_rows_to_bytes(row, height, popup.row, popup.height)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let total_len = stale_clear_bytes.len() + extra_prefix.len() + tty_bytes.len();
         write!(
             writer,
             "FRAME popup_row={} popup_height={} cursor_row={}",
@@ -769,6 +792,9 @@ impl DaemonServer {
             }
         }
         writeln!(writer, " {}", total_len)?;
+        if !stale_clear_bytes.is_empty() {
+            writer.write_all(&stale_clear_bytes)?;
+        }
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
         }
@@ -946,6 +972,8 @@ impl DaemonServer {
             cursor_col,
             term_cols,
             term_rows,
+            prev_popup_row,
+            prev_popup_height,
             reuse_popup,
             shift_tab_sequence,
         } = params;
@@ -964,11 +992,13 @@ impl DaemonServer {
             .flatten();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
+        let prev_popup = prev_popup_row.zip(prev_popup_height);
         if self
             .send_frame(
                 writer,
                 &app,
                 &scroll_bytes,
+                prev_popup,
                 reuse_fast_path,
                 initial_common_prefix.as_deref(),
             )
@@ -1024,7 +1054,10 @@ impl DaemonServer {
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
                         apply_navigation(&mut app, action);
-                        if self.send_frame(writer, &app, &[], false, None).is_err() {
+                        if self
+                            .send_frame(writer, &app, &[], None, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1039,7 +1072,7 @@ impl DaemonServer {
                             break;
                         }
                         if self
-                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .send_frame(writer, &app, &clear_bytes, None, false, None)
                             .is_err()
                         {
                             break;
@@ -1061,7 +1094,7 @@ impl DaemonServer {
                             break;
                         }
                         if self
-                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .send_frame(writer, &app, &clear_bytes, None, false, None)
                             .is_err()
                         {
                             break;
@@ -1445,6 +1478,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1590,7 +1625,7 @@ mod tests {
             let prefix = format!("git{ctrl}log");
             let mut output = Vec::new();
             server
-                .send_frame(&mut output, &app, &[], true, Some(&prefix))
+                .send_frame(&mut output, &app, &[], None, true, Some(&prefix))
                 .unwrap();
             let header = String::from_utf8_lossy(&output);
             assert!(
@@ -1619,6 +1654,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1655,6 +1692,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1688,6 +1727,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: true,
                     shift_tab_sequence: None,
                 },
@@ -1721,6 +1762,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1765,6 +1808,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1811,6 +1856,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1856,6 +1903,8 @@ mod tests {
                 cursor_col: 2,
                 term_cols: 80,
                 term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
@@ -1884,6 +1933,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1930,6 +1981,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1982,6 +2035,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2042,6 +2097,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2102,6 +2159,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },

@@ -495,18 +495,6 @@ _zacrs_popup_session_loop() {
     local _f_popup_row _f_popup_height _f_cursor_row _f_tty_len _f_common_prefix
     if (( have_initial_frame )); then
         _zacrs_complete_parse_frame "$header"
-        # Clear stale rows from previous popup that the new frame won't cover
-        if (( _zacrs_popup_visible )); then
-            printf '\e7' >&$tty_wfd
-            local _si _row
-            for (( _si = 0; _si < _zacrs_popup_height; _si++ )); do
-                _row=$(( _zacrs_popup_row + _si ))
-                if (( _row < _f_popup_row || _row >= _f_popup_row + _f_popup_height )); then
-                    printf '\e[%d;1H\e[2K' $(( _row + 1 )) >&$tty_wfd
-                fi
-            done
-            printf '\e8' >&$tty_wfd
-        fi
         if (( _f_tty_len > 0 )); then
             sysread -i $fd -o $tty_wfd -c $_f_tty_len
         fi
@@ -610,6 +598,7 @@ _zacrs_invoke_daemon() {
     # Send complete request
     local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
     [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
+    (( _zacrs_popup_visible )) && req+=" prev_popup_row=$_zacrs_popup_row prev_popup_height=$_zacrs_popup_height"
     (( reuse_visible )) && [[ -n "$reuse_token" ]] && req+=" reuse_token=$reuse_token"
     [[ -n "$context_key" ]] && req+=" context_key=$context_key"
     [[ -n "$shift_tab_hex" ]] && req+=" shift_tab_hex=$shift_tab_hex"
@@ -695,6 +684,9 @@ _zacrs_invoke() {
         --rows "$LINES"
     )
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
+    if (( _zacrs_popup_visible )); then
+        complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
+    fi
 
     # Launch subprocess as coproc
     coproc { "$ZACRS_BIN" "${complete_args[@]}" }

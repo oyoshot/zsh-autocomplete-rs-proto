@@ -15,6 +15,8 @@ fn run_complete(
     cols: u16,
     rows: u16,
     shift_tab_sequence: Option<Vec<u8>>,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
 ) -> io::Result<()> {
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
@@ -32,6 +34,8 @@ fn run_complete(
         cols,
         rows,
         shift_tab_sequence,
+        prev_popup_row,
+        prev_popup_height,
         &tsv,
     );
     Ok(())
@@ -141,6 +145,8 @@ fn main() {
             cursor_row,
             cursor_col,
             shift_tab_hex,
+            prev_popup_row,
+            prev_popup_height,
             cols,
             rows,
         } => match run_complete(
@@ -152,6 +158,8 @@ fn main() {
             shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
+            prev_popup_row,
+            prev_popup_height,
         ) {
             Ok(()) => process::exit(0),
             Err(e) => {
