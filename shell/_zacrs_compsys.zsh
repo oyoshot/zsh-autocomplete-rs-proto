@@ -96,7 +96,7 @@ _zacrs_compsys_func() {
                     [[ -d "${_full_prefix}${_m}" ]] && _kind="directory" || _kind="file"
                 elif [[ "$_text" == */ ]]; then
                     _kind="directory"
-                elif (( _zacrs_cmd_pos )) && _zacrs_command_kind "$_m"; then
+                elif (( _zacrs_cmd_pos )) && [[ "$_text" != */* ]] && _zacrs_command_kind "$_m"; then
                     _kind="$REPLY"
                 fi
                 _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
