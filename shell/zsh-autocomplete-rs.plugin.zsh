@@ -600,14 +600,19 @@ _zacrs_collect_candidates() {
 }
 
 # Handle single-candidate immediate completion.
-# Args: $1=prefix_len $2=candidate_line (tab-separated)
+# Args: $1=prefix $2=prefix_len $3=candidate_line (tab-separated)
 _zacrs_apply_single_candidate() {
-    local prefix_len="$1" cand_line="$2"
+    local prefix="$1" prefix_len="$2" cand_line="$3"
     _zacrs_clear_popup
     local text="${cand_line%%	*}"
     local kind="${cand_line##*	}"
+    local is_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
+    local -a resolve_args
+    resolve_args=(resolve-single --text "$text" --kind "$kind")
+    (( is_cmd_pos )) && resolve_args+=(--command-position)
     local output
-    output=$("$ZACRS_BIN" resolve-single --text "$text" --kind "$kind" 2>/dev/null)
+    output=$("$ZACRS_BIN" "${resolve_args[@]}" 2>/dev/null)
 
     local -a lines
     lines=("${(@f)output}")
@@ -682,7 +687,7 @@ _zacrs_complete_popup() {
 
     # 単一候補 → 即補完
     if [[ -n "$candidates_str" && ${#cands[@]} -eq 1 ]]; then
-        _zacrs_apply_single_candidate "$prefix_len" "${cands[1]}"
+        _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${cands[1]}"
         return
     fi
 
@@ -706,7 +711,7 @@ _zacrs_complete_popup() {
             _cands_retry=( ${(f)candidates_str} )
             _cands_retry=( ${_cands_retry:#} )
             if [[ ${#_cands_retry[@]} -eq 1 ]]; then
-                _zacrs_apply_single_candidate "$prefix_len" "${_cands_retry[1]}"
+                _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${_cands_retry[1]}"
                 return
             fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \

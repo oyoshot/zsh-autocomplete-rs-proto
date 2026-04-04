@@ -219,14 +219,14 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
     Ok(0)
 }
 
-fn run_resolve_single(text: String, kind: String) -> io::Result<()> {
+fn run_resolve_single(text: String, kind: String, command_position: bool) -> io::Result<()> {
     let cfg = config::Config::load();
     let candidate = Candidate {
         text,
         description: String::new(),
         kind,
     };
-    let resolved = candidate.text_with_suffix(&cfg.suffixes);
+    let resolved = candidate.text_with_suffix_for_command_position(&cfg.suffixes, command_position);
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     TextCompleteResult {
@@ -315,7 +315,11 @@ fn main() {
                 process::exit(1);
             }
         },
-        Command::ResolveSingle { text, kind } => match run_resolve_single(text, kind) {
+        Command::ResolveSingle {
+            text,
+            kind,
+            command_position,
+        } => match run_resolve_single(text, kind, command_position) {
             Ok(()) => process::exit(0),
             Err(e) => {
                 eprintln!("error: {}", e);

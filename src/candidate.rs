@@ -31,6 +31,22 @@ impl Candidate {
         }
     }
 
+    pub fn text_with_suffix_for_command_position(
+        &self,
+        suffixes: &SuffixConfig,
+        is_command_position: bool,
+    ) -> String {
+        if is_command_position
+            && self.kind.is_empty()
+            && !self.text.ends_with('/')
+            && !self.text.contains('/')
+        {
+            return format!("{} ", self.text);
+        }
+
+        self.text_with_suffix(suffixes)
+    }
+
     pub fn text_for_dismiss_with_space(&self, suffixes: &SuffixConfig) -> String {
         let text = self.text_with_suffix(suffixes);
         if text.ends_with([' ', '/']) {
@@ -118,6 +134,24 @@ mod tests {
         let c = Candidate::parse_line("git\t\tcommand");
         let custom = SuffixConfig::default().with_override("command", "!");
         assert_eq!(c.text_with_suffix(&custom), "git!");
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_adds_space_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&SuffixConfig::default(), true),
+            "git "
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_keeps_paths_without_space() {
+        let c = Candidate::parse_line("./script\t\t");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&SuffixConfig::default(), true),
+            "./script"
+        );
     }
 
     #[test]

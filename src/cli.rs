@@ -80,6 +80,9 @@ pub enum Command {
 
         #[arg(long, default_value = "")]
         kind: String,
+
+        #[arg(long, default_value_t = false)]
+        command_position: bool,
     },
     /// Daemon management
     Daemon {
@@ -144,12 +147,18 @@ mod tests {
             "--watch",
             "--kind",
             "command",
+            "--command-position",
         ]);
 
         match cli.command {
-            Command::ResolveSingle { text, kind } => {
+            Command::ResolveSingle {
+                text,
+                kind,
+                command_position,
+            } => {
                 assert_eq!(text, "--watch");
                 assert_eq!(kind, "command");
+                assert!(command_position);
             }
             _ => panic!("unexpected command"),
         }
