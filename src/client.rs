@@ -125,7 +125,14 @@ pub fn try_daemon_complete(
         return Ok(CompleteSessionOutcome::CacheMiss);
     }
 
-    let result = run_text_popup_session(&mut reader, &mut writer, &header, stale_bytes)?;
+    let result = run_text_popup_session(
+        &mut reader,
+        &mut writer,
+        &header,
+        stale_bytes,
+        prev_popup,
+        cursor_row,
+    )?;
     Ok(CompleteSessionOutcome::Done(result))
 }
 
@@ -134,21 +141,18 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     writer: &mut W,
     initial_header: &str,
     stale_bytes: Vec<u8>,
+    prev_popup: Option<(u16, u16)>,
+    cursor_row: u16,
 ) -> Result<TextCompleteResult, DaemonUnavailable> {
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
 
-    let mut state = SessionState::default();
-    match initial_header {
-        value if value.starts_with("FRAME ") => {
-            state.handle_frame(reader, &mut tty_writer, value)?;
-        }
-        value if value.starts_with("DONE ") => {
-            return TextCompleteResult::read_from(reader, value)
-                .map_err(|_| DaemonUnavailable::NotRunning);
-        }
-        "NONE" => return Err(DaemonUnavailable::EmptyResult),
-        _ => return Err(DaemonUnavailable::NotRunning),
+    let mut state = SessionState::with_prev_popup(prev_popup, cursor_row);
+    if initial_header == "NONE" {
+        return Err(DaemonUnavailable::EmptyResult);
+    }
+    if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
+        return Ok(result);
     }
 
     let mut raw_mode = RawModeGuard::new(tty_fd.as_raw_fd())?;
@@ -226,6 +230,15 @@ struct SessionState {
 }
 
 impl SessionState {
+    fn with_prev_popup(prev_popup: Option<(u16, u16)>, cursor_row: u16) -> Self {
+        let (popup_row, popup_height) = prev_popup.unwrap_or((0, 0));
+        Self {
+            popup_row,
+            popup_height,
+            cursor_row,
+        }
+    }
+
     fn handle_frame<R: BufRead>(
         &mut self,
         reader: &mut R,
@@ -238,6 +251,31 @@ impl SessionState {
         self.cursor_row = frame.cursor_row;
         relay_tty_bytes(reader, tty_writer, frame.tty_len)?;
         Ok(())
+    }
+
+    fn handle_header<R: BufRead>(
+        &mut self,
+        reader: &mut R,
+        tty_writer: &mut File,
+        header: &str,
+        clear_on_done: bool,
+    ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
+        match header {
+            value if value.starts_with("FRAME ") => {
+                self.handle_frame(reader, tty_writer, value)?;
+                Ok(None)
+            }
+            value if value.starts_with("DONE ") => {
+                if clear_on_done {
+                    self.clear_popup(tty_writer)?;
+                }
+                TextCompleteResult::read_from(reader, value)
+                    .map(Some)
+                    .map_err(|_| DaemonUnavailable::NotRunning)
+            }
+            "NONE" => Ok(None),
+            _ => Err(DaemonUnavailable::NotRunning),
+        }
     }
 
     fn send_key<R: BufRead, W: Write>(
@@ -258,17 +296,7 @@ impl SessionState {
             .read_line(&mut header)
             .map_err(|_| DaemonUnavailable::NotRunning)?;
         let header = trim_line_end(&header);
-        match header {
-            value if value.starts_with("FRAME ") => {
-                self.handle_frame(reader, tty_writer, value)?;
-                Ok(None)
-            }
-            value if value.starts_with("DONE ") => TextCompleteResult::read_from(reader, value)
-                .map(Some)
-                .map_err(|_| DaemonUnavailable::NotRunning),
-            "NONE" => Ok(None),
-            _ => Err(DaemonUnavailable::NotRunning),
-        }
+        self.handle_header(reader, tty_writer, header, false)
     }
 
     fn clear_popup(&self, tty_writer: &mut File) -> Result<(), DaemonUnavailable> {
@@ -465,6 +493,16 @@ impl Drop for RawModeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file_path(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("zacrs-{label}-{nanos}.tmp"))
+    }
 
     #[test]
     fn trim_line_end_preserves_trailing_spaces() {
@@ -481,5 +519,25 @@ mod tests {
         assert!(result.chain);
         assert!(!result.execute);
         assert_eq!(result.restore_text, "cargo ");
+    }
+
+    #[test]
+    fn initial_done_clears_previous_popup() {
+        let path = temp_file_path("initial-done-clear");
+        let mut tty_writer = File::create(&path).unwrap();
+        let mut reader = BufReader::new("APPLY chain=0 execute=0 restore=\n".as_bytes());
+        let mut state = SessionState::with_prev_popup(Some((3, 2)), 5);
+
+        let result = state
+            .handle_header(&mut reader, &mut tty_writer, "DONE 1 ", true)
+            .unwrap()
+            .unwrap();
+
+        drop(tty_writer);
+        let bytes = fs::read(&path).unwrap();
+        fs::remove_file(&path).ok();
+
+        assert_eq!(result.code, 1);
+        assert!(!bytes.is_empty());
     }
 }

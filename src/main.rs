@@ -112,6 +112,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         &mut session_writer,
         trim_line_end(&initial_header),
         stale_bytes,
+        prev_popup_row.zip(prev_popup_height),
+        cursor_row,
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
     write_done_result(&mut stdout_writer, &result)?;
