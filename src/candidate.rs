@@ -49,7 +49,11 @@ impl Candidate {
             && !self.text.ends_with('/')
             && !self.text.contains('/')
         {
-            return format!("{} ", self.text);
+            let command_suffix = suffixes.suffix_for_kind("command").unwrap_or(" ");
+            if command_suffix.is_empty() || self.text.ends_with(command_suffix) {
+                return self.text.clone();
+            }
+            return format!("{}{}", self.text, command_suffix);
         }
 
         self.text_with_suffix(suffixes)
@@ -164,6 +168,26 @@ mod tests {
         assert_eq!(
             c.text_with_suffix_for_command_position(&SuffixConfig::default(), true),
             "git "
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_uses_command_override_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "!");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&suffixes, true),
+            "git!"
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_honors_empty_command_override() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&suffixes, true),
+            "git"
         );
     }
 
