@@ -1116,7 +1116,10 @@ impl DaemonServer {
                                 let _ = write_apply_result(
                                     writer,
                                     &ApplyResult::dismiss_with_space(
-                                        c.text_for_dismiss_with_space(&self.config.suffixes),
+                                        c.text_for_dismiss_with_space(
+                                            &self.config.suffixes,
+                                            command_position,
+                                        ),
                                     ),
                                 );
                             }
@@ -2202,6 +2205,45 @@ mod tests {
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=0 execute=1 restore_hex="
+        );
+    }
+
+    #[test]
+    fn handle_complete_dismiss_with_space_uses_command_override_for_empty_kind() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b" ");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git! ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore_hex="
         );
     }
 

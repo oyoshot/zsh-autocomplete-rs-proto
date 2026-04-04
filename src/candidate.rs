@@ -59,8 +59,12 @@ impl Candidate {
         self.text_with_suffix(suffixes)
     }
 
-    pub fn text_for_dismiss_with_space(&self, suffixes: &SuffixConfig) -> String {
-        let text = self.text_with_suffix(suffixes);
+    pub fn text_for_dismiss_with_space(
+        &self,
+        suffixes: &SuffixConfig,
+        is_command_position: bool,
+    ) -> String {
+        let text = self.text_with_suffix_for_command_position(suffixes, is_command_position);
         if text.ends_with([' ', '/']) {
             text
         } else {
@@ -204,7 +208,7 @@ mod tests {
     fn text_for_dismiss_with_space_unknown_kind() {
         let c = Candidate::parse_line("git\t\t");
         assert_eq!(
-            c.text_for_dismiss_with_space(&SuffixConfig::default()),
+            c.text_for_dismiss_with_space(&SuffixConfig::default(), false),
             "git "
         );
     }
@@ -213,8 +217,15 @@ mod tests {
     fn text_for_dismiss_with_space_directory_keeps_slash() {
         let c = Candidate::parse_line("src\t\tdirectory");
         assert_eq!(
-            c.text_for_dismiss_with_space(&SuffixConfig::default()),
+            c.text_for_dismiss_with_space(&SuffixConfig::default(), false),
             "src/"
         );
+    }
+
+    #[test]
+    fn text_for_dismiss_with_space_uses_command_override_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "!");
+        assert_eq!(c.text_for_dismiss_with_space(&suffixes, true), "git! ");
     }
 }
