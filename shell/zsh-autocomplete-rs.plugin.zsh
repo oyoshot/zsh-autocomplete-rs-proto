@@ -365,6 +365,16 @@ _zacrs_parse_apply_line() {
     [[ "$apply_line" == *" restore="* ]] && restore_text="${apply_line#* restore=}"
 }
 
+_zacrs_read_done_response() {
+    local fd="$1" header="$2"
+    result_code="${${(s: :)header}[2]}"
+    result_text="${header#DONE [0-9]## }"
+    [[ "$result_text" == "$header" ]] && result_text=""
+    local apply_line=""
+    IFS= read -r -u $fd apply_line || apply_line=""
+    _zacrs_parse_apply_line "$apply_line"
+}
+
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local base
@@ -456,12 +466,7 @@ _zacrs_complete_handle_response() {
             _f_resp=frame
             ;;
         DONE*)
-            result_code="${${(s: :)header}[2]}"
-            result_text="${header#DONE [0-9]## }"
-            [[ "$result_text" == "$header" ]] && result_text=""
-            local apply_line=""
-            IFS= read -r -u $fd apply_line || apply_line=""
-            _zacrs_parse_apply_line "$apply_line"
+            _zacrs_read_done_response "$fd" "$header"
             _f_resp=done
             ;;
         NONE)
@@ -636,14 +641,7 @@ _zacrs_invoke_daemon() {
             _zacrs_popup_visible=1
             ;;
         DONE*)
-            local -a parts
-            parts=( ${(s: :)header} )
-            result_code="${parts[2]}"
-            result_text="${header#DONE [0-9]## }"
-            [[ "$result_text" == "$header" ]] && result_text=""
-            local apply_line=""
-            IFS= read -r -u $fd apply_line || apply_line=""
-            _zacrs_parse_apply_line "$apply_line"
+            _zacrs_read_done_response "$fd" "$header"
             initial_done=1
             ;;
         *)
@@ -716,14 +714,7 @@ _zacrs_invoke() {
     case "$header" in
         FRAME*) have_initial_frame=1 ;;
         DONE*)
-            local -a parts
-            parts=( ${(s: :)header} )
-            result_code="${parts[2]}"
-            result_text="${header#DONE [0-9]## }"
-            [[ "$result_text" == "$header" ]] && result_text=""
-            local apply_line=""
-            IFS= read -r -u $coproc_rfd apply_line || apply_line=""
-            _zacrs_parse_apply_line "$apply_line"
+            _zacrs_read_done_response "$coproc_rfd" "$header"
             initial_done=1
             ;;
         *)
