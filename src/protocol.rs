@@ -63,6 +63,7 @@ pub struct TextCompleteRequest {
     pub term_rows: u16,
     pub prev_popup: Option<(u16, u16)>,
     pub command_position: bool,
+    pub accept_single: bool,
     pub reuse_token: Option<String>,
     pub shift_tab_sequence: Option<Vec<u8>>,
     pub context_key: Option<String>,
@@ -403,6 +404,7 @@ impl TextRequest {
                 let mut prev_popup_row = None;
                 let mut prev_popup_height = None;
                 let mut command_position = false;
+                let mut accept_single = false;
                 let mut reuse_token = None;
                 let mut shift_tab_sequence = None;
                 let mut context_key = None;
@@ -419,6 +421,8 @@ impl TextRequest {
                         context_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("command_position=") {
                         command_position = value == "1";
+                    } else if let Some(value) = token.strip_prefix("accept_single=") {
+                        accept_single = value == "1";
                     }
                 }
                 Some(Self::Complete(TextCompleteRequest {
@@ -428,6 +432,7 @@ impl TextRequest {
                     term_rows: parse_u16_token(term_rows)?,
                     prev_popup: prev_popup_row.zip(prev_popup_height),
                     command_position,
+                    accept_single,
                     reuse_token,
                     shift_tab_sequence,
                     context_key,
@@ -456,6 +461,9 @@ impl TextCompleteRequest {
         }
         if self.command_position {
             line.push_str(" command_position=1");
+        }
+        if self.accept_single {
+            line.push_str(" accept_single=1");
         }
         if let Some(token) = &self.reuse_token {
             line.push_str(&format!(" reuse_token={token}"));
@@ -886,6 +894,7 @@ mod tests {
             term_rows: 24,
             prev_popup: Some((6, 12)),
             command_position: true,
+            accept_single: true,
             reuse_token: Some("123".to_string()),
             shift_tab_sequence: Some(b"\x1b[Z".to_vec()),
             context_key: Some("ctx".to_string()),

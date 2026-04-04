@@ -29,6 +29,9 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         command_position: bool,
 
+        #[arg(long, default_value_t = false)]
+        accept_single: bool,
+
         #[arg(long)]
         stale_hex: Option<String>,
 
@@ -76,17 +79,6 @@ pub enum Command {
         #[arg(long)]
         cursor_row: u16,
     },
-    /// Resolve single-candidate completion text using config-driven suffix rules
-    ResolveSingle {
-        #[arg(long, allow_hyphen_values = true)]
-        text: String,
-
-        #[arg(long, default_value = "")]
-        kind: String,
-
-        #[arg(long, default_value_t = false)]
-        command_position: bool,
-    },
     /// Daemon management
     Daemon {
         #[command(subcommand)]
@@ -107,6 +99,7 @@ mod tests {
             "1b5b32373b323b397e",
             "--daemon",
             "--command-position",
+            "--accept-single",
             "--stale-hex",
             "1b5b44",
             "--reuse-token",
@@ -124,6 +117,7 @@ mod tests {
                 shift_tab_hex,
                 daemon,
                 command_position,
+                accept_single,
                 stale_hex,
                 reuse_token,
                 context_key,
@@ -134,6 +128,7 @@ mod tests {
                 assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
                 assert!(daemon);
                 assert!(command_position);
+                assert!(accept_single);
                 assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
                 assert_eq!(reuse_token.as_deref(), Some("123"));
                 assert_eq!(context_key.as_deref(), Some("ctx"));
@@ -145,26 +140,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_single_accepts_hyphenated_text() {
-        let cli = Cli::parse_from([
-            "zsh-autocomplete-rs",
-            "resolve-single",
-            "--text",
-            "--watch",
-            "--kind",
-            "command",
-            "--command-position",
-        ]);
+    fn complete_accepts_hyphenated_prefix() {
+        let cli = Cli::parse_from(["zsh-autocomplete-rs", "complete", "--prefix", "--watch"]);
 
         match cli.command {
-            Command::ResolveSingle {
-                text,
-                kind,
-                command_position,
-            } => {
-                assert_eq!(text, "--watch");
-                assert_eq!(kind, "command");
-                assert!(command_position);
+            Command::Complete { prefix, .. } => {
+                assert_eq!(prefix, "--watch");
             }
             _ => panic!("unexpected command"),
         }
