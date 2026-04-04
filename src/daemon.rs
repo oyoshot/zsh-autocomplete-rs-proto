@@ -32,6 +32,16 @@ struct ApplyResult {
 }
 
 impl ApplyResult {
+    fn apply_only(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 0,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+
     fn confirm(text: String) -> Self {
         Self {
             chain: should_chain_after_apply(&text),
@@ -991,7 +1001,7 @@ impl DaemonServer {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
-                    &ApplyResult::confirm(candidate.text_with_suffix_for_command_position(
+                    &ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
                         &self.config.suffixes,
                         command_position,
                     )),
@@ -2233,7 +2243,7 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
         let mut lines = output.lines();
         assert_eq!(lines.next(), Some("DONE 0 cargo!"));
-        assert_eq!(lines.next(), Some("APPLY chain=0 execute=1 restore_hex="));
+        assert_eq!(lines.next(), Some("APPLY chain=0 execute=0 restore_hex="));
         assert_eq!(lines.next(), None);
     }
 
