@@ -29,7 +29,7 @@ fn write_done_result(
     writer.flush()
 }
 
-fn run_complete(
+struct CompleteCommand {
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
@@ -42,7 +42,24 @@ fn run_complete(
     context_key: Option<String>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
-) -> io::Result<()> {
+}
+
+fn run_complete(command: CompleteCommand) -> io::Result<()> {
+    let CompleteCommand {
+        prefix,
+        cursor_row,
+        cursor_col,
+        cols,
+        rows,
+        daemon_mode,
+        shift_tab_sequence,
+        stale_bytes,
+        reuse_token,
+        context_key,
+        prev_popup_row,
+        prev_popup_height,
+    } = command;
+
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
     let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
@@ -226,17 +243,17 @@ fn main() {
             prev_popup_height,
             cols,
             rows,
-        } => match run_complete(
+        } => match run_complete(CompleteCommand {
             prefix,
             cursor_row,
             cursor_col,
             cols,
             rows,
-            daemon,
-            shift_tab_hex
+            daemon_mode: daemon,
+            shift_tab_sequence: shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
-            stale_hex
+            stale_bytes: stale_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes)
                 .unwrap_or_default(),
@@ -244,7 +261,7 @@ fn main() {
             context_key,
             prev_popup_row,
             prev_popup_height,
-        ) {
+        }) {
             Ok(()) => process::exit(0),
             Err(e) => {
                 eprintln!("error: {}", e);
