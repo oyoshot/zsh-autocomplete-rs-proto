@@ -8,19 +8,64 @@ use clap::Parser;
 use std::io::{self, BufWriter, Read, Write};
 use std::process;
 
+fn write_done_result(
+    mut writer: impl Write,
+    result: &client::CompleteSessionResult,
+) -> io::Result<()> {
+    writeln!(writer, "DONE {} {}", result.code, result.text)?;
+    writeln!(
+        writer,
+        "APPLY chain={} execute={} restore={}",
+        if result.chain { 1 } else { 0 },
+        if result.execute { 1 } else { 0 },
+        result.restore_text
+    )?;
+    writer.flush()
+}
+
 fn run_complete(
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
     cols: u16,
     rows: u16,
+    daemon_mode: bool,
     shift_tab_sequence: Option<Vec<u8>>,
+    stale_bytes: Vec<u8>,
+    reuse_token: Option<String>,
+    context_key: Option<String>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
 ) -> io::Result<()> {
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
     let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
+
+    if daemon_mode {
+        let stdout = io::stdout();
+        let mut writer = BufWriter::new(stdout.lock());
+        match client::try_daemon_complete(
+            &prefix,
+            cursor_row,
+            cursor_col,
+            &tsv,
+            shift_tab_sequence,
+            stale_bytes,
+            prev_popup_row.zip(prev_popup_height),
+            reuse_token.as_deref(),
+            context_key.as_deref(),
+        ) {
+            Ok(client::CompleteSessionOutcome::Done(result)) => {
+                write_done_result(&mut writer, &result)?
+            }
+            Ok(client::CompleteSessionOutcome::CacheMiss) => {
+                writeln!(writer, "CACHE_MISS")?;
+                writer.flush()?;
+            }
+            Err(e) => return Err(io::Error::other(e.to_string())),
+        }
+        return Ok(());
+    }
 
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
@@ -144,7 +189,11 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
+            daemon,
             shift_tab_hex,
+            stale_hex,
+            reuse_token,
+            context_key,
             prev_popup_row,
             prev_popup_height,
             cols,
@@ -155,9 +204,16 @@ fn main() {
             cursor_col,
             cols,
             rows,
+            daemon,
             shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
+            stale_hex
+                .as_deref()
+                .and_then(protocol::decode_hex_bytes)
+                .unwrap_or_default(),
+            reuse_token,
+            context_key,
             prev_popup_row,
             prev_popup_height,
         ) {

@@ -580,82 +580,55 @@ _zacrs_popup_session_loop() {
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
-    local chain=0 execute=0 restore_text=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
     fi
 
-    local fd
-    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+    local stale_hex=""
+    [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
+    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
+    local -a complete_args
+    complete_args=(
+        complete
+        --daemon
+        --prefix "$prefix"
+        --cursor-row "$cursor_row"
+        --cursor-col "$cursor_col"
+        --cols "$COLUMNS"
+        --rows "$LINES"
+    )
+    [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
+    [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
+    (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
+    (( reuse_visible )) && [[ -n "$reuse_token" ]] && complete_args+=(--reuse-token "$reuse_token")
+    [[ -n "$context_key" ]] && complete_args+=(--context-key "$context_key")
+
+    local output
+    output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         return 1
+    }
+    _zacrs_cursor_stale=""
+
+    local -a lines
+    lines=("${(@f)output}")
+    if [[ "${lines[1]}" == "CACHE_MISS" ]]; then
+        return 2
     fi
-    fd=$REPLY
-
-    # Send complete request
-    local req="complete $cursor_row $cursor_col $COLUMNS $LINES"
-    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
-    (( _zacrs_popup_visible )) && req+=" prev_popup_row=$_zacrs_popup_row prev_popup_height=$_zacrs_popup_height"
-    (( reuse_visible )) && [[ -n "$reuse_token" ]] && req+=" reuse_token=$reuse_token"
-    [[ -n "$context_key" ]] && req+=" context_key=$context_key"
-    [[ -n "$shift_tab_hex" ]] && req+=" shift_tab_hex=$shift_tab_hex"
-    print -u $fd -- "$req"
-    printf '%s\n' "$prefix" >&$fd
-    if [[ -n "$candidates_str" ]]; then
-        printf '%s\n' "$candidates_str" >&$fd
-    fi
-    print -u $fd "END"
-
-    local header
-    IFS= read -r -u $fd header
-    local result_code=1 result_text="" restore_text=""
-    local have_initial_frame=0 initial_done=0
-    case "$header" in
-        FRAME*) have_initial_frame=1 ;;
-        CACHE_MISS)
-            exec {fd}<&-
-            return 2
-            ;;
-        NONE)
-            if (( ! reuse_visible )) || [[ -z "$reuse_token" ]]; then
-                (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
-                exec {fd}<&-
-                [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
-                _zacrs_cursor_stale=""
-                return 1
-            fi
-            _zacrs_popup_visible=1
-            ;;
-        DONE*)
-            _zacrs_read_done_response "$fd" "$header"
-            initial_done=1
-            ;;
-        *)
-            (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
-            exec {fd}<&-
-            [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
-            _zacrs_cursor_stale=""
-            return 1
-            ;;
-    esac
-
-    if (( initial_done )); then
-        exec {fd}<&-
-        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
-        _zacrs_cursor_stale=""
-        _zacrs_clear_popup
-        _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-        zle reset-prompt
-        return 0
+    if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
+        return 1
     fi
 
-    _zacrs_popup_session_loop $fd $fd
-
-    exec {fd}<&-
-    _zacrs_clear_popup
+    local result_code result_text chain=0 execute=0 restore_text=""
+    result_code="${${(s: :)lines[1]}[2]}"
+    result_text="${lines[1]#DONE [0-9]## }"
+    [[ "$result_text" == "${lines[1]}" ]] && result_text=""
+    _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
     [[ $result_code -ne 0 ]] && zle reset-prompt
     return 0
