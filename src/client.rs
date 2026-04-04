@@ -477,7 +477,7 @@ impl RawModeGuard {
     fn restore(&mut self) {
         if self.active {
             let _ = retry_on_eintr(|| unsafe {
-                libc::tcsetattr(self.fd, libc::TCSAFLUSH, &self.saved as *const _)
+                libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved as *const _)
             });
             self.active = false;
         }
