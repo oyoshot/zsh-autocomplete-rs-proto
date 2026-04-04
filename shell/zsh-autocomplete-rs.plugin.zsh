@@ -375,6 +375,16 @@ _zacrs_read_done_response() {
     _zacrs_parse_apply_line "$apply_line"
 }
 
+_zacrs_finish_popup_session() {
+    _zacrs_popup_visible=0
+    _zacrs_popup_row=0
+    _zacrs_popup_height=0
+    _zacrs_popup_cursor_row=0
+    _zacrs_last_render_cursor_row=0
+    _zacrs_last_render_cursor_col=0
+    _zacrs_reset_popup_snapshot
+}
+
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local base
@@ -478,6 +488,7 @@ _zacrs_invoke_daemon() {
     result_text="${lines[1]#DONE [0-9]## }"
     [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
+    _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
     [[ $result_code -ne 0 ]] && zle reset-prompt
     return 0
@@ -531,6 +542,7 @@ _zacrs_invoke() {
     result_text="${lines[1]#DONE [0-9]## }"
     [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
+    _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
     [[ $result_code -ne 0 ]] && zle reset-prompt
 }

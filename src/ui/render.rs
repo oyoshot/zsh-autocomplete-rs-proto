@@ -240,9 +240,10 @@ pub fn clear_rect(
     tty: &mut std::fs::File,
     popup_row: u16,
     popup_height: u16,
-    cursor_row: u16,
+    _cursor_row: u16,
 ) -> std::io::Result<()> {
     let mut buf = std::io::BufWriter::new(&mut *tty);
+    crossterm::queue!(&mut buf, cursor::SavePosition)?;
     for i in 0..popup_height {
         crossterm::queue!(
             &mut buf,
@@ -251,7 +252,7 @@ pub fn clear_rect(
         )?;
     }
 
-    crossterm::queue!(&mut buf, cursor::MoveTo(0, cursor_row))?;
+    crossterm::queue!(&mut buf, cursor::RestorePosition)?;
     buf.flush()?;
 
     Ok(())
@@ -309,9 +310,10 @@ pub fn render_popup_to_bytes(app: &App, theme: &Theme) -> std::io::Result<(Vec<u
 pub fn clear_rect_to_bytes(
     popup_row: u16,
     popup_height: u16,
-    cursor_row: u16,
+    _cursor_row: u16,
 ) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(256);
+    crossterm::queue!(&mut buf, cursor::SavePosition)?;
     for i in 0..popup_height {
         crossterm::queue!(
             &mut buf,
@@ -319,7 +321,7 @@ pub fn clear_rect_to_bytes(
             terminal::Clear(terminal::ClearType::CurrentLine),
         )?;
     }
-    crossterm::queue!(&mut buf, cursor::MoveTo(0, cursor_row))?;
+    crossterm::queue!(&mut buf, cursor::RestorePosition)?;
     Ok(buf)
 }
 
@@ -515,5 +517,13 @@ mod tests {
         assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
         assert!(ansi.contains("[7;1H"));
         assert!(ansi.contains("[10;1H"));
+    }
+
+    #[test]
+    fn clear_rect_to_bytes_restores_cursor_position() {
+        let bytes = clear_rect_to_bytes(6, 4, 5).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
+        assert!(ansi.contains("\u{1b}8") || ansi.contains("\u{1b}[u"));
     }
 }

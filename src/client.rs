@@ -129,7 +129,7 @@ pub fn try_daemon_complete(
     reader
         .read_line(&mut header)
         .map_err(|_| DaemonUnavailable::NotRunning)?;
-    let header = header.trim_end().to_string();
+    let header = trim_line_end(&header).to_string();
     if header == "CACHE_MISS" {
         return Ok(CompleteSessionOutcome::CacheMiss);
     }
@@ -262,7 +262,7 @@ impl SessionState {
         reader
             .read_line(&mut header)
             .map_err(|_| DaemonUnavailable::NotRunning)?;
-        let header = header.trim_end();
+        let header = trim_line_end(&header);
         match header {
             value if value.starts_with("FRAME ") => {
                 self.handle_frame(reader, tty_writer, value)?;
@@ -304,6 +304,10 @@ fn parse_frame_header(state: &mut SessionState, header: &str) -> Option<usize> {
     tty_len
 }
 
+fn trim_line_end(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
+}
+
 fn read_done_response<R: BufRead>(
     reader: &mut R,
     header: &str,
@@ -320,7 +324,7 @@ fn read_done_response<R: BufRead>(
     reader
         .read_line(&mut apply)
         .map_err(|_| DaemonUnavailable::NotRunning)?;
-    let apply = apply.trim_end();
+    let apply = trim_line_end(&apply);
     let mut chain = false;
     let mut execute = false;
     let mut restore_text = String::new();
@@ -524,5 +528,27 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         self.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_line_end_preserves_trailing_spaces() {
+        assert_eq!(trim_line_end("DONE 0 cargo \n"), "DONE 0 cargo ");
+        assert_eq!(trim_line_end("DONE 0 cargo \r\n"), "DONE 0 cargo ");
+    }
+
+    #[test]
+    fn read_done_response_preserves_text_and_restore_spaces() {
+        let mut reader = BufReader::new("APPLY chain=1 execute=0 restore=cargo \n".as_bytes());
+        let result = read_done_response(&mut reader, "DONE 2 cargo ").unwrap();
+        assert_eq!(result.code, 2);
+        assert_eq!(result.text, "cargo ");
+        assert!(result.chain);
+        assert!(!result.execute);
+        assert_eq!(result.restore_text, "cargo ");
     }
 }

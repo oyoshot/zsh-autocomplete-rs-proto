@@ -10,6 +10,10 @@ use std::os::unix::net::UnixStream;
 use std::process;
 use std::thread;
 
+fn trim_line_end(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
+}
+
 fn write_done_result(
     mut writer: impl Write,
     result: &client::CompleteSessionResult,
@@ -99,7 +103,7 @@ fn run_complete(
     let result = client::run_text_popup_session(
         &mut session_reader,
         &mut session_writer,
-        initial_header.trim_end(),
+        trim_line_end(&initial_header),
         stale_bytes,
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
