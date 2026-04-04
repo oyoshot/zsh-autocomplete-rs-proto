@@ -26,6 +26,9 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         daemon: bool,
 
+        #[arg(long, default_value_t = false)]
+        command_position: bool,
+
         #[arg(long)]
         stale_hex: Option<String>,
 
@@ -103,6 +106,7 @@ mod tests {
             "--shift-tab-hex",
             "1b5b32373b323b397e",
             "--daemon",
+            "--command-position",
             "--stale-hex",
             "1b5b44",
             "--reuse-token",
@@ -119,6 +123,7 @@ mod tests {
             Command::Complete {
                 shift_tab_hex,
                 daemon,
+                command_position,
                 stale_hex,
                 reuse_token,
                 context_key,
@@ -128,6 +133,7 @@ mod tests {
             } => {
                 assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
                 assert!(daemon);
+                assert!(command_position);
                 assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
                 assert_eq!(reuse_token.as_deref(), Some("123"));
                 assert_eq!(context_key.as_deref(), Some("ctx"));

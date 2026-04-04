@@ -454,6 +454,8 @@ _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
     local shift_tab_hex=""
+    local is_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -472,6 +474,7 @@ _zacrs_invoke_daemon() {
         --cols "$COLUMNS"
         --rows "$LINES"
     )
+    (( is_cmd_pos )) && complete_args+=(--command-position)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
@@ -514,6 +517,8 @@ _zacrs_invoke() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}"
     local shift_tab_hex=""
+    local is_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -531,6 +536,7 @@ _zacrs_invoke() {
         --cols "$COLUMNS"
         --rows "$LINES"
     )
+    (( is_cmd_pos )) && complete_args+=(--command-position)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     if (( _zacrs_popup_visible )); then

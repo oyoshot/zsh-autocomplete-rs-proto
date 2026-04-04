@@ -105,6 +105,7 @@ struct CompleteParams {
     term_rows: u16,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
+    command_position: bool,
     reuse_popup: bool,
     shift_tab_sequence: Option<Vec<u8>>,
 }
@@ -166,6 +167,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     cursor_col: u16,
     term_cols: u16,
     term_rows: u16,
+    command_position: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
@@ -192,6 +194,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         term_rows,
         prev_popup_row,
         prev_popup_height,
+        command_position,
         reuse_popup: false,
         shift_tab_sequence,
     };
@@ -627,6 +630,7 @@ impl DaemonServer {
                 term_cols,
                 term_rows,
                 prev_popup,
+                command_position,
                 reuse_token,
                 shift_tab_sequence,
                 context_key,
@@ -697,6 +701,7 @@ impl DaemonServer {
                         term_rows,
                         prev_popup_row: prev_popup.map(|(row, _)| row),
                         prev_popup_height: prev_popup.map(|(_, height)| height),
+                        command_position,
                         reuse_popup: reuse_token.is_some(),
                         shift_tab_sequence,
                     },
@@ -958,6 +963,7 @@ impl DaemonServer {
             term_rows,
             prev_popup_row,
             prev_popup_height,
+            command_position,
             reuse_popup,
             shift_tab_sequence,
         } = params;
@@ -1089,9 +1095,10 @@ impl DaemonServer {
                             Some(c) => {
                                 let _ = write_apply_result(
                                     writer,
-                                    &ApplyResult::confirm(
-                                        c.text_with_suffix(&self.config.suffixes),
-                                    ),
+                                    &ApplyResult::confirm(c.text_with_suffix_for_command_position(
+                                        &self.config.suffixes,
+                                        command_position,
+                                    )),
                                 );
                             }
                             None => {
@@ -1458,6 +1465,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1634,6 +1642,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1672,6 +1681,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1707,6 +1717,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: true,
                     shift_tab_sequence: None,
                 },
@@ -1742,6 +1753,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1788,6 +1800,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1836,6 +1849,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1883,6 +1897,7 @@ mod tests {
                 term_rows: 24,
                 prev_popup_row: None,
                 prev_popup_height: None,
+                command_position: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
@@ -1913,6 +1928,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1961,6 +1977,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2015,6 +2032,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2077,6 +2095,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2130,6 +2149,7 @@ mod tests {
                 term_rows: 24,
                 prev_popup_row: None,
                 prev_popup_height: None,
+                command_position: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
@@ -2140,6 +2160,45 @@ mod tests {
         let _ = read_frame(&mut output_reader);
         let (done, apply) = read_done(&mut output_reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 cargo!");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=1 restore_hex="
+        );
+    }
+
+    #[test]
+    fn handle_complete_confirm_uses_command_override_for_empty_kind_in_command_position() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b"\r");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 git!");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=0 execute=1 restore_hex="
@@ -2177,6 +2236,7 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },

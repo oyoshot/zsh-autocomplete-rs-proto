@@ -62,6 +62,7 @@ pub struct TextCompleteRequest {
     pub term_cols: u16,
     pub term_rows: u16,
     pub prev_popup: Option<(u16, u16)>,
+    pub command_position: bool,
     pub reuse_token: Option<String>,
     pub shift_tab_sequence: Option<Vec<u8>>,
     pub context_key: Option<String>,
@@ -401,6 +402,7 @@ impl TextRequest {
             ] => {
                 let mut prev_popup_row = None;
                 let mut prev_popup_height = None;
+                let mut command_position = false;
                 let mut reuse_token = None;
                 let mut shift_tab_sequence = None;
                 let mut context_key = None;
@@ -415,6 +417,8 @@ impl TextRequest {
                         shift_tab_sequence = decode_hex_bytes(value);
                     } else if let Some(value) = token.strip_prefix("context_key=") {
                         context_key = Some(value.to_string());
+                    } else if let Some(value) = token.strip_prefix("command_position=") {
+                        command_position = value == "1";
                     }
                 }
                 Some(Self::Complete(TextCompleteRequest {
@@ -423,6 +427,7 @@ impl TextRequest {
                     term_cols: parse_u16_token(term_cols)?,
                     term_rows: parse_u16_token(term_rows)?,
                     prev_popup: prev_popup_row.zip(prev_popup_height),
+                    command_position,
                     reuse_token,
                     shift_tab_sequence,
                     context_key,
@@ -448,6 +453,9 @@ impl TextCompleteRequest {
         );
         if let Some((row, height)) = self.prev_popup {
             line.push_str(&format!(" prev_popup_row={row} prev_popup_height={height}"));
+        }
+        if self.command_position {
+            line.push_str(" command_position=1");
         }
         if let Some(token) = &self.reuse_token {
             line.push_str(&format!(" reuse_token={token}"));
@@ -877,6 +885,7 @@ mod tests {
             term_cols: 80,
             term_rows: 24,
             prev_popup: Some((6, 12)),
+            command_position: true,
             reuse_token: Some("123".to_string()),
             shift_tab_sequence: Some(b"\x1b[Z".to_vec()),
             context_key: Some("ctx".to_string()),
