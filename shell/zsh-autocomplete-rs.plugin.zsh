@@ -452,8 +452,10 @@ _zacrs_apply() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}" accept_single="${9:-0}"
     local shift_tab_hex=""
+    local is_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -472,6 +474,8 @@ _zacrs_invoke_daemon() {
         --cols "$COLUMNS"
         --rows "$LINES"
     )
+    (( is_cmd_pos )) && complete_args+=(--command-position)
+    (( accept_single )) && complete_args+=(--accept-single)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
@@ -504,7 +508,7 @@ _zacrs_invoke_daemon() {
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -ne 0 ]] && zle reset-prompt
+    (( accept_single || result_code != 0 )) && zle reset-prompt
     return 0
 }
 
@@ -512,8 +516,10 @@ _zacrs_invoke_daemon() {
 
 _zacrs_invoke() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" accept_single="${6:-0}"
     local shift_tab_hex=""
+    local is_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -531,6 +537,8 @@ _zacrs_invoke() {
         --cols "$COLUMNS"
         --rows "$LINES"
     )
+    (( is_cmd_pos )) && complete_args+=(--command-position)
+    (( accept_single )) && complete_args+=(--accept-single)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     if (( _zacrs_popup_visible )); then
@@ -558,7 +566,7 @@ _zacrs_invoke() {
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -ne 0 ]] && zle reset-prompt
+    (( accept_single || result_code != 0 )) && zle reset-prompt
 }
 
 _zacrs_encode_hex_input() {
@@ -604,11 +612,15 @@ _zacrs_collect_candidates() {
 _zacrs_apply_single_candidate() {
     local prefix="$1" prefix_len="$2" cand_line="$3"
     _zacrs_clear_popup
+    local cursor_row=0 cursor_col=0
+    if (( _zacrs_daemon_available )); then
+        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" "" 1 && return
+    fi
+    _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 1 && return
+
     local text="${cand_line%%	*}"
     local kind="${cand_line##*	}"
-    local is_cmd_pos=0
-    local result_text="$text"
-    local chain=0
+    local is_cmd_pos=0 result_text="$text" chain=0
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     case "$kind" in
         directory) [[ "$text" != */ ]] && result_text+="/" ;;

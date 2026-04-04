@@ -83,6 +83,8 @@ pub fn try_daemon_complete(
     cursor_row: u16,
     cursor_col: u16,
     candidates_tsv: &str,
+    command_position: bool,
+    accept_single: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     stale_bytes: Vec<u8>,
     prev_popup: Option<(u16, u16)>,
@@ -104,6 +106,8 @@ pub fn try_daemon_complete(
         term_cols,
         term_rows,
         prev_popup,
+        command_position,
+        accept_single,
         reuse_token: reuse_token.map(str::to_string),
         shift_tab_sequence,
         context_key: context_key.map(str::to_string),
@@ -144,13 +148,18 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     prev_popup: Option<(u16, u16)>,
     cursor_row: u16,
 ) -> Result<TextCompleteResult, DaemonUnavailable> {
+    if initial_header == "NONE" {
+        return Err(DaemonUnavailable::EmptyResult);
+    }
+    if initial_header.starts_with("DONE ") {
+        return TextCompleteResult::read_from(reader, initial_header)
+            .map_err(|_| DaemonUnavailable::NotRunning);
+    }
+
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
 
     let mut state = SessionState::with_prev_popup(prev_popup, cursor_row);
-    if initial_header == "NONE" {
-        return Err(DaemonUnavailable::EmptyResult);
-    }
     if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
         return Ok(result);
     }
@@ -538,6 +547,21 @@ mod tests {
         assert!(result.chain);
         assert!(!result.execute);
         assert_eq!(result.restore_text, "cargo ");
+    }
+
+    #[test]
+    fn initial_done_does_not_require_tty() {
+        let mut reader = BufReader::new("APPLY chain=1 execute=1 restore_hex=\n".as_bytes());
+        let mut writer = Vec::new();
+
+        let result =
+            run_text_popup_session(&mut reader, &mut writer, "DONE 0 cargo ", vec![], None, 0)
+                .unwrap();
+
+        assert_eq!(result.code, 0);
+        assert_eq!(result.text, "cargo ");
+        assert!(result.chain);
+        assert!(result.execute);
     }
 
     #[test]

@@ -26,6 +26,8 @@ struct CompleteCommand {
     cols: u16,
     rows: u16,
     daemon_mode: bool,
+    command_position: bool,
+    accept_single: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     stale_bytes: Vec<u8>,
     reuse_token: Option<String>,
@@ -42,6 +44,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         cols,
         rows,
         daemon_mode,
+        command_position,
+        accept_single,
         shift_tab_sequence,
         stale_bytes,
         reuse_token,
@@ -62,6 +66,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             cursor_row,
             cursor_col,
             &tsv,
+            command_position,
+            accept_single,
             shift_tab_sequence,
             stale_bytes,
             prev_popup_row.zip(prev_popup_height),
@@ -87,8 +93,12 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     let tsv_for_thread = tsv;
     let shift_tab_for_thread = shift_tab_sequence;
     let handle = thread::spawn(move || {
-        let mut session_reader = io::BufReader::new(&server_stream);
-        let mut session_writer = io::BufWriter::new(&server_stream);
+        let server_reader = match server_stream.try_clone() {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+        let mut session_reader = io::BufReader::new(server_reader);
+        let mut session_writer = io::BufWriter::new(server_stream);
         daemon::run_stdio_complete(
             &mut session_reader,
             &mut session_writer,
@@ -97,6 +107,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             cursor_col,
             cols,
             rows,
+            command_position,
+            accept_single,
             shift_tab_for_thread,
             prev_popup_row,
             prev_popup_height,
@@ -227,6 +239,8 @@ fn main() {
             cursor_row,
             cursor_col,
             daemon,
+            command_position,
+            accept_single,
             shift_tab_hex,
             stale_hex,
             reuse_token,
@@ -242,6 +256,8 @@ fn main() {
             cols,
             rows,
             daemon_mode: daemon,
+            command_position,
+            accept_single,
             shift_tab_sequence: shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),

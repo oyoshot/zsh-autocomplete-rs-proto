@@ -32,6 +32,16 @@ struct ApplyResult {
 }
 
 impl ApplyResult {
+    fn apply_only(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 0,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+
     fn confirm(text: String) -> Self {
         Self {
             chain: should_chain_after_apply(&text),
@@ -105,6 +115,8 @@ struct CompleteParams {
     term_rows: u16,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
+    command_position: bool,
+    accept_single: bool,
     reuse_popup: bool,
     shift_tab_sequence: Option<Vec<u8>>,
 }
@@ -166,6 +178,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     cursor_col: u16,
     term_cols: u16,
     term_rows: u16,
+    command_position: bool,
+    accept_single: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
@@ -192,6 +206,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         term_rows,
         prev_popup_row,
         prev_popup_height,
+        command_position,
+        accept_single,
         reuse_popup: false,
         shift_tab_sequence,
     };
@@ -627,6 +643,8 @@ impl DaemonServer {
                 term_cols,
                 term_rows,
                 prev_popup,
+                command_position,
+                accept_single,
                 reuse_token,
                 shift_tab_sequence,
                 context_key,
@@ -697,6 +715,8 @@ impl DaemonServer {
                         term_rows,
                         prev_popup_row: prev_popup.map(|(row, _)| row),
                         prev_popup_height: prev_popup.map(|(_, height)| height),
+                        command_position,
+                        accept_single,
                         reuse_popup: reuse_token.is_some(),
                         shift_tab_sequence,
                     },
@@ -958,6 +978,8 @@ impl DaemonServer {
             term_rows,
             prev_popup_row,
             prev_popup_height,
+            command_position,
+            accept_single,
             reuse_popup,
             shift_tab_sequence,
         } = params;
@@ -974,6 +996,22 @@ impl DaemonServer {
             .auto_insert_unambiguous
             .then(|| app.unambiguous_prefix().map(str::to_string))
             .flatten();
+
+        if accept_single && app.filtered_indices.len() == 1 {
+            if let Some(candidate) = app.selected_candidate() {
+                let _ = write_apply_result(
+                    writer,
+                    &ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
+                        &self.config.suffixes,
+                        command_position,
+                    )),
+                );
+            } else {
+                let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
+            }
+            self.fuzzy = Some(app.take_fuzzy());
+            return;
+        }
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         let prev_popup = prev_popup_row.zip(prev_popup_height);
@@ -1089,7 +1127,10 @@ impl DaemonServer {
                             Some(c) => {
                                 let _ = write_apply_result(
                                     writer,
-                                    &ApplyResult::confirm(c.text_with_suffix()),
+                                    &ApplyResult::confirm(c.text_with_suffix_for_command_position(
+                                        &self.config.suffixes,
+                                        command_position,
+                                    )),
                                 );
                             }
                             None => {
@@ -1107,7 +1148,10 @@ impl DaemonServer {
                                 let _ = write_apply_result(
                                     writer,
                                     &ApplyResult::dismiss_with_space(
-                                        c.text_for_dismiss_with_space(),
+                                        c.text_for_dismiss_with_space(
+                                            &self.config.suffixes,
+                                            command_position,
+                                        ),
                                     ),
                                 );
                             }
@@ -1393,7 +1437,7 @@ mod tests {
     use std::path::PathBuf;
     use std::thread;
 
-    fn read_frame(reader: &mut BufReader<UnixStream>) -> (String, String) {
+    fn read_frame<R: BufRead>(reader: &mut R) -> (String, String) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "), "header was: {header:?}");
@@ -1414,7 +1458,7 @@ mod tests {
         writer.flush().unwrap();
     }
 
-    fn read_done(reader: &mut BufReader<UnixStream>) -> (String, String) {
+    fn read_done<R: BufRead>(reader: &mut R) -> (String, String) {
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
         let mut apply = String::new();
@@ -1456,6 +1500,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1632,6 +1678,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1670,6 +1718,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1705,6 +1755,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: true,
                     shift_tab_sequence: None,
                 },
@@ -1740,6 +1792,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1786,6 +1840,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1834,6 +1890,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1881,6 +1939,8 @@ mod tests {
                 term_rows: 24,
                 prev_popup_row: None,
                 prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
@@ -1911,6 +1971,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1959,6 +2021,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2013,6 +2077,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2075,6 +2141,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -2103,6 +2171,159 @@ mod tests {
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
             "APPLY chain=1 execute=1 restore_hex=",
+        );
+    }
+
+    #[test]
+    fn handle_complete_confirm_uses_configured_suffix() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b"\r");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "ca".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 cargo!");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=1 restore_hex="
+        );
+    }
+
+    #[test]
+    fn handle_complete_accept_single_returns_done_without_frame() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "ca".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "cargo\tcommand\tcommand\n",
+        );
+
+        let output = String::from_utf8(writer).unwrap();
+        let mut lines = output.lines();
+        assert_eq!(lines.next(), Some("DONE 0 cargo!"));
+        assert_eq!(lines.next(), Some("APPLY chain=0 execute=0 restore_hex="));
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn handle_complete_confirm_uses_command_override_for_empty_kind_in_command_position() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b"\r");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 git!");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=1 restore_hex="
+        );
+    }
+
+    #[test]
+    fn handle_complete_dismiss_with_space_uses_command_override_for_empty_kind() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+
+        let mut input = Vec::new();
+        writeln!(&mut input, "KEY 1").unwrap();
+        input.extend_from_slice(b" ");
+
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+        );
+
+        let mut output_reader = BufReader::new(Cursor::new(writer));
+        let _ = read_frame(&mut output_reader);
+        let (done, apply) = read_done(&mut output_reader);
+        assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git! ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore_hex="
         );
     }
 
@@ -2137,6 +2358,8 @@ mod tests {
                     term_rows: 24,
                     prev_popup_row: None,
                     prev_popup_height: None,
+                    command_position: false,
+                    accept_single: false,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },

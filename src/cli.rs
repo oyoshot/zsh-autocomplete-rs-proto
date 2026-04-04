@@ -26,6 +26,12 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         daemon: bool,
 
+        #[arg(long, default_value_t = false)]
+        command_position: bool,
+
+        #[arg(long, default_value_t = false)]
+        accept_single: bool,
+
         #[arg(long)]
         stale_hex: Option<String>,
 
@@ -92,6 +98,8 @@ mod tests {
             "--shift-tab-hex",
             "1b5b32373b323b397e",
             "--daemon",
+            "--command-position",
+            "--accept-single",
             "--stale-hex",
             "1b5b44",
             "--reuse-token",
@@ -108,6 +116,8 @@ mod tests {
             Command::Complete {
                 shift_tab_hex,
                 daemon,
+                command_position,
+                accept_single,
                 stale_hex,
                 reuse_token,
                 context_key,
@@ -117,11 +127,25 @@ mod tests {
             } => {
                 assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
                 assert!(daemon);
+                assert!(command_position);
+                assert!(accept_single);
                 assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
                 assert_eq!(reuse_token.as_deref(), Some("123"));
                 assert_eq!(context_key.as_deref(), Some("ctx"));
                 assert_eq!(prev_popup_row, Some(6));
                 assert_eq!(prev_popup_height, Some(12));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn complete_accepts_hyphenated_prefix() {
+        let cli = Cli::parse_from(["zsh-autocomplete-rs", "complete", "--prefix", "--watch"]);
+
+        match cli.command {
+            Command::Complete { prefix, .. } => {
+                assert_eq!(prefix, "--watch");
             }
             _ => panic!("unexpected command"),
         }

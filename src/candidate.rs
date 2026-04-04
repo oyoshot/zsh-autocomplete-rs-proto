@@ -1,3 +1,5 @@
+use crate::config::SuffixConfig;
+
 #[derive(Clone)]
 pub struct Candidate {
     pub text: String,
@@ -18,23 +20,51 @@ impl Candidate {
         }
     }
 
-    pub fn text_with_suffix(&self) -> String {
-        let suffix = match self.kind.as_str() {
-            "directory" => {
-                if self.text.ends_with('/') {
-                    ""
-                } else {
-                    "/"
-                }
-            }
-            "command" | "alias" | "builtin" | "function" | "file" => " ",
-            _ => "",
+    pub fn text_with_suffix(&self, suffixes: &SuffixConfig) -> String {
+        let Some(suffix) = suffixes.suffix_for_kind(&self.kind) else {
+            return self.text.clone();
         };
-        format!("{}{}", self.text, suffix)
+        let base_text = self
+            .kind
+            .eq("directory")
+            .then(|| self.text.strip_suffix('/'))
+            .flatten()
+            .filter(|base| !base.is_empty())
+            .unwrap_or(&self.text);
+
+        if suffix.is_empty() || base_text.ends_with(suffix) {
+            base_text.to_string()
+        } else {
+            format!("{}{}", base_text, suffix)
+        }
     }
 
-    pub fn text_for_dismiss_with_space(&self) -> String {
-        let text = self.text_with_suffix();
+    pub fn text_with_suffix_for_command_position(
+        &self,
+        suffixes: &SuffixConfig,
+        is_command_position: bool,
+    ) -> String {
+        if is_command_position
+            && self.kind.is_empty()
+            && !self.text.ends_with('/')
+            && !self.text.contains('/')
+        {
+            let command_suffix = suffixes.suffix_for_kind("command").unwrap_or(" ");
+            if command_suffix.is_empty() || self.text.ends_with(command_suffix) {
+                return self.text.clone();
+            }
+            return format!("{}{}", self.text, command_suffix);
+        }
+
+        self.text_with_suffix(suffixes)
+    }
+
+    pub fn text_for_dismiss_with_space(
+        &self,
+        suffixes: &SuffixConfig,
+        is_command_position: bool,
+    ) -> String {
+        let text = self.text_with_suffix_for_command_position(suffixes, is_command_position);
         if text.ends_with([' ', '/']) {
             text
         } else {
@@ -94,36 +124,108 @@ mod tests {
     #[test]
     fn text_with_suffix_directory() {
         let c = Candidate::parse_line("src\t\tdirectory");
-        assert_eq!(c.text_with_suffix(), "src/");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "src/");
     }
 
     #[test]
     fn text_with_suffix_directory_already_slashed() {
         let c = Candidate::parse_line("src/\t\tdirectory");
-        assert_eq!(c.text_with_suffix(), "src/");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "src/");
+    }
+
+    #[test]
+    fn text_with_suffix_directory_empty_override_removes_trailing_slash() {
+        let c = Candidate::parse_line("src/\t\tdirectory");
+        let suffixes = SuffixConfig::default().with_override("directory", "");
+        assert_eq!(c.text_with_suffix(&suffixes), "src");
+    }
+
+    #[test]
+    fn text_with_suffix_directory_custom_override_replaces_trailing_slash() {
+        let c = Candidate::parse_line("src/\t\tdirectory");
+        let suffixes = SuffixConfig::default().with_override("directory", " ");
+        assert_eq!(c.text_with_suffix(&suffixes), "src ");
     }
 
     #[test]
     fn text_with_suffix_command() {
         let c = Candidate::parse_line("git\t\tcommand");
-        assert_eq!(c.text_with_suffix(), "git ");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "git ");
     }
 
     #[test]
     fn text_with_suffix_unknown_kind() {
         let c = Candidate::parse_line("foo\t\tother");
-        assert_eq!(c.text_with_suffix(), "foo");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "foo");
+    }
+
+    #[test]
+    fn text_with_suffix_uses_custom_config() {
+        let c = Candidate::parse_line("git\t\tcommand");
+        let custom = SuffixConfig::default().with_override("command", "!");
+        assert_eq!(c.text_with_suffix(&custom), "git!");
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_adds_space_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&SuffixConfig::default(), true),
+            "git "
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_uses_command_override_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "!");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&suffixes, true),
+            "git!"
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_honors_empty_command_override() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&suffixes, true),
+            "git"
+        );
+    }
+
+    #[test]
+    fn text_with_suffix_for_command_position_keeps_paths_without_space() {
+        let c = Candidate::parse_line("./script\t\t");
+        assert_eq!(
+            c.text_with_suffix_for_command_position(&SuffixConfig::default(), true),
+            "./script"
+        );
     }
 
     #[test]
     fn text_for_dismiss_with_space_unknown_kind() {
         let c = Candidate::parse_line("git\t\t");
-        assert_eq!(c.text_for_dismiss_with_space(), "git ");
+        assert_eq!(
+            c.text_for_dismiss_with_space(&SuffixConfig::default(), false),
+            "git "
+        );
     }
 
     #[test]
     fn text_for_dismiss_with_space_directory_keeps_slash() {
         let c = Candidate::parse_line("src\t\tdirectory");
-        assert_eq!(c.text_for_dismiss_with_space(), "src/");
+        assert_eq!(
+            c.text_for_dismiss_with_space(&SuffixConfig::default(), false),
+            "src/"
+        );
+    }
+
+    #[test]
+    fn text_for_dismiss_with_space_uses_command_override_for_empty_kind() {
+        let c = Candidate::parse_line("git\t\t");
+        let suffixes = SuffixConfig::default().with_override("command", "!");
+        assert_eq!(c.text_for_dismiss_with_space(&suffixes, true), "git! ");
     }
 }
