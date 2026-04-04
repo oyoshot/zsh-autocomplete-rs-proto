@@ -508,7 +508,7 @@ _zacrs_invoke_daemon() {
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -ne 0 ]] && zle reset-prompt
+    (( accept_single || result_code != 0 )) && zle reset-prompt
     return 0
 }
 
@@ -566,7 +566,7 @@ _zacrs_invoke() {
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -ne 0 ]] && zle reset-prompt
+    (( accept_single || result_code != 0 )) && zle reset-prompt
 }
 
 _zacrs_encode_hex_input() {
