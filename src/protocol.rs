@@ -523,10 +523,10 @@ impl TextCompleteResult {
         writeln!(writer, "DONE {} {}", self.code, self.text)?;
         writeln!(
             writer,
-            "APPLY chain={} execute={} restore={}",
+            "APPLY chain={} execute={} restore_hex={}",
             if self.chain { 1 } else { 0 },
             if self.execute { 1 } else { 0 },
-            self.restore_text
+            encode_hex_bytes(self.restore_text.as_bytes())
         )?;
         writer.flush()
     }
@@ -557,20 +557,25 @@ impl TextCompleteResult {
             ));
         }
 
+        let apply_fields = apply.strip_prefix("APPLY ").unwrap_or_default();
+        let (flag_fields, restore_text) =
+            if let Some((prefix, value)) = apply_fields.split_once(" restore_hex=") {
+                (prefix, decode_restore_text_hex(value)?)
+            } else if let Some((prefix, value)) = apply_fields.split_once(" restore=") {
+                (prefix, value.to_string())
+            } else {
+                (apply_fields, String::new())
+            };
+
         let mut chain = false;
         let mut execute = false;
-        for token in apply.split_whitespace().skip(1) {
+        for token in flag_fields.split_whitespace() {
             if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
             } else if let Some(value) = token.strip_prefix("execute=") {
                 execute = value == "1";
             }
         }
-
-        let restore_text = apply
-            .split_once(" restore=")
-            .map(|(_, value)| value.to_string())
-            .unwrap_or_default();
 
         Ok(Self {
             code,
@@ -580,6 +585,17 @@ impl TextCompleteResult {
             restore_text,
         })
     }
+}
+
+fn decode_restore_text_hex(hex: &str) -> io::Result<String> {
+    if hex.is_empty() {
+        return Ok(String::new());
+    }
+
+    let bytes = decode_hex_bytes(hex)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex"))?;
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex utf-8"))
 }
 
 pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) -> io::Result<()> {
@@ -909,5 +925,35 @@ mod tests {
             TextCompleteResult::read_from(&mut reader, done).unwrap(),
             result
         );
+    }
+
+    #[test]
+    fn text_complete_result_write_to_hex_encodes_restore_text() {
+        let result = TextCompleteResult {
+            code: 1,
+            text: String::new(),
+            chain: false,
+            execute: false,
+            restore_text: "--foo=chain=1 execute=0".to_string(),
+        };
+
+        let mut buf = Vec::new();
+        result.write_to(&mut buf).unwrap();
+        let payload = String::from_utf8(buf).unwrap();
+
+        assert!(payload.contains("restore_hex=2d2d666f6f3d636861696e3d3120657865637574653d30"));
+        assert!(!payload.contains("restore=--foo=chain=1 execute=0"));
+    }
+
+    #[test]
+    fn text_complete_result_read_from_legacy_restore_does_not_set_flags_from_payload() {
+        let mut reader =
+            io::BufReader::new("APPLY execute=0 restore=--foo=chain=1 execute=1\n".as_bytes());
+
+        let result = TextCompleteResult::read_from(&mut reader, "DONE 1 ").unwrap();
+
+        assert!(!result.chain);
+        assert!(!result.execute);
+        assert_eq!(result.restore_text, "--foo=chain=1 execute=1");
     }
 }

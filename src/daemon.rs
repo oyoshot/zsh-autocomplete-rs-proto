@@ -473,7 +473,7 @@ impl DaemonServer {
     /// Popup-session responses (on the persistent connection):
     ///   FRAME popup_row=<N> popup_height=<N> cursor_row=<N> <tty_len>\n<tty_bytes>
     ///   DONE <exit_code> <text>\n
-    ///   APPLY chain=<0|1> execute=<0|1> restore=<text>\n
+    ///   APPLY chain=<0|1> execute=<0|1> restore_hex=<hex>\n
     ///     exit_code: 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
     ///   NONE\n
     fn handle_text_connection(
@@ -1473,7 +1473,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=0 restore=gi"
+            "APPLY chain=0 execute=0 restore_hex=6769"
         );
 
         drop(reader);
@@ -1808,7 +1808,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=1 restore="
+            "APPLY chain=1 execute=1 restore_hex="
         );
 
         drop(reader);
@@ -1853,7 +1853,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=0 restore="
+            "APPLY chain=0 execute=0 restore_hex="
         );
 
         drop(reader);
@@ -1933,7 +1933,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore="
+            "APPLY chain=1 execute=0 restore_hex="
         );
 
         drop(reader);
@@ -1975,7 +1975,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore="
+            "APPLY chain=1 execute=0 restore_hex="
         );
 
         drop(reader);
@@ -2028,7 +2028,7 @@ mod tests {
 
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done, "DONE 3 0a\n");
-        assert_eq!(apply, "APPLY chain=0 execute=0 restore=gi\n");
+        assert_eq!(apply, "APPLY chain=0 execute=0 restore_hex=6769\n");
 
         let mut extra = String::new();
         reader.read_line(&mut extra).unwrap();
@@ -2102,7 +2102,7 @@ mod tests {
             "fo",
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
-            "APPLY chain=1 execute=1 restore=",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -2112,7 +2112,7 @@ mod tests {
             "car",
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
-            "APPLY chain=1 execute=1 restore=",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -2157,7 +2157,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=0 restore="
+            "APPLY chain=0 execute=0 restore_hex="
         );
 
         drop(reader);
@@ -2183,7 +2183,7 @@ mod tests {
             "\"s",
             "\"src/\t\tdirectory\n",
             "DONE 0 \"src/",
-            "APPLY chain=1 execute=1 restore=",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -2194,7 +2194,7 @@ mod tests {
             "'s",
             "'src/\t\tdirectory\n",
             "DONE 0 'src/",
-            "APPLY chain=1 execute=1 restore=",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -2206,7 +2206,7 @@ mod tests {
             "FOO=ba",
             "FOO=bar\t\t\n",
             "DONE 0 FOO=bar",
-            "APPLY chain=0 execute=1 restore=",
+            "APPLY chain=0 execute=1 restore_hex=",
         );
     }
 
@@ -2217,7 +2217,7 @@ mod tests {
             "--opt=va",
             "--opt=value\t\t\n",
             "DONE 0 --opt=value",
-            "APPLY chain=0 execute=1 restore=",
+            "APPLY chain=0 execute=1 restore_hex=",
         );
     }
 

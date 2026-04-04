@@ -357,12 +357,26 @@ _zacrs_decode_hex_to_REPLY() {
 
 _zacrs_parse_apply_line() {
     local apply_line="$1"
+    local metadata="$apply_line"
     chain=0
     execute=0
     restore_text=""
-    [[ "$apply_line" == *"chain=1"* ]] && chain=1
-    [[ "$apply_line" == *"execute=1"* ]] && execute=1
-    [[ "$apply_line" == *" restore="* ]] && restore_text="${apply_line#* restore=}"
+
+    if [[ "$metadata" == *" restore_hex="* ]]; then
+        local restore_hex="${metadata#* restore_hex=}"
+        metadata="${metadata%% restore_hex=*}"
+        _zacrs_decode_hex_to_REPLY "$restore_hex"
+        restore_text="$REPLY"
+    elif [[ "$metadata" == *" restore="* ]]; then
+        restore_text="${metadata#* restore=}"
+        metadata="${metadata%% restore=*}"
+    fi
+
+    local token
+    for token in ${(s: :)metadata}; do
+        [[ "$token" == "chain=1" ]] && chain=1
+        [[ "$token" == "execute=1" ]] && execute=1
+    done
 }
 
 _zacrs_read_done_response() {
