@@ -344,44 +344,49 @@ _zacrs_clear_popup() {
 
 # === Apply completion result to LBUFFER ===
 
-_zacrs_apply_result() {
-    local prefix_len="$1" result_code="$2" result_text="$3" execute_after_apply="${4:-0}"
+_zacrs_parse_apply_line() {
+    local apply_line="$1"
+    chain=0
+    execute=0
+    restore_text=""
+    [[ "$apply_line" == *"chain=1"* ]] && chain=1
+    [[ "$apply_line" == *"execute=1"* ]] && execute=1
+    [[ "$apply_line" == *" restore="* ]] && restore_text="${apply_line#* restore=}"
+}
+
+_zacrs_apply() {
+    local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local base
     local new_lbuffer="$LBUFFER"
-    local should_chain=0
     if (( prefix_len > 0 )); then
         base="${LBUFFER[1,-(prefix_len+1)]}"
     else
         base="$LBUFFER"
     fi
 
-    # Passthrough (code 3): preserve POSTDISPLAY so zsh-autosuggestions
-    # can still accept the suggestion when the re-injected key fires.
+    # Passthrough keeps POSTDISPLAY so zsh-autosuggestions can still accept
+    # the suggestion when the re-injected key fires.
     [[ $result_code -ne 3 ]] && unset POSTDISPLAY
 
-    if [[ $result_code -eq 0 && -n "$result_text" ]]; then
-        new_lbuffer="${base}${result_text}"
-        _zacrs_suppressed=0
-    elif [[ $result_code -eq 2 && -n "$result_text" ]]; then
-        new_lbuffer="${base}${result_text}"
-        _zacrs_suppressed=0
-    elif [[ $result_code -eq 3 ]]; then
-        _zacrs_suppressed=0
-    elif [[ $result_code -eq 1 && -n "$result_text" ]]; then
-        new_lbuffer="${base}${result_text}"
-        _zacrs_suppressed=0
-    elif [[ $result_code -eq 1 ]]; then
-        _zacrs_suppressed=0
-    fi
+    case "$result_code" in
+        0|1|2)
+            if [[ -n "$result_text" ]]; then
+                new_lbuffer="${base}${result_text}"
+            fi
+            _zacrs_suppressed=0
+            ;;
+        3)
+            if [[ -n "$restore_text" ]]; then
+                new_lbuffer="${base}${restore_text}"
+            fi
+            _zacrs_suppressed=0
+            ;;
+    esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
     CURSOR=${#new_lbuffer}
 
-    if [[ ( $result_code -eq 0 || $result_code -eq 2 ) && "$new_lbuffer" == *[\ /] ]]; then
-        should_chain=1
-    fi
-
-    if (( execute_after_apply )) && [[ $result_code -eq 0 ]]; then
+    if (( execute )) && [[ $result_code -eq 0 ]]; then
         _zacrs_prev_lbuffer="$new_lbuffer"
         _zacrs_chain_retry=0
         zle reset-prompt
@@ -389,13 +394,12 @@ _zacrs_apply_result() {
         return
     fi
 
-    # 補完適用後 (code 0/2) に末尾がスペース/スラッシュなら
-    # prev_lbuffer を更新せず line-pre-redraw にチェーンさせる
-    if (( should_chain )); then
+    if (( chain )); then
         _zacrs_prev_lbuffer="$base"
         _zacrs_chain_retry=1
     else
         _zacrs_prev_lbuffer="$new_lbuffer"
+        _zacrs_chain_retry=0
     fi
 }
 
@@ -424,7 +428,7 @@ _zacrs_complete_parse_frame() {
 # Handle a daemon response header in the popup-session loop.
 # Reads:  header, fd, tty_wfd from caller scope
 # Writes: _f_resp (frame|done|none|unknown)
-#         result_code, result_text (on done)
+#         result_code, result_text, chain, execute, restore_text (on done)
 #         _zacrs_popup_row, _zacrs_popup_height (on frame)
 #         _f_popup_row, _f_popup_height, _f_cursor_row, _f_tty_len (via parse_frame)
 _zacrs_complete_handle_response() {
@@ -442,6 +446,9 @@ _zacrs_complete_handle_response() {
             result_code="${${(s: :)header}[2]}"
             result_text="${header#DONE [0-9]## }"
             [[ "$result_text" == "$header" ]] && result_text=""
+            local apply_line=""
+            IFS= read -r -u $fd apply_line || apply_line=""
+            _zacrs_parse_apply_line "$apply_line"
             _f_resp=done
             ;;
         NONE)
@@ -455,7 +462,7 @@ _zacrs_complete_handle_response() {
 
 # Shared popup-session loop used by both daemon and subprocess (coproc) paths.
 # Reads:  have_initial_frame, header from caller scope
-# Writes: result_code, result_text, passthrough_input to caller scope
+# Writes: result_code, result_text, chain, execute, restore_text, passthrough_input to caller scope
 # Args:   $1 = read fd   $2 = write fd (may equal read fd for daemon socket)
 _zacrs_popup_session_loop() {
     local read_fd=$1 write_fd=$2
@@ -491,7 +498,7 @@ _zacrs_popup_session_loop() {
         if [[ -n "$_f_common_prefix" && ${#_f_common_prefix} -gt $prefix_len ]]; then
             LBUFFER="${LBUFFER:0:$(( ${#LBUFFER} - prefix_len ))}${_f_common_prefix}"
             CURSOR=$#LBUFFER
-            # Update prefix_len in caller scope so _zacrs_apply_result strips the
+            # Update prefix_len in caller scope so _zacrs_apply strips the
             # right amount when the user confirms a candidate.
             prefix_len=${#_f_common_prefix}
         fi
@@ -570,6 +577,7 @@ _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
     local passthrough_input=""
+    local chain=0 execute=0 restore_text=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
@@ -599,7 +607,7 @@ _zacrs_invoke_daemon() {
 
     local header
     IFS= read -r -u $fd header
-    local result_code=1 result_text=""
+    local result_code=1 result_text="" restore_text=""
     local have_initial_frame=0 initial_done=0
     case "$header" in
         FRAME*) have_initial_frame=1 ;;
@@ -623,6 +631,9 @@ _zacrs_invoke_daemon() {
             result_code="${parts[2]}"
             result_text="${header#DONE [0-9]## }"
             [[ "$result_text" == "$header" ]] && result_text=""
+            local apply_line=""
+            IFS= read -r -u $fd apply_line || apply_line=""
+            _zacrs_parse_apply_line "$apply_line"
             initial_done=1
             ;;
         *)
@@ -639,7 +650,7 @@ _zacrs_invoke_daemon() {
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         _zacrs_clear_popup
-        _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
+        _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
         zle reset-prompt
         return 0
     fi
@@ -648,7 +659,7 @@ _zacrs_invoke_daemon() {
 
     exec {fd}<&-
     _zacrs_clear_popup
-    _zacrs_apply_result "$prefix_len" "$result_code" "$result_text" 1
+    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
     [[ $result_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
     [[ $result_code -ne 0 ]] && zle reset-prompt
     return 0
@@ -660,6 +671,7 @@ _zacrs_invoke() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}"
     local passthrough_input=""
+    local chain=0 execute=0 restore_text=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
@@ -691,7 +703,7 @@ _zacrs_invoke() {
     # Read initial response
     local header
     IFS= read -r -u $coproc_rfd header
-    local result_code=1 result_text=""
+    local result_code=1 result_text="" restore_text=""
     local have_initial_frame=0 initial_done=0
     case "$header" in
         FRAME*) have_initial_frame=1 ;;
@@ -701,6 +713,9 @@ _zacrs_invoke() {
             result_code="${parts[2]}"
             result_text="${header#DONE [0-9]## }"
             [[ "$result_text" == "$header" ]] && result_text=""
+            local apply_line=""
+            IFS= read -r -u $coproc_rfd apply_line || apply_line=""
+            _zacrs_parse_apply_line "$apply_line"
             initial_done=1
             ;;
         *)
@@ -718,7 +733,7 @@ _zacrs_invoke() {
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         _zacrs_clear_popup
-        _zacrs_apply_result "$prefix_len" "$result_code" "$result_text"
+        _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
         zle reset-prompt
         return 0
     fi
@@ -728,7 +743,7 @@ _zacrs_invoke() {
     exec {coproc_rfd}<&- {coproc_wfd}>&-
     wait $coproc_pid 2>/dev/null
     _zacrs_clear_popup
-    _zacrs_apply_result "$prefix_len" "$result_code" "$result_text" 1
+    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
     [[ $result_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
     [[ $result_code -ne 0 ]] && zle reset-prompt
 }
@@ -816,34 +831,21 @@ _zacrs_apply_single_candidate() {
     _zacrs_clear_popup
     local text="${cand_line%%	*}"
     local kind="${cand_line##*	}"
-    local base
-    local new_lbuffer
     local is_cmd_pos=0
-    if (( prefix_len > 0 )); then
-        base="${LBUFFER[1,-(prefix_len+1)]}"
-    else
-        base="$LBUFFER"
-    fi
+    local result_text="$text"
+    local chain=0
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
-    unset POSTDISPLAY
-    new_lbuffer="${base}${text}"
     case "$kind" in
-        directory) [[ "$text" != */ ]] && new_lbuffer+="/" ;;
-        command|alias|builtin|function|file) new_lbuffer+=" " ;;
+        directory) [[ "$text" != */ ]] && result_text+="/" ;;
+        command|alias|builtin|function|file) result_text+=" " ;;
         "")
             if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
-                new_lbuffer+=" "
+                result_text+=" "
             fi
             ;;
     esac
-    BUFFER="${new_lbuffer}${RBUFFER}"
-    CURSOR=${#new_lbuffer}
-    if [[ "$new_lbuffer" == *[\ /] ]]; then
-        _zacrs_prev_lbuffer="$base"
-        _zacrs_chain_retry=1
-    else
-        _zacrs_prev_lbuffer="$new_lbuffer"
-    fi
+    [[ "$result_text" == *[\ /] ]] && chain=1
+    _zacrs_apply "$prefix_len" 0 "$result_text" "$chain" 0
     zle reset-prompt
 }
 

@@ -19,6 +19,73 @@ use tracing_subscriber::EnvFilter;
 
 const MAX_INLINE_KEY_BYTES: usize = 16;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApplyResult {
+    code: u8,
+    text: String,
+    chain: bool,
+    execute: bool,
+    restore_text: String,
+}
+
+impl ApplyResult {
+    fn confirm(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 0,
+            execute: true,
+            restore_text: String::new(),
+        }
+    }
+
+    fn cancel(text: String) -> Self {
+        Self {
+            code: 1,
+            text,
+            chain: false,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+
+    fn dismiss_with_space(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 2,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+
+    fn passthrough(filter_text: String) -> Self {
+        Self {
+            code: 3,
+            text: filter_text.clone(),
+            chain: false,
+            execute: false,
+            restore_text: filter_text,
+        }
+    }
+}
+
+fn should_chain_after_apply(text: &str) -> bool {
+    text.ends_with([' ', '/'])
+}
+
+fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
+    writeln!(writer, "DONE {} {}", result.code, result.text)?;
+    writeln!(
+        writer,
+        "APPLY chain={} execute={} restore={}",
+        if result.chain { 1 } else { 0 },
+        if result.execute { 1 } else { 0 },
+        result.restore_text
+    )?;
+    writer.flush()
+}
+
 struct RenderParams {
     prefix: String,
     cursor_row: u16,
@@ -398,6 +465,7 @@ impl DaemonServer {
     /// Popup-session responses (on the persistent connection):
     ///   FRAME popup_row=<N> popup_height=<N> cursor_row=<N> <tty_len>\n<tty_bytes>
     ///   DONE <exit_code> <text>\n
+    ///   APPLY chain=<0|1> execute=<0|1> restore=<text>\n
     ///     exit_code: 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
     ///   NONE\n
     fn handle_text_connection(
@@ -582,8 +650,10 @@ impl DaemonServer {
                                 }
                             }
                         } else {
-                            let _ = writeln!(writer, "DONE 1 ");
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                &mut writer,
+                                &ApplyResult::cancel(String::new()),
+                            );
                             return false;
                         }
                     }
@@ -830,8 +900,7 @@ impl DaemonServer {
             .collect();
 
         if candidates.is_empty() {
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -848,8 +917,7 @@ impl DaemonServer {
 
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -857,8 +925,7 @@ impl DaemonServer {
 
         if app.max_visible == 0 {
             self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -929,8 +996,10 @@ impl DaemonServer {
                     if drain_key_payload(reader, byte_count).is_err() {
                         break;
                     }
-                    let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                    let _ = writer.flush();
+                    let _ = write_apply_result(
+                        writer,
+                        &ApplyResult::passthrough(app.filter_text.clone()),
+                    );
                     break;
                 }
                 let mut key_buf = vec![0u8; byte_count];
@@ -956,8 +1025,10 @@ impl DaemonServer {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         app.type_char(c);
                         if app.filtered_indices.is_empty() {
-                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult::cancel(app.filter_text.clone()),
+                            );
                             break;
                         }
                         if self
@@ -970,15 +1041,16 @@ impl DaemonServer {
                     Action::Backspace => {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         if !app.backspace() {
-                            let _ = writeln!(writer, "DONE 1 ");
-                            let _ = writer.flush();
+                            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
                             break;
                         }
                         if app.filtered_indices.is_empty()
                             || app.filter_text.len() < app.prefix.len()
                         {
-                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult::cancel(app.filter_text.clone()),
+                            );
                             break;
                         }
                         if self
@@ -991,26 +1063,40 @@ impl DaemonServer {
                     Action::Confirm => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::confirm(c.text_with_suffix()),
+                                );
                             }
                             None => {
-                                let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::cancel(app.filter_text.clone()),
+                                );
                             }
                         }
-                        let _ = writer.flush();
                         break;
                     }
                     Action::DismissWithSpace => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ =
-                                    writeln!(writer, "DONE 2 {}", c.text_for_dismiss_with_space());
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::dismiss_with_space(
+                                        c.text_for_dismiss_with_space(),
+                                    ),
+                                );
                             }
                             None => {
-                                let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::dismiss_with_space(format!(
+                                        "{} ",
+                                        app.filter_text
+                                    )),
+                                );
                             }
                         }
-                        let _ = writer.flush();
                         break;
                     }
                     Action::Cancel => {
@@ -1019,8 +1105,7 @@ impl DaemonServer {
                         } else {
                             ""
                         };
-                        let _ = writeln!(writer, "DONE 1 {}", text);
-                        let _ = writer.flush();
+                        let _ = write_apply_result(writer, &ApplyResult::cancel(text.to_string()));
                         break;
                     }
                     Action::Resize(_, _) => {
@@ -1028,8 +1113,10 @@ impl DaemonServer {
                         let _ = writer.flush();
                     }
                     Action::None => {
-                        let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                        let _ = writer.flush();
+                        let _ = write_apply_result(
+                            writer,
+                            &ApplyResult::passthrough(app.filter_text.clone()),
+                        );
                         break;
                     }
                 }
@@ -1303,6 +1390,14 @@ mod tests {
         writer.flush().unwrap();
     }
 
+    fn read_done(reader: &mut BufReader<UnixStream>) -> (String, String) {
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        let mut apply = String::new();
+        reader.read_line(&mut apply).unwrap();
+        (done, apply)
+    }
+
     fn test_server() -> DaemonServer {
         let config = Config::default();
         let theme = config.theme();
@@ -1348,9 +1443,12 @@ mod tests {
         let _ = read_frame(&mut reader);
         send_key(&mut writer, key);
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore=gi"
+        );
 
         drop(reader);
         drop(writer);
@@ -1670,9 +1768,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=1 restore="
+        );
 
         drop(reader);
         drop(writer);
@@ -1710,9 +1811,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore="
+        );
 
         drop(reader);
         drop(writer);
@@ -1783,9 +1887,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore="
+        );
 
         drop(reader);
         drop(writer);
@@ -1820,9 +1927,12 @@ mod tests {
 
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore="
+        );
 
         drop(reader);
         drop(writer);
@@ -1870,9 +1980,9 @@ mod tests {
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b"\n");
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done, "DONE 3 gi\n");
+        assert_eq!(apply, "APPLY chain=0 execute=0 restore=gi\n");
 
         let mut extra = String::new();
         reader.read_line(&mut extra).unwrap();
@@ -1891,7 +2001,12 @@ mod tests {
         assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
     }
 
-    fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
+    fn assert_immediate_confirm(
+        prefix: &str,
+        candidates_tsv: &str,
+        expected_done: &str,
+        expected_apply: &str,
+    ) {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let prefix = prefix.to_string();
         let candidates_tsv = candidates_tsv.to_string();
@@ -1920,9 +2035,9 @@ mod tests {
 
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+        assert_eq!(apply.strip_suffix('\n').unwrap_or(&apply), expected_apply);
 
         drop(reader);
         drop(writer);
@@ -1935,6 +2050,7 @@ mod tests {
             "fo",
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
+            "APPLY chain=1 execute=1 restore=",
         );
     }
 
@@ -1944,6 +2060,7 @@ mod tests {
             "car",
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
+            "APPLY chain=1 execute=1 restore=",
         );
     }
 
@@ -1980,11 +2097,14 @@ mod tests {
         // Send Escape (cancel)
         send_key(&mut writer, b"\x1b");
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
         // With auto_insert enabled the extended "git-" would have been returned.
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore="
+        );
 
         drop(reader);
         drop(writer);
@@ -2005,26 +2125,46 @@ mod tests {
         // Simulates `"s<Tab>`: prefix = `"s`, candidate text = `"src/`
         // (the shell plugin captures IPREFIX=`"` into _full_prefix, so the
         // candidate text starts with the opening quote).
-        assert_immediate_confirm("\"s", "\"src/\t\tdirectory\n", "DONE 0 \"src/");
+        assert_immediate_confirm(
+            "\"s",
+            "\"src/\t\tdirectory\n",
+            "DONE 0 \"src/",
+            "APPLY chain=1 execute=1 restore=",
+        );
     }
 
     #[test]
     fn handle_complete_single_quoted_prefix_confirms_candidate() {
         // Simulates `'s<Tab>`: single-quote variant of the same quoting case.
-        assert_immediate_confirm("'s", "'src/\t\tdirectory\n", "DONE 0 'src/");
+        assert_immediate_confirm(
+            "'s",
+            "'src/\t\tdirectory\n",
+            "DONE 0 'src/",
+            "APPLY chain=1 execute=1 restore=",
+        );
     }
 
     #[test]
     fn handle_complete_assignment_prefix_confirms_candidate() {
         // Simulates `FOO=ba<Tab>`: IPREFIX=`FOO=`, PREFIX=`ba`.
         // Ensures IPREFIX-prefixed candidates are returned without duplication.
-        assert_immediate_confirm("FOO=ba", "FOO=bar\t\t\n", "DONE 0 FOO=bar");
+        assert_immediate_confirm(
+            "FOO=ba",
+            "FOO=bar\t\t\n",
+            "DONE 0 FOO=bar",
+            "APPLY chain=0 execute=1 restore=",
+        );
     }
 
     #[test]
     fn handle_complete_option_equals_prefix_confirms_candidate() {
         // Simulates `--opt=va<Tab>`: IPREFIX=`--opt=`, PREFIX=`va`.
-        assert_immediate_confirm("--opt=va", "--opt=value\t\t\n", "DONE 0 --opt=value");
+        assert_immediate_confirm(
+            "--opt=va",
+            "--opt=value\t\t\n",
+            "DONE 0 --opt=value",
+            "APPLY chain=0 execute=1 restore=",
+        );
     }
 
     // --- Candidate cache tests ---
