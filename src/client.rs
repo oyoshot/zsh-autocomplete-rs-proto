@@ -134,17 +134,26 @@ pub fn try_daemon_complete(
         return Ok(CompleteSessionOutcome::CacheMiss);
     }
 
+    let result = run_text_popup_session(&mut reader, &mut writer, &header, stale_bytes)?;
+    Ok(CompleteSessionOutcome::Done(result))
+}
+
+pub fn run_text_popup_session<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    initial_header: &str,
+    stale_bytes: Vec<u8>,
+) -> Result<CompleteSessionResult, DaemonUnavailable> {
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
 
     let mut state = SessionState::default();
-    match header.as_str() {
+    match initial_header {
         value if value.starts_with("FRAME ") => {
-            state.handle_frame(&mut reader, &mut tty_writer, value)?;
+            state.handle_frame(reader, &mut tty_writer, value)?;
         }
         value if value.starts_with("DONE ") => {
-            let result = read_done_response(&mut reader, value)?;
-            return Ok(CompleteSessionOutcome::Done(result));
+            return read_done_response(reader, value);
         }
         "NONE" => return Err(DaemonUnavailable::EmptyResult),
         _ => return Err(DaemonUnavailable::NotRunning),
@@ -158,20 +167,20 @@ pub fn try_daemon_complete(
             if key.is_empty() {
                 break;
             }
-            if let Some(result) = state.send_key(&mut reader, &mut writer, &mut tty_writer, &key)? {
+            if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
                 raw_mode.restore();
                 state.clear_popup(&mut tty_writer)?;
-                return Ok(CompleteSessionOutcome::Done(result));
+                return Ok(result);
             }
         }
     }
 
     loop {
         let key = read_key_from_fd(tty_fd.as_raw_fd())?;
-        if let Some(result) = state.send_key(&mut reader, &mut writer, &mut tty_writer, &key)? {
+        if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
             raw_mode.restore();
             state.clear_popup(&mut tty_writer)?;
-            return Ok(CompleteSessionOutcome::Done(result));
+            return Ok(result);
         }
     }
 }
@@ -225,9 +234,9 @@ struct SessionState {
 }
 
 impl SessionState {
-    fn handle_frame(
+    fn handle_frame<R: BufRead>(
         &mut self,
-        reader: &mut BufReader<UnixStream>,
+        reader: &mut R,
         tty_writer: &mut File,
         header: &str,
     ) -> Result<(), DaemonUnavailable> {
@@ -236,10 +245,10 @@ impl SessionState {
         Ok(())
     }
 
-    fn send_key(
+    fn send_key<R: BufRead, W: Write>(
         &mut self,
-        reader: &mut BufReader<UnixStream>,
-        writer: &mut UnixStream,
+        reader: &mut R,
+        writer: &mut W,
         tty_writer: &mut File,
         key: &[u8],
     ) -> Result<Option<CompleteSessionResult>, DaemonUnavailable> {
@@ -295,8 +304,8 @@ fn parse_frame_header(state: &mut SessionState, header: &str) -> Option<usize> {
     tty_len
 }
 
-fn read_done_response(
-    reader: &mut BufReader<UnixStream>,
+fn read_done_response<R: BufRead>(
+    reader: &mut R,
     header: &str,
 ) -> Result<CompleteSessionResult, DaemonUnavailable> {
     let mut parts = header.splitn(3, ' ');
@@ -335,8 +344,8 @@ fn read_done_response(
     })
 }
 
-fn relay_tty_bytes(
-    reader: &mut BufReader<UnixStream>,
+fn relay_tty_bytes<R: Read>(
+    reader: &mut R,
     tty_writer: &mut File,
     tty_len: usize,
 ) -> Result<(), DaemonUnavailable> {

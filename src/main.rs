@@ -5,8 +5,10 @@ use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::{client, config, daemon, protocol, tty, ui};
 
 use clap::Parser;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufWriter, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::process;
+use std::thread;
 
 fn write_done_result(
     mut writer: impl Write,
@@ -68,21 +70,43 @@ fn run_complete(
     }
 
     let stdout = io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-
-    daemon::run_stdio_complete(
-        &mut reader,
-        &mut writer,
-        prefix,
-        cursor_row,
-        cursor_col,
-        cols,
-        rows,
-        shift_tab_sequence,
-        prev_popup_row,
-        prev_popup_height,
-        &tsv,
-    );
+    let mut stdout_writer = BufWriter::new(stdout.lock());
+    let (server_stream, client_stream) = UnixStream::pair()?;
+    let prefix_for_thread = prefix;
+    let tsv_for_thread = tsv;
+    let shift_tab_for_thread = shift_tab_sequence;
+    let handle = thread::spawn(move || {
+        let mut session_reader = io::BufReader::new(&server_stream);
+        let mut session_writer = io::BufWriter::new(&server_stream);
+        daemon::run_stdio_complete(
+            &mut session_reader,
+            &mut session_writer,
+            prefix_for_thread,
+            cursor_row,
+            cursor_col,
+            cols,
+            rows,
+            shift_tab_for_thread,
+            prev_popup_row,
+            prev_popup_height,
+            &tsv_for_thread,
+        );
+    });
+    let mut session_reader = io::BufReader::new(client_stream.try_clone()?);
+    let mut session_writer = client_stream;
+    let mut initial_header = String::new();
+    session_reader.read_line(&mut initial_header)?;
+    let result = client::run_text_popup_session(
+        &mut session_reader,
+        &mut session_writer,
+        initial_header.trim_end(),
+        stale_bytes,
+    )
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    write_done_result(&mut stdout_writer, &result)?;
+    handle
+        .join()
+        .map_err(|_| io::Error::other("complete session thread panicked"))?;
     Ok(())
 }
 
