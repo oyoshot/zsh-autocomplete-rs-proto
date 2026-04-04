@@ -58,20 +58,20 @@ impl ApplyResult {
             restore_text: String::new(),
         }
     }
-
-    fn passthrough(filter_text: String) -> Self {
-        Self {
-            code: 3,
-            text: filter_text.clone(),
-            chain: false,
-            execute: false,
-            restore_text: filter_text,
-        }
-    }
 }
 
 fn should_chain_after_apply(text: &str) -> bool {
     text.ends_with([' ', '/'])
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
@@ -993,12 +993,19 @@ impl DaemonServer {
                     continue;
                 }
                 if byte_count > MAX_INLINE_KEY_BYTES {
-                    if drain_key_payload(reader, byte_count).is_err() {
-                        break;
-                    }
+                    let drained = match drain_key_payload(reader, byte_count) {
+                        Ok(bytes) => bytes,
+                        Err(_) => break,
+                    };
                     let _ = write_apply_result(
                         writer,
-                        &ApplyResult::passthrough(app.filter_text.clone()),
+                        &ApplyResult {
+                            code: 3,
+                            text: encode_hex_bytes(&drained),
+                            chain: false,
+                            execute: false,
+                            restore_text: app.filter_text.clone(),
+                        },
                     );
                     break;
                 }
@@ -1115,7 +1122,13 @@ impl DaemonServer {
                     Action::None => {
                         let _ = write_apply_result(
                             writer,
-                            &ApplyResult::passthrough(app.filter_text.clone()),
+                            &ApplyResult {
+                                code: 3,
+                                text: encode_hex_bytes(&key_buf),
+                                chain: false,
+                                execute: false,
+                                restore_text: app.filter_text.clone(),
+                            },
                         );
                         break;
                     }
@@ -1147,8 +1160,9 @@ impl DaemonServer {
     }
 }
 
-fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<()> {
+fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<Vec<u8>> {
     let mut remaining = byte_count;
+    let mut payload = Vec::with_capacity(byte_count);
     let mut buf = [0u8; 256];
 
     while remaining > 0 {
@@ -1160,10 +1174,11 @@ fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io:
                 "short KEY payload while draining passthrough bytes",
             ));
         }
+        payload.extend_from_slice(&buf[..read]);
         remaining -= read;
     }
 
-    Ok(())
+    Ok(payload)
 }
 
 fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
@@ -1941,14 +1956,14 @@ mod tests {
 
     #[test]
     fn handle_complete_unknown_key_passthroughs_filter_text() {
-        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 gi");
+        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 1b5b44");
     }
 
     #[test]
     fn handle_complete_ctrl_bindings_passthrough_filter_text() {
-        for key in [b"\x01".as_slice(), b"\x05", b"\x0b"] {
-            assert_passthrough_key("gi", key, "DONE 3 gi");
-        }
+        assert_passthrough_key("gi", b"\x01", "DONE 3 01");
+        assert_passthrough_key("gi", b"\x05", "DONE 3 05");
+        assert_passthrough_key("gi", b"\x0b", "DONE 3 0b");
     }
 
     #[test]
@@ -1981,7 +1996,7 @@ mod tests {
         send_key(&mut writer, b"\n");
 
         let (done, apply) = read_done(&mut reader);
-        assert_eq!(done, "DONE 3 gi\n");
+        assert_eq!(done, "DONE 3 0a\n");
         assert_eq!(apply, "APPLY chain=0 execute=0 restore=gi\n");
 
         let mut extra = String::new();
@@ -1998,7 +2013,11 @@ mod tests {
 
     #[test]
     fn handle_complete_oversized_key_drains_payload_and_passthroughs() {
-        assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
+        assert_passthrough_key(
+            "gi",
+            b"\x1b[200~git status --short\x1b[201~",
+            "DONE 3 1b5b3230307e67697420737461747573202d2d73686f72741b5b3230317e",
+        );
     }
 
     fn assert_immediate_confirm(

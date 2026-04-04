@@ -344,6 +344,17 @@ _zacrs_clear_popup() {
 
 # === Apply completion result to LBUFFER ===
 
+_zacrs_decode_hex_to_REPLY() {
+    local hex="$1"
+    REPLY=""
+    [[ -z "$hex" ]] && return 0
+
+    local i
+    for (( i = 1; i <= ${#hex}; i += 2 )); do
+        REPLY+=$(printf '%b' "\\x${hex[i,i+1]}")
+    done
+}
+
 _zacrs_parse_apply_line() {
     local apply_line="$1"
     chain=0
@@ -380,6 +391,8 @@ _zacrs_apply() {
                 new_lbuffer="${base}${restore_text}"
             fi
             _zacrs_suppressed=0
+            _zacrs_decode_hex_to_REPLY "$result_text"
+            [[ -n "$REPLY" ]] && zle -U "$REPLY"
             ;;
     esac
 
@@ -462,7 +475,7 @@ _zacrs_complete_handle_response() {
 
 # Shared popup-session loop used by both daemon and subprocess (coproc) paths.
 # Reads:  have_initial_frame, header from caller scope
-# Writes: result_code, result_text, chain, execute, restore_text, passthrough_input to caller scope
+# Writes: result_code, result_text, chain, execute, restore_text to caller scope
 # Args:   $1 = read fd   $2 = write fd (may equal read fd for daemon socket)
 _zacrs_popup_session_loop() {
     local read_fd=$1 write_fd=$2
@@ -535,7 +548,6 @@ _zacrs_popup_session_loop() {
                 case "$_f_resp" in
                     frame) ;;
                     done)
-                        (( result_code == 3 )) && passthrough_input="$_key"
                         _inject_done=1
                         break
                         ;;
@@ -559,7 +571,6 @@ _zacrs_popup_session_loop() {
             case "$_f_resp" in
                 frame) ;;
                 done)
-                    (( result_code == 3 )) && passthrough_input="$input"
                     break
                     ;;
                 none)  ;;
@@ -576,7 +587,6 @@ _zacrs_popup_session_loop() {
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}"
-    local passthrough_input=""
     local chain=0 execute=0 restore_text=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
@@ -660,7 +670,6 @@ _zacrs_invoke_daemon() {
     exec {fd}<&-
     _zacrs_clear_popup
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
     [[ $result_code -ne 0 ]] && zle reset-prompt
     return 0
 }
@@ -670,7 +679,6 @@ _zacrs_invoke_daemon() {
 _zacrs_invoke() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
     local cursor_row="${4:-}" cursor_col="${5:-}"
-    local passthrough_input=""
     local chain=0 execute=0 restore_text=""
     local shift_tab_hex=""
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
@@ -744,7 +752,6 @@ _zacrs_invoke() {
     wait $coproc_pid 2>/dev/null
     _zacrs_clear_popup
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
-    [[ $result_code -eq 3 && -n "$passthrough_input" ]] && zle -U "$passthrough_input"
     [[ $result_code -ne 0 ]] && zle reset-prompt
 }
 
