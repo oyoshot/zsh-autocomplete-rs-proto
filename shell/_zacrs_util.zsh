@@ -52,3 +52,25 @@ _zacrs_is_cmd_pos() {
     (( ${#_toks} >= 2 )) && [[ "${_toks[-2]}" == ('|'|'||'|'&&'|';') ]] && return 0
     return 1
 }
+
+# Infer the shell command kind for a bare command-position token.
+# Sets REPLY to one of: alias, builtin, function, command.
+_zacrs_command_kind() {
+    local name="$1"
+    REPLY=""
+    [[ -z "$name" || "$name" == */* ]] && return 1
+
+    if (( ${+aliases[$name]} )); then
+        REPLY="alias"
+    elif (( ${+builtins[$name]} )); then
+        REPLY="builtin"
+    elif (( ${+functions[$name]} )) && [[ "$name" != _* ]]; then
+        REPLY="function"
+    elif (( ${+commands[$name]} )); then
+        REPLY="command"
+    else
+        return 1
+    fi
+
+    return 0
+}

@@ -35,6 +35,8 @@ _zacrs_compsys_func() {
     typeset -gi _zacrs_ctx_valid=0
     typeset -g  _zacrs_ctx_prefix=""
     typeset -gi _zacrs_ctx_prefix_len=0
+    local _zacrs_cmd_pos=0
+    _zacrs_is_cmd_pos "$LBUFFER" "${LBUFFER##* }" && _zacrs_cmd_pos=1
 
     [[ -n "$ZACRS_DEBUG" ]] && print -r -- "=== compsys $(date '+%H:%M:%S') BUFFER='$BUFFER' LBUFFER='$LBUFFER' ===" >> "$ZACRS_LOG"
 
@@ -94,6 +96,8 @@ _zacrs_compsys_func() {
                     [[ -d "${_full_prefix}${_m}" ]] && _kind="directory" || _kind="file"
                 elif [[ "$_text" == */ ]]; then
                     _kind="directory"
+                elif (( _zacrs_cmd_pos )) && _zacrs_command_kind "$_m"; then
+                    _kind="$REPLY"
                 fi
                 _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
             done
