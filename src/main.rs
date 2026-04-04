@@ -2,38 +2,124 @@ use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
+use zsh_autocomplete_rs::protocol::TextCompleteResult;
 use zsh_autocomplete_rs::{client, config, daemon, protocol, tty, ui};
 
 use clap::Parser;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufWriter, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::process;
+use std::thread;
 
-fn run_complete(
+fn trim_line_end(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
+}
+
+fn write_done_result(writer: impl Write, result: &TextCompleteResult) -> io::Result<()> {
+    result.write_to(writer)
+}
+
+struct CompleteCommand {
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
     cols: u16,
     rows: u16,
+    daemon_mode: bool,
     shift_tab_sequence: Option<Vec<u8>>,
-) -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut reader = io::BufReader::new(stdin.lock());
-    let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
+    stale_bytes: Vec<u8>,
+    reuse_token: Option<String>,
+    context_key: Option<String>,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
+}
 
-    let stdout = io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-
-    daemon::run_stdio_complete(
-        &mut reader,
-        &mut writer,
+fn run_complete(command: CompleteCommand) -> io::Result<()> {
+    let CompleteCommand {
         prefix,
         cursor_row,
         cursor_col,
         cols,
         rows,
+        daemon_mode,
         shift_tab_sequence,
-        &tsv,
-    );
+        stale_bytes,
+        reuse_token,
+        context_key,
+        prev_popup_row,
+        prev_popup_height,
+    } = command;
+
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+    let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
+
+    if daemon_mode {
+        let stdout = io::stdout();
+        let mut writer = BufWriter::new(stdout.lock());
+        match client::try_daemon_complete(
+            &prefix,
+            cursor_row,
+            cursor_col,
+            &tsv,
+            shift_tab_sequence,
+            stale_bytes,
+            prev_popup_row.zip(prev_popup_height),
+            reuse_token.as_deref(),
+            context_key.as_deref(),
+        ) {
+            Ok(client::CompleteSessionOutcome::Done(result)) => {
+                write_done_result(&mut writer, &result)?
+            }
+            Ok(client::CompleteSessionOutcome::CacheMiss) => {
+                writeln!(writer, "CACHE_MISS")?;
+                writer.flush()?;
+            }
+            Err(e) => return Err(io::Error::other(e.to_string())),
+        }
+        return Ok(());
+    }
+
+    let stdout = io::stdout();
+    let mut stdout_writer = BufWriter::new(stdout.lock());
+    let (server_stream, client_stream) = UnixStream::pair()?;
+    let prefix_for_thread = prefix;
+    let tsv_for_thread = tsv;
+    let shift_tab_for_thread = shift_tab_sequence;
+    let handle = thread::spawn(move || {
+        let mut session_reader = io::BufReader::new(&server_stream);
+        let mut session_writer = io::BufWriter::new(&server_stream);
+        daemon::run_stdio_complete(
+            &mut session_reader,
+            &mut session_writer,
+            prefix_for_thread,
+            cursor_row,
+            cursor_col,
+            cols,
+            rows,
+            shift_tab_for_thread,
+            prev_popup_row,
+            prev_popup_height,
+            &tsv_for_thread,
+        );
+    });
+    let mut session_reader = io::BufReader::new(client_stream.try_clone()?);
+    let mut session_writer = client_stream;
+    let mut initial_header = String::new();
+    session_reader.read_line(&mut initial_header)?;
+    let result = client::run_text_popup_session(
+        &mut session_reader,
+        &mut session_writer,
+        trim_line_end(&initial_header),
+        stale_bytes,
+        prev_popup_row.zip(prev_popup_height),
+        cursor_row,
+    )
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    write_done_result(&mut stdout_writer, &result)?;
+    handle
+        .join()
+        .map_err(|_| io::Error::other("complete session thread panicked"))?;
     Ok(())
 }
 
@@ -140,19 +226,34 @@ fn main() {
             prefix,
             cursor_row,
             cursor_col,
+            daemon,
             shift_tab_hex,
+            stale_hex,
+            reuse_token,
+            context_key,
+            prev_popup_row,
+            prev_popup_height,
             cols,
             rows,
-        } => match run_complete(
+        } => match run_complete(CompleteCommand {
             prefix,
             cursor_row,
             cursor_col,
             cols,
             rows,
-            shift_tab_hex
+            daemon_mode: daemon,
+            shift_tab_sequence: shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),
-        ) {
+            stale_bytes: stale_hex
+                .as_deref()
+                .and_then(protocol::decode_hex_bytes)
+                .unwrap_or_default(),
+            reuse_token,
+            context_key,
+            prev_popup_row,
+            prev_popup_height,
+        }) {
             Ok(()) => process::exit(0),
             Err(e) => {
                 eprintln!("error: {}", e);

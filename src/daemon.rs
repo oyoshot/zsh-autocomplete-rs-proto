@@ -12,12 +12,81 @@ use crate::config::{Config, KeyBindings, Theme};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
-use crate::protocol::{self, Request, Response};
+use crate::protocol::{
+    self, Request, Response, TextClearRequest, TextCompleteRequest, TextCompleteResult,
+    TextFrameHeader, TextRenderRequest, TextRequest,
+};
 use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
 const MAX_INLINE_KEY_BYTES: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApplyResult {
+    code: u8,
+    text: String,
+    chain: bool,
+    execute: bool,
+    restore_text: String,
+}
+
+impl ApplyResult {
+    fn confirm(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 0,
+            execute: true,
+            restore_text: String::new(),
+        }
+    }
+
+    fn cancel(text: String) -> Self {
+        Self {
+            code: 1,
+            text,
+            chain: false,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+
+    fn dismiss_with_space(text: String) -> Self {
+        Self {
+            chain: should_chain_after_apply(&text),
+            text,
+            code: 2,
+            execute: false,
+            restore_text: String::new(),
+        }
+    }
+}
+
+fn should_chain_after_apply(text: &str) -> bool {
+    text.ends_with([' ', '/'])
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
+    TextCompleteResult {
+        code: result.code,
+        text: result.text.clone(),
+        chain: result.chain,
+        execute: result.execute,
+        restore_text: result.restore_text.clone(),
+    }
+    .write_to(writer)
+}
 
 struct RenderParams {
     prefix: String,
@@ -34,6 +103,8 @@ struct CompleteParams {
     cursor_col: u16,
     term_cols: u16,
     term_rows: u16,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
     reuse_popup: bool,
     shift_tab_sequence: Option<Vec<u8>>,
 }
@@ -96,6 +167,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     term_cols: u16,
     term_rows: u16,
     shift_tab_sequence: Option<Vec<u8>>,
+    prev_popup_row: Option<u16>,
+    prev_popup_height: Option<u16>,
     tsv: &str,
 ) {
     let config = Config::load();
@@ -117,6 +190,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         cursor_col,
         term_cols,
         term_rows,
+        prev_popup_row,
+        prev_popup_height,
         reuse_popup: false,
         shift_tab_sequence,
     };
@@ -398,6 +473,7 @@ impl DaemonServer {
     /// Popup-session responses (on the persistent connection):
     ///   FRAME popup_row=<N> popup_height=<N> cursor_row=<N> <tty_len>\n<tty_bytes>
     ///   DONE <exit_code> <text>\n
+    ///   APPLY chain=<0|1> execute=<0|1> restore_hex=<hex>\n
     ///     exit_code: 0=Confirm, 1=Cancel, 2=DismissWithSpace, 3=Passthrough
     ///   NONE\n
     fn handle_text_connection(
@@ -411,26 +487,22 @@ impl DaemonServer {
             return false;
         }
         let header = header.trim_end();
-        let parts: Vec<&str> = header.split(' ').collect();
-
-        if parts.is_empty() {
-            warn!("received empty text request");
+        let Some(request) = TextRequest::parse_header(header) else {
+            warn!(header = header, "unknown text request");
             return false;
-        }
+        };
 
         let mut writer = io::BufWriter::new(stream);
 
-        match parts[0] {
-            "render" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
-                let selected: Option<usize> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("selected="))
-                    .and_then(|v| v.parse().ok());
-                let context_key: Option<String> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("context_key="))
-                    .map(str::to_string);
+        match request {
+            TextRequest::Render(TextRenderRequest {
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                selected,
+                context_key,
+            }) => {
                 let (prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
                         Ok(v) => v,
@@ -471,8 +543,11 @@ impl DaemonServer {
                                     metadata,
                                 } => {
                                     let meta = metadata.unwrap_or_default();
-                                    let _ =
-                                        writeln!(writer, "OK {} tty_len={}", meta, tty_bytes.len());
+                                    let _ = protocol::write_text_ok(
+                                        &mut writer,
+                                        &meta,
+                                        tty_bytes.len(),
+                                    );
                                     let _ = writer.write_all(&tty_bytes);
                                     let _ = writer.flush();
                                 }
@@ -533,7 +608,7 @@ impl DaemonServer {
                         metadata,
                     } => {
                         let meta = metadata.unwrap_or_default();
-                        let _ = writeln!(writer, "OK {} tty_len={}", meta, tty_bytes.len());
+                        let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
                         let _ = writer.write_all(&tty_bytes);
                         let _ = writer.flush();
                     }
@@ -546,19 +621,16 @@ impl DaemonServer {
                 }
                 false
             }
-            "complete" if parts.len() >= 5 => {
-                let (cursor_row, cursor_col, term_cols, term_rows) = parse_terminal_dims(&parts);
-                let reuse_popup = parts[5..]
-                    .iter()
-                    .any(|part| part.starts_with("reuse_token="));
-                let shift_tab_sequence = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("shift_tab_hex="))
-                    .and_then(crate::protocol::decode_hex_bytes);
-                let context_key: Option<String> = parts[5..]
-                    .iter()
-                    .find_map(|part| part.strip_prefix("context_key="))
-                    .map(str::to_string);
+            TextRequest::Complete(TextCompleteRequest {
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                prev_popup,
+                reuse_token,
+                shift_tab_sequence,
+                context_key,
+            }) => {
                 let (prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "complete") {
                         Ok(v) => v,
@@ -582,8 +654,10 @@ impl DaemonServer {
                                 }
                             }
                         } else {
-                            let _ = writeln!(writer, "DONE 1 ");
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                &mut writer,
+                                &ApplyResult::cancel(String::new()),
+                            );
                             return false;
                         }
                     }
@@ -603,8 +677,7 @@ impl DaemonServer {
                     cursor_col,
                     term_cols,
                     term_rows,
-                    reuse_popup,
-                    extra_parts = parts.len().saturating_sub(5),
+                    reuse_popup = reuse_token.is_some(),
                     payload_bytes = tsv.len()
                 )
                 .entered();
@@ -622,18 +695,20 @@ impl DaemonServer {
                         cursor_col,
                         term_cols,
                         term_rows,
-                        reuse_popup,
+                        prev_popup_row: prev_popup.map(|(row, _)| row),
+                        prev_popup_height: prev_popup.map(|(_, height)| height),
+                        reuse_popup: reuse_token.is_some(),
                         shift_tab_sequence,
                     },
                     &tsv,
                 );
                 false
             }
-            "clear" if parts.len() == 4 => {
-                let popup_row: u16 = parts[1].parse().unwrap_or(0);
-                let popup_height: u16 = parts[2].parse().unwrap_or(0);
-                let cursor_row: u16 = parts[3].parse().unwrap_or(0);
-
+            TextRequest::Clear(TextClearRequest {
+                popup_row,
+                popup_height,
+                cursor_row,
+            }) => {
                 let _span = info_span!(
                     "clear",
                     protocol = "text",
@@ -655,21 +730,17 @@ impl DaemonServer {
                 }
                 false
             }
-            "ping" => {
+            TextRequest::Ping => {
                 let _span = info_span!("ping", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 false
             }
-            "shutdown" => {
+            TextRequest::Shutdown => {
                 let _span = info_span!("shutdown", protocol = "text").entered();
                 let _ = writeln!(writer, "OK");
                 let _ = writer.flush();
                 true
-            }
-            _ => {
-                warn!(header = header, "unknown text request");
-                false
             }
         }
     }
@@ -679,6 +750,7 @@ impl DaemonServer {
         writer: &mut W,
         app: &App,
         extra_prefix: &[u8],
+        prev_popup: Option<(u16, u16)>,
         popup_only: bool,
         common_prefix: Option<&str>,
     ) -> io::Result<()> {
@@ -687,18 +759,26 @@ impl DaemonServer {
         } else {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
-        let total_len = extra_prefix.len() + tty_bytes.len();
-        write!(
-            writer,
-            "FRAME popup_row={} popup_height={} cursor_row={}",
-            popup.row, popup.height, app.cursor_row
-        )?;
-        if let Some(cp) = common_prefix {
-            if ui::popup::is_safe_prefix(cp) {
-                write!(writer, " common_prefix={}", cp)?;
-            }
+        let stale_clear_bytes = prev_popup
+            .map(|(row, height)| {
+                ui::render::clear_stale_rows_to_bytes(row, height, popup.row, popup.height)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let total_len = stale_clear_bytes.len() + extra_prefix.len() + tty_bytes.len();
+        TextFrameHeader {
+            popup_row: popup.row,
+            popup_height: popup.height,
+            cursor_row: app.cursor_row,
+            common_prefix: common_prefix
+                .filter(|value| ui::popup::is_safe_prefix(value))
+                .map(str::to_string),
+            tty_len: total_len,
         }
-        writeln!(writer, " {}", total_len)?;
+        .write_to(writer)?;
+        if !stale_clear_bytes.is_empty() {
+            writer.write_all(&stale_clear_bytes)?;
+        }
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
         }
@@ -830,8 +910,7 @@ impl DaemonServer {
             .collect();
 
         if candidates.is_empty() {
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -848,8 +927,7 @@ impl DaemonServer {
 
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -857,8 +935,7 @@ impl DaemonServer {
 
         if app.max_visible == 0 {
             self.fuzzy = Some(app.take_fuzzy());
-            let _ = writeln!(writer, "DONE 1 ");
-            let _ = writer.flush();
+            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
         }
 
@@ -879,6 +956,8 @@ impl DaemonServer {
             cursor_col,
             term_cols,
             term_rows,
+            prev_popup_row,
+            prev_popup_height,
             reuse_popup,
             shift_tab_sequence,
         } = params;
@@ -897,11 +976,13 @@ impl DaemonServer {
             .flatten();
 
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
+        let prev_popup = prev_popup_row.zip(prev_popup_height);
         if self
             .send_frame(
                 writer,
                 &app,
                 &scroll_bytes,
+                prev_popup,
                 reuse_fast_path,
                 initial_common_prefix.as_deref(),
             )
@@ -926,11 +1007,20 @@ impl DaemonServer {
                     continue;
                 }
                 if byte_count > MAX_INLINE_KEY_BYTES {
-                    if drain_key_payload(reader, byte_count).is_err() {
-                        break;
-                    }
-                    let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                    let _ = writer.flush();
+                    let drained = match drain_key_payload(reader, byte_count) {
+                        Ok(bytes) => bytes,
+                        Err(_) => break,
+                    };
+                    let _ = write_apply_result(
+                        writer,
+                        &ApplyResult {
+                            code: 3,
+                            text: encode_hex_bytes(&drained),
+                            chain: false,
+                            execute: false,
+                            restore_text: app.filter_text.clone(),
+                        },
+                    );
                     break;
                 }
                 let mut key_buf = vec![0u8; byte_count];
@@ -948,7 +1038,10 @@ impl DaemonServer {
                 match action {
                     Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
                         apply_navigation(&mut app, action);
-                        if self.send_frame(writer, &app, &[], false, None).is_err() {
+                        if self
+                            .send_frame(writer, &app, &[], None, false, None)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -956,12 +1049,14 @@ impl DaemonServer {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         app.type_char(c);
                         if app.filtered_indices.is_empty() {
-                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult::cancel(app.filter_text.clone()),
+                            );
                             break;
                         }
                         if self
-                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .send_frame(writer, &app, &clear_bytes, None, false, None)
                             .is_err()
                         {
                             break;
@@ -970,19 +1065,20 @@ impl DaemonServer {
                     Action::Backspace => {
                         let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                         if !app.backspace() {
-                            let _ = writeln!(writer, "DONE 1 ");
-                            let _ = writer.flush();
+                            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
                             break;
                         }
                         if app.filtered_indices.is_empty()
                             || app.filter_text.len() < app.prefix.len()
                         {
-                            let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
-                            let _ = writer.flush();
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult::cancel(app.filter_text.clone()),
+                            );
                             break;
                         }
                         if self
-                            .send_frame(writer, &app, &clear_bytes, false, None)
+                            .send_frame(writer, &app, &clear_bytes, None, false, None)
                             .is_err()
                         {
                             break;
@@ -991,26 +1087,40 @@ impl DaemonServer {
                     Action::Confirm => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ = writeln!(writer, "DONE 0 {}", c.text_with_suffix());
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::confirm(c.text_with_suffix()),
+                                );
                             }
                             None => {
-                                let _ = writeln!(writer, "DONE 1 {}", app.filter_text);
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::cancel(app.filter_text.clone()),
+                                );
                             }
                         }
-                        let _ = writer.flush();
                         break;
                     }
                     Action::DismissWithSpace => {
                         match app.selected_candidate() {
                             Some(c) => {
-                                let _ =
-                                    writeln!(writer, "DONE 2 {}", c.text_for_dismiss_with_space());
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::dismiss_with_space(
+                                        c.text_for_dismiss_with_space(),
+                                    ),
+                                );
                             }
                             None => {
-                                let _ = writeln!(writer, "DONE 2 {} ", app.filter_text);
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::dismiss_with_space(format!(
+                                        "{} ",
+                                        app.filter_text
+                                    )),
+                                );
                             }
                         }
-                        let _ = writer.flush();
                         break;
                     }
                     Action::Cancel => {
@@ -1019,8 +1129,7 @@ impl DaemonServer {
                         } else {
                             ""
                         };
-                        let _ = writeln!(writer, "DONE 1 {}", text);
-                        let _ = writer.flush();
+                        let _ = write_apply_result(writer, &ApplyResult::cancel(text.to_string()));
                         break;
                     }
                     Action::Resize(_, _) => {
@@ -1028,8 +1137,16 @@ impl DaemonServer {
                         let _ = writer.flush();
                     }
                     Action::None => {
-                        let _ = writeln!(writer, "DONE 3 {}", app.filter_text);
-                        let _ = writer.flush();
+                        let _ = write_apply_result(
+                            writer,
+                            &ApplyResult {
+                                code: 3,
+                                text: encode_hex_bytes(&key_buf),
+                                chain: false,
+                                execute: false,
+                                restore_text: app.filter_text.clone(),
+                            },
+                        );
                         break;
                     }
                 }
@@ -1060,8 +1177,9 @@ impl DaemonServer {
     }
 }
 
-fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<()> {
+fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io::Result<Vec<u8>> {
     let mut remaining = byte_count;
+    let mut payload = Vec::with_capacity(byte_count);
     let mut buf = [0u8; 256];
 
     while remaining > 0 {
@@ -1073,18 +1191,11 @@ fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io:
                 "short KEY payload while draining passthrough bytes",
             ));
         }
+        payload.extend_from_slice(&buf[..read]);
         remaining -= read;
     }
 
-    Ok(())
-}
-
-fn parse_terminal_dims(parts: &[&str]) -> (u16, u16, u16, u16) {
-    let cursor_row: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let cursor_col: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let term_cols: u16 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(80);
-    let term_rows: u16 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(24);
-    (cursor_row, cursor_col, term_cols, term_rows)
+    Ok(payload)
 }
 
 /// Reads prefix line and optional TSV candidate payload from the text protocol stream.
@@ -1303,6 +1414,14 @@ mod tests {
         writer.flush().unwrap();
     }
 
+    fn read_done(reader: &mut BufReader<UnixStream>) -> (String, String) {
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        let mut apply = String::new();
+        reader.read_line(&mut apply).unwrap();
+        (done, apply)
+    }
+
     fn test_server() -> DaemonServer {
         let config = Config::default();
         let theme = config.theme();
@@ -1335,6 +1454,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1348,9 +1469,12 @@ mod tests {
         let _ = read_frame(&mut reader);
         send_key(&mut writer, key);
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore_hex=6769"
+        );
 
         drop(reader);
         drop(writer);
@@ -1477,7 +1601,7 @@ mod tests {
             let prefix = format!("git{ctrl}log");
             let mut output = Vec::new();
             server
-                .send_frame(&mut output, &app, &[], true, Some(&prefix))
+                .send_frame(&mut output, &app, &[], None, true, Some(&prefix))
                 .unwrap();
             let header = String::from_utf8_lossy(&output);
             assert!(
@@ -1506,6 +1630,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1542,6 +1668,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1575,6 +1703,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: true,
                     shift_tab_sequence: None,
                 },
@@ -1608,6 +1738,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1652,6 +1784,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1670,9 +1804,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=1 restore_hex="
+        );
 
         drop(reader);
         drop(writer);
@@ -1695,6 +1832,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1710,9 +1849,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore_hex="
+        );
 
         drop(reader);
         drop(writer);
@@ -1737,6 +1879,8 @@ mod tests {
                 cursor_col: 2,
                 term_cols: 80,
                 term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
@@ -1765,6 +1909,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1783,9 +1929,12 @@ mod tests {
         let _ = read_frame(&mut reader);
 
         send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore_hex="
+        );
 
         drop(reader);
         drop(writer);
@@ -1808,6 +1957,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1820,9 +1971,12 @@ mod tests {
 
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b" ");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=1 execute=0 restore_hex="
+        );
 
         drop(reader);
         drop(writer);
@@ -1831,14 +1985,14 @@ mod tests {
 
     #[test]
     fn handle_complete_unknown_key_passthroughs_filter_text() {
-        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 gi");
+        assert_passthrough_key("gi", b"\x1b[D", "DONE 3 1b5b44");
     }
 
     #[test]
     fn handle_complete_ctrl_bindings_passthrough_filter_text() {
-        for key in [b"\x01".as_slice(), b"\x05", b"\x0b"] {
-            assert_passthrough_key("gi", key, "DONE 3 gi");
-        }
+        assert_passthrough_key("gi", b"\x01", "DONE 3 01");
+        assert_passthrough_key("gi", b"\x05", "DONE 3 05");
+        assert_passthrough_key("gi", b"\x0b", "DONE 3 0b");
     }
 
     #[test]
@@ -1857,6 +2011,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1870,9 +2026,9 @@ mod tests {
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b"\n");
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
-        assert_eq!(done, "DONE 3 gi\n");
+        let (done, apply) = read_done(&mut reader);
+        assert_eq!(done, "DONE 3 0a\n");
+        assert_eq!(apply, "APPLY chain=0 execute=0 restore_hex=6769\n");
 
         let mut extra = String::new();
         reader.read_line(&mut extra).unwrap();
@@ -1888,10 +2044,19 @@ mod tests {
 
     #[test]
     fn handle_complete_oversized_key_drains_payload_and_passthroughs() {
-        assert_passthrough_key("gi", b"\x1b[200~git status --short\x1b[201~", "DONE 3 gi");
+        assert_passthrough_key(
+            "gi",
+            b"\x1b[200~git status --short\x1b[201~",
+            "DONE 3 1b5b3230307e67697420737461747573202d2d73686f72741b5b3230317e",
+        );
     }
 
-    fn assert_immediate_confirm(prefix: &str, candidates_tsv: &str, expected_done: &str) {
+    fn assert_immediate_confirm(
+        prefix: &str,
+        candidates_tsv: &str,
+        expected_done: &str,
+        expected_apply: &str,
+    ) {
         let (server_stream, client_stream) = UnixStream::pair().unwrap();
         let prefix = prefix.to_string();
         let candidates_tsv = candidates_tsv.to_string();
@@ -1908,6 +2073,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1920,9 +2087,9 @@ mod tests {
 
         let _ = read_frame(&mut reader);
         send_key(&mut writer, b"\r");
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
+        assert_eq!(apply.strip_suffix('\n').unwrap_or(&apply), expected_apply);
 
         drop(reader);
         drop(writer);
@@ -1935,6 +2102,7 @@ mod tests {
             "fo",
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -1944,6 +2112,7 @@ mod tests {
             "car",
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
+            "APPLY chain=1 execute=1 restore_hex=",
         );
     }
 
@@ -1966,6 +2135,8 @@ mod tests {
                     cursor_col: 2,
                     term_cols: 80,
                     term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
                     reuse_popup: false,
                     shift_tab_sequence: None,
                 },
@@ -1980,11 +2151,14 @@ mod tests {
         // Send Escape (cancel)
         send_key(&mut writer, b"\x1b");
 
-        let mut done = String::new();
-        reader.read_line(&mut done).unwrap();
+        let (done, apply) = read_done(&mut reader);
         // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
         // With auto_insert enabled the extended "git-" would have been returned.
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 ");
+        assert_eq!(
+            apply.strip_suffix('\n').unwrap_or(&apply),
+            "APPLY chain=0 execute=0 restore_hex="
+        );
 
         drop(reader);
         drop(writer);
@@ -2005,26 +2179,46 @@ mod tests {
         // Simulates `"s<Tab>`: prefix = `"s`, candidate text = `"src/`
         // (the shell plugin captures IPREFIX=`"` into _full_prefix, so the
         // candidate text starts with the opening quote).
-        assert_immediate_confirm("\"s", "\"src/\t\tdirectory\n", "DONE 0 \"src/");
+        assert_immediate_confirm(
+            "\"s",
+            "\"src/\t\tdirectory\n",
+            "DONE 0 \"src/",
+            "APPLY chain=1 execute=1 restore_hex=",
+        );
     }
 
     #[test]
     fn handle_complete_single_quoted_prefix_confirms_candidate() {
         // Simulates `'s<Tab>`: single-quote variant of the same quoting case.
-        assert_immediate_confirm("'s", "'src/\t\tdirectory\n", "DONE 0 'src/");
+        assert_immediate_confirm(
+            "'s",
+            "'src/\t\tdirectory\n",
+            "DONE 0 'src/",
+            "APPLY chain=1 execute=1 restore_hex=",
+        );
     }
 
     #[test]
     fn handle_complete_assignment_prefix_confirms_candidate() {
         // Simulates `FOO=ba<Tab>`: IPREFIX=`FOO=`, PREFIX=`ba`.
         // Ensures IPREFIX-prefixed candidates are returned without duplication.
-        assert_immediate_confirm("FOO=ba", "FOO=bar\t\t\n", "DONE 0 FOO=bar");
+        assert_immediate_confirm(
+            "FOO=ba",
+            "FOO=bar\t\t\n",
+            "DONE 0 FOO=bar",
+            "APPLY chain=0 execute=1 restore_hex=",
+        );
     }
 
     #[test]
     fn handle_complete_option_equals_prefix_confirms_candidate() {
         // Simulates `--opt=va<Tab>`: IPREFIX=`--opt=`, PREFIX=`va`.
-        assert_immediate_confirm("--opt=va", "--opt=value\t\t\n", "DONE 0 --opt=value");
+        assert_immediate_confirm(
+            "--opt=va",
+            "--opt=value\t\t\n",
+            "DONE 0 --opt=value",
+            "APPLY chain=0 execute=1 restore_hex=",
+        );
     }
 
     // --- Candidate cache tests ---

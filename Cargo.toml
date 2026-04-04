@@ -14,6 +14,7 @@ name = "zsh-autocomplete-rs"
 path = "src/main.rs"
 
 [dependencies]
+libc = "0.2"
 crossterm = "0.29"
 nucleo-matcher = "0.3"
 unicode-width = "0.2"

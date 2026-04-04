@@ -23,6 +23,24 @@ pub enum Command {
         #[arg(long)]
         shift_tab_hex: Option<String>,
 
+        #[arg(long, default_value_t = false)]
+        daemon: bool,
+
+        #[arg(long)]
+        stale_hex: Option<String>,
+
+        #[arg(long)]
+        reuse_token: Option<String>,
+
+        #[arg(long)]
+        context_key: Option<String>,
+
+        #[arg(long)]
+        prev_popup_row: Option<u16>,
+
+        #[arg(long)]
+        prev_popup_height: Option<u16>,
+
         #[arg(long, default_value_t = 80)]
         cols: u16,
 
@@ -73,11 +91,37 @@ mod tests {
             "complete",
             "--shift-tab-hex",
             "1b5b32373b323b397e",
+            "--daemon",
+            "--stale-hex",
+            "1b5b44",
+            "--reuse-token",
+            "123",
+            "--context-key",
+            "ctx",
+            "--prev-popup-row",
+            "6",
+            "--prev-popup-height",
+            "12",
         ]);
 
         match cli.command {
-            Command::Complete { shift_tab_hex, .. } => {
+            Command::Complete {
+                shift_tab_hex,
+                daemon,
+                stale_hex,
+                reuse_token,
+                context_key,
+                prev_popup_row,
+                prev_popup_height,
+                ..
+            } => {
                 assert_eq!(shift_tab_hex.as_deref(), Some("1b5b32373b323b397e"));
+                assert!(daemon);
+                assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
+                assert_eq!(reuse_token.as_deref(), Some("123"));
+                assert_eq!(context_key.as_deref(), Some("ctx"));
+                assert_eq!(prev_popup_row, Some(6));
+                assert_eq!(prev_popup_height, Some(12));
             }
             _ => panic!("unexpected command"),
         }

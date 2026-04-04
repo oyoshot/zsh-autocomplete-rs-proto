@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 
 // Command bytes
 const CMD_RENDER: u8 = 0x01;
@@ -45,6 +45,62 @@ pub enum Response {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRenderRequest {
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub term_cols: u16,
+    pub term_rows: u16,
+    pub selected: Option<usize>,
+    pub context_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextCompleteRequest {
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub term_cols: u16,
+    pub term_rows: u16,
+    pub prev_popup: Option<(u16, u16)>,
+    pub reuse_token: Option<String>,
+    pub shift_tab_sequence: Option<Vec<u8>>,
+    pub context_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextClearRequest {
+    pub popup_row: u16,
+    pub popup_height: u16,
+    pub cursor_row: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextRequest {
+    Render(TextRenderRequest),
+    Complete(TextCompleteRequest),
+    Clear(TextClearRequest),
+    Ping,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextFrameHeader {
+    pub popup_row: u16,
+    pub popup_height: u16,
+    pub cursor_row: u16,
+    pub common_prefix: Option<String>,
+    pub tty_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextCompleteResult {
+    pub code: u8,
+    pub text: String,
+    pub chain: bool,
+    pub execute: bool,
+    pub restore_text: String,
+}
+
 fn write_u32(buf: &mut Vec<u8>, val: u32) {
     buf.extend_from_slice(&val.to_be_bytes());
 }
@@ -63,6 +119,24 @@ fn read_u16(stream: &mut impl Read) -> io::Result<u16> {
     let mut buf = [0u8; 2];
     stream.read_exact(&mut buf)?;
     Ok(u16::from_be_bytes(buf))
+}
+
+fn trim_line_end(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
+}
+
+fn parse_u16_token(token: &str) -> Option<u16> {
+    token.parse().ok()
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 impl Request {
@@ -284,6 +358,251 @@ impl Response {
     pub fn write_to(&self, stream: &mut impl Write) -> io::Result<()> {
         stream.write_all(&self.serialize())?;
         stream.flush()
+    }
+}
+
+impl TextRequest {
+    pub fn parse_header(line: &str) -> Option<Self> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            [
+                "render",
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                rest @ ..,
+            ] => {
+                let mut selected = None;
+                let mut context_key = None;
+                for token in rest {
+                    if let Some(value) = token.strip_prefix("selected=") {
+                        selected = value.parse().ok();
+                    } else if let Some(value) = token.strip_prefix("context_key=") {
+                        context_key = Some(value.to_string());
+                    }
+                }
+                Some(Self::Render(TextRenderRequest {
+                    cursor_row: parse_u16_token(cursor_row)?,
+                    cursor_col: parse_u16_token(cursor_col)?,
+                    term_cols: parse_u16_token(term_cols)?,
+                    term_rows: parse_u16_token(term_rows)?,
+                    selected,
+                    context_key,
+                }))
+            }
+            [
+                "complete",
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+                rest @ ..,
+            ] => {
+                let mut prev_popup_row = None;
+                let mut prev_popup_height = None;
+                let mut reuse_token = None;
+                let mut shift_tab_sequence = None;
+                let mut context_key = None;
+                for token in rest {
+                    if let Some(value) = token.strip_prefix("prev_popup_row=") {
+                        prev_popup_row = value.parse().ok();
+                    } else if let Some(value) = token.strip_prefix("prev_popup_height=") {
+                        prev_popup_height = value.parse().ok();
+                    } else if let Some(value) = token.strip_prefix("reuse_token=") {
+                        reuse_token = Some(value.to_string());
+                    } else if let Some(value) = token.strip_prefix("shift_tab_hex=") {
+                        shift_tab_sequence = decode_hex_bytes(value);
+                    } else if let Some(value) = token.strip_prefix("context_key=") {
+                        context_key = Some(value.to_string());
+                    }
+                }
+                Some(Self::Complete(TextCompleteRequest {
+                    cursor_row: parse_u16_token(cursor_row)?,
+                    cursor_col: parse_u16_token(cursor_col)?,
+                    term_cols: parse_u16_token(term_cols)?,
+                    term_rows: parse_u16_token(term_rows)?,
+                    prev_popup: prev_popup_row.zip(prev_popup_height),
+                    reuse_token,
+                    shift_tab_sequence,
+                    context_key,
+                }))
+            }
+            ["clear", popup_row, popup_height, cursor_row] => Some(Self::Clear(TextClearRequest {
+                popup_row: parse_u16_token(popup_row)?,
+                popup_height: parse_u16_token(popup_height)?,
+                cursor_row: parse_u16_token(cursor_row)?,
+            })),
+            ["ping"] => Some(Self::Ping),
+            ["shutdown"] => Some(Self::Shutdown),
+            _ => None,
+        }
+    }
+}
+
+impl TextCompleteRequest {
+    pub fn header_line(&self) -> String {
+        let mut line = format!(
+            "complete {} {} {} {}",
+            self.cursor_row, self.cursor_col, self.term_cols, self.term_rows
+        );
+        if let Some((row, height)) = self.prev_popup {
+            line.push_str(&format!(" prev_popup_row={row} prev_popup_height={height}"));
+        }
+        if let Some(token) = &self.reuse_token {
+            line.push_str(&format!(" reuse_token={token}"));
+        }
+        if let Some(key) = &self.context_key {
+            line.push_str(&format!(" context_key={key}"));
+        }
+        if let Some(shift_tab_sequence) = self.shift_tab_sequence.as_deref() {
+            line.push_str(&format!(
+                " shift_tab_hex={}",
+                encode_hex_bytes(shift_tab_sequence)
+            ));
+        }
+        line
+    }
+
+    pub fn reuse_popup(&self) -> bool {
+        self.reuse_token.is_some()
+    }
+}
+
+impl TextFrameHeader {
+    pub fn parse(header: &str) -> Option<Self> {
+        let mut tokens = header.split_whitespace();
+        if tokens.next()? != "FRAME" {
+            return None;
+        }
+
+        let mut popup_row = None;
+        let mut popup_height = None;
+        let mut cursor_row = None;
+        let mut common_prefix = None;
+        let mut tty_len = None;
+
+        for token in tokens {
+            if let Some(value) = token.strip_prefix("popup_row=") {
+                popup_row = value.parse().ok();
+            } else if let Some(value) = token.strip_prefix("popup_height=") {
+                popup_height = value.parse().ok();
+            } else if let Some(value) = token.strip_prefix("cursor_row=") {
+                cursor_row = value.parse().ok();
+            } else if let Some(value) = token.strip_prefix("common_prefix=") {
+                common_prefix = Some(value.to_string());
+            } else if !token.contains('=') {
+                tty_len = token.parse().ok();
+            }
+        }
+
+        Some(Self {
+            popup_row: popup_row?,
+            popup_height: popup_height?,
+            cursor_row: cursor_row?,
+            common_prefix,
+            tty_len: tty_len?,
+        })
+    }
+
+    pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
+        write!(
+            writer,
+            "FRAME popup_row={} popup_height={} cursor_row={}",
+            self.popup_row, self.popup_height, self.cursor_row
+        )?;
+        if let Some(common_prefix) = &self.common_prefix {
+            write!(writer, " common_prefix={common_prefix}")?;
+        }
+        writeln!(writer, " {}", self.tty_len)
+    }
+}
+
+impl TextCompleteResult {
+    pub fn write_to(&self, mut writer: impl Write) -> io::Result<()> {
+        writeln!(writer, "DONE {} {}", self.code, self.text)?;
+        writeln!(
+            writer,
+            "APPLY chain={} execute={} restore_hex={}",
+            if self.chain { 1 } else { 0 },
+            if self.execute { 1 } else { 0 },
+            encode_hex_bytes(self.restore_text.as_bytes())
+        )?;
+        writer.flush()
+    }
+
+    pub fn read_from(reader: &mut impl BufRead, done_header: &str) -> io::Result<Self> {
+        let mut parts = done_header.splitn(3, ' ');
+        if parts.next() != Some("DONE") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid DONE header: {done_header}"),
+            ));
+        }
+
+        let code = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing DONE code"))?;
+        let text = parts.next().unwrap_or_default().to_string();
+
+        let mut apply = String::new();
+        reader.read_line(&mut apply)?;
+        let apply = trim_line_end(&apply);
+
+        if !apply.starts_with("APPLY ") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid APPLY line: {apply}"),
+            ));
+        }
+
+        let apply_fields = apply.strip_prefix("APPLY ").unwrap_or_default();
+        let (flag_fields, restore_text) =
+            if let Some((prefix, value)) = apply_fields.split_once(" restore_hex=") {
+                (prefix, decode_restore_text_hex(value)?)
+            } else if let Some((prefix, value)) = apply_fields.split_once(" restore=") {
+                (prefix, value.to_string())
+            } else {
+                (apply_fields, String::new())
+            };
+
+        let mut chain = false;
+        let mut execute = false;
+        for token in flag_fields.split_whitespace() {
+            if let Some(value) = token.strip_prefix("chain=") {
+                chain = value == "1";
+            } else if let Some(value) = token.strip_prefix("execute=") {
+                execute = value == "1";
+            }
+        }
+
+        Ok(Self {
+            code,
+            text,
+            chain,
+            execute,
+            restore_text,
+        })
+    }
+}
+
+fn decode_restore_text_hex(hex: &str) -> io::Result<String> {
+    if hex.is_empty() {
+        return Ok(String::new());
+    }
+
+    let bytes = decode_hex_bytes(hex)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex"))?;
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex utf-8"))
+}
+
+pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) -> io::Result<()> {
+    if metadata.is_empty() {
+        writeln!(writer, "OK tty_len={tty_len}")
+    } else {
+        writeln!(writer, "OK {metadata} tty_len={tty_len}")
     }
 }
 
@@ -548,5 +867,93 @@ mod tests {
             Some(b"\x1b[27;2;9~".to_vec())
         );
         assert_eq!(decode_hex_bytes("1b5"), None);
+    }
+
+    #[test]
+    fn text_complete_request_header_roundtrip() {
+        let request = TextCompleteRequest {
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            prev_popup: Some((6, 12)),
+            reuse_token: Some("123".to_string()),
+            shift_tab_sequence: Some(b"\x1b[Z".to_vec()),
+            context_key: Some("ctx".to_string()),
+        };
+
+        let parsed = TextRequest::parse_header(&request.header_line()).unwrap();
+        assert_eq!(parsed, TextRequest::Complete(request));
+    }
+
+    #[test]
+    fn text_frame_header_roundtrip() {
+        let frame = TextFrameHeader {
+            popup_row: 6,
+            popup_height: 12,
+            cursor_row: 5,
+            common_prefix: Some("git-".to_string()),
+            tty_len: 128,
+        };
+
+        let mut buf = Vec::new();
+        frame.write_to(&mut buf).unwrap();
+        let header = String::from_utf8(buf).unwrap();
+
+        assert_eq!(TextFrameHeader::parse(header.trim_end()), Some(frame));
+    }
+
+    #[test]
+    fn text_complete_result_roundtrip() {
+        let result = TextCompleteResult {
+            code: 2,
+            text: "cargo ".to_string(),
+            chain: true,
+            execute: false,
+            restore_text: "cargo ".to_string(),
+        };
+
+        let mut buf = Vec::new();
+        result.write_to(&mut buf).unwrap();
+        let payload = String::from_utf8(buf).unwrap();
+        let mut lines = payload.lines();
+        let done = lines.next().unwrap();
+        let apply = format!("{}\n", lines.next().unwrap());
+        let mut reader = io::BufReader::new(apply.as_bytes());
+
+        assert_eq!(
+            TextCompleteResult::read_from(&mut reader, done).unwrap(),
+            result
+        );
+    }
+
+    #[test]
+    fn text_complete_result_write_to_hex_encodes_restore_text() {
+        let result = TextCompleteResult {
+            code: 1,
+            text: String::new(),
+            chain: false,
+            execute: false,
+            restore_text: "--foo=chain=1 execute=0".to_string(),
+        };
+
+        let mut buf = Vec::new();
+        result.write_to(&mut buf).unwrap();
+        let payload = String::from_utf8(buf).unwrap();
+
+        assert!(payload.contains("restore_hex=2d2d666f6f3d636861696e3d3120657865637574653d30"));
+        assert!(!payload.contains("restore=--foo=chain=1 execute=0"));
+    }
+
+    #[test]
+    fn text_complete_result_read_from_legacy_restore_does_not_set_flags_from_payload() {
+        let mut reader =
+            io::BufReader::new("APPLY execute=0 restore=--foo=chain=1 execute=1\n".as_bytes());
+
+        let result = TextCompleteResult::read_from(&mut reader, "DONE 1 ").unwrap();
+
+        assert!(!result.chain);
+        assert!(!result.execute);
+        assert_eq!(result.restore_text, "--foo=chain=1 execute=1");
     }
 }
