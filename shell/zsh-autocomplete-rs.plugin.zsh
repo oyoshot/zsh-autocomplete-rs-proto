@@ -612,10 +612,11 @@ _zacrs_collect_candidates() {
 _zacrs_apply_single_candidate() {
     local prefix="$1" prefix_len="$2" cand_line="$3"
     _zacrs_clear_popup
+    local cursor_row=0 cursor_col=0
     if (( _zacrs_daemon_available )); then
-        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "" "" 0 "" "" 1 && return
+        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" "" 1 && return
     fi
-    _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "" "" 1 && return
+    _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 1 && return
 
     local text="${cand_line%%	*}"
     local kind="${cand_line##*	}"
