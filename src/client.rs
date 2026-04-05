@@ -476,11 +476,13 @@ impl SigwinchPipe {
         action.sa_sigaction = handle_sigwinch as *const () as usize;
         action.sa_flags = libc::SA_RESTART;
         unsafe { libc::sigemptyset(&mut action.sa_mask) };
+        // Publish the write end before installing the handler so that once
+        // the handler is active it always sees a valid fd.
+        SIGWINCH_WRITE_FD.store(write_fd.as_raw_fd(), Ordering::Relaxed);
         if unsafe { libc::sigaction(libc::SIGWINCH, &action, &mut previous) } != 0 {
+            SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
             return Err(DaemonUnavailable::NotRunning);
         }
-
-        SIGWINCH_WRITE_FD.store(write_fd.as_raw_fd(), Ordering::Relaxed);
 
         Ok(Self {
             read_fd,
@@ -522,10 +524,13 @@ fn set_fd_flags(fd: i32, flag: libc::c_int, set_cmd: libc::c_int) -> Result<(), 
 
 impl Drop for SigwinchPipe {
     fn drop(&mut self) {
-        SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
+        // Restore the old handler before clearing the fd so that any SIGWINCH
+        // that arrives during teardown is dispatched to the previous handler
+        // rather than hitting handle_sigwinch with fd=-1 and silently dropping.
         unsafe {
             libc::sigaction(libc::SIGWINCH, &self.previous, std::ptr::null_mut());
         }
+        SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
     }
 }
 
