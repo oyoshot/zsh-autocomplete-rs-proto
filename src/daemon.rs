@@ -1626,10 +1626,12 @@ mod tests {
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
-    use crate::protocol::TextFrameHeader;
+    use crate::protocol::{TextCompleteRequest, TextCompleteResult, TextFrameHeader};
     use crate::ui;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
 
     fn read_frame_bytes<R: BufRead>(reader: &mut R) -> (String, Vec<u8>) {
@@ -1692,6 +1694,56 @@ mod tests {
         let mut apply = String::new();
         reader.read_line(&mut apply).unwrap();
         (done, apply)
+    }
+
+    fn text_request_input(header: &str, prefix: &str, tsv: Option<&str>) -> Vec<u8> {
+        let mut input = Vec::new();
+        writeln!(&mut input, "{header}").unwrap();
+        writeln!(&mut input, "{prefix}").unwrap();
+        if let Some(tsv) = tsv {
+            write!(&mut input, "{tsv}").unwrap();
+        }
+        writeln!(&mut input, "END").unwrap();
+        input
+    }
+
+    fn run_text_request(server: &mut DaemonServer, input: Vec<u8>) -> Vec<u8> {
+        let (mut client_stream, server_stream) = UnixStream::pair().unwrap();
+        client_stream.write_all(&input).unwrap();
+        client_stream.shutdown(Shutdown::Write).unwrap();
+
+        {
+            let mut reader = BufReader::new(&server_stream);
+            server.handle_text_connection(&mut reader, &server_stream);
+        }
+
+        drop(server_stream);
+
+        let mut output = Vec::new();
+        client_stream.read_to_end(&mut output).unwrap();
+        output
+    }
+
+    fn read_text_ok(bytes: &[u8]) -> (String, String) {
+        let mut reader = BufReader::new(Cursor::new(bytes));
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        assert!(header.starts_with("OK "), "header was: {header:?}");
+        let tty_len = header
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("tty_len="))
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("tty_len in OK header");
+        let mut tty_bytes = vec![0; tty_len];
+        reader.read_exact(&mut tty_bytes).unwrap();
+        (header, String::from_utf8_lossy(&tty_bytes).into_owned())
+    }
+
+    fn read_text_complete_result(bytes: &[u8]) -> TextCompleteResult {
+        let mut reader = BufReader::new(Cursor::new(bytes));
+        let mut done = String::new();
+        reader.read_line(&mut done).unwrap();
+        TextCompleteResult::read_from(&mut reader, done.trim_end()).unwrap()
     }
 
     fn test_server() -> DaemonServer {
@@ -2652,6 +2704,115 @@ mod tests {
 
         assert_eq!(entry.prefix, "git");
         assert_eq!(entry.tsv, "git\tcommand\tcommand\n");
+    }
+
+    #[test]
+    fn handle_text_render_cache_only_prefers_context_key_over_popup_key() {
+        let mut server = test_server();
+        server.store_cached_tsv(
+            "ctx-1",
+            "st".to_string(),
+            "status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string(),
+        );
+        server.store_active_popup(
+            "popup-1",
+            "gi".to_string(),
+            "git\tcommand\tcommand\n".to_string(),
+        );
+
+        let output = run_text_request(
+            &mut server,
+            text_request_input(
+                "render 5 2 80 24 context_key=ctx-1 popup_key=popup-1",
+                "st",
+                None,
+            ),
+        );
+
+        let (_, tty) = read_text_ok(&output);
+        assert!(tty.contains("status"), "tty was: {tty:?}");
+        assert!(tty.contains("stash"), "tty was: {tty:?}");
+        assert!(!tty.contains("git"), "tty was: {tty:?}");
+    }
+
+    #[test]
+    fn handle_text_complete_cache_only_prefers_context_key_over_popup_key() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+        server.store_cached_tsv(
+            "ctx-1",
+            "st".to_string(),
+            "status\tcommand\tcommand\n".to_string(),
+        );
+        server.store_active_popup(
+            "popup-1",
+            "gi".to_string(),
+            "git\tcommand\tcommand\n".to_string(),
+        );
+
+        let request = TextCompleteRequest {
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            prev_popup: None,
+            command_position: false,
+            accept_single: true,
+            reuse_token: Some("reuse-1".to_string()),
+            shift_tab_sequence: None,
+            context_key: Some("ctx-1".to_string()),
+            popup_key: Some("popup-1".to_string()),
+        };
+        let output = run_text_request(
+            &mut server,
+            text_request_input(&request.header_line(), "st", None),
+        );
+
+        let result = read_text_complete_result(&output);
+        assert_eq!(result.code, 0);
+        assert_eq!(result.text, "status!");
+        assert!(!result.chain);
+        assert!(!result.execute);
+        assert_eq!(result.restore_text, "");
+    }
+
+    #[test]
+    fn handle_text_complete_popup_cache_accept_single_returns_done_without_frame() {
+        let mut server = test_server();
+        server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
+        server.store_active_popup(
+            "popup-1",
+            "ca".to_string(),
+            "cargo\tcommand\tcommand\n".to_string(),
+        );
+
+        let request = TextCompleteRequest {
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            prev_popup: None,
+            command_position: false,
+            accept_single: true,
+            reuse_token: Some("reuse-1".to_string()),
+            shift_tab_sequence: None,
+            context_key: None,
+            popup_key: Some("popup-1".to_string()),
+        };
+        let output = run_text_request(
+            &mut server,
+            text_request_input(&request.header_line(), "ca", None),
+        );
+
+        let rendered = String::from_utf8_lossy(&output);
+        assert!(!rendered.starts_with("FRAME "), "output was: {rendered}");
+
+        let result = read_text_complete_result(&output);
+        assert_eq!(result.code, 0);
+        assert_eq!(result.text, "cargo!");
+        assert!(!result.chain);
+        assert!(!result.execute);
+        assert_eq!(result.restore_text, "");
     }
 
     #[test]
