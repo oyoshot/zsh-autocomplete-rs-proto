@@ -435,7 +435,9 @@ static SIGWINCH_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 /// Async-signal-safe: both __errno_location (Linux) and __error (macOS)
 /// are documented as async-signal-safe.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!("SigwinchPipe is not implemented for this target OS; only Linux and macOS are supported");
+compile_error!(
+    "SigwinchPipe is not implemented for this target OS; only Linux and macOS are supported"
+);
 
 #[inline]
 fn errno_location() -> *mut libc::c_int {
