@@ -51,6 +51,11 @@ _zacrs_reset_cache() {
     _zacrs_debounce_until=0.0
 }
 
+_zacrs_end_popup_session() {
+    _zacrs_popup_session_active=0
+    _zacrs_ignore_next_winch=0
+}
+
 _zacrs_current_context_key() {
     REPLY=""
     local lbase=""
@@ -173,7 +178,7 @@ _zacrs_daemon_send_render() {
     local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}"
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
-        _zacrs_mark_daemon_unavailable
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 2
     fi
     fd=$REPLY
@@ -201,7 +206,7 @@ _zacrs_daemon_send_render() {
         return 3
     else
         exec {fd}<&-
-        _zacrs_mark_daemon_unavailable
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 2
     fi
 }
@@ -488,13 +493,13 @@ _zacrs_invoke_daemon() {
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
-        _zacrs_popup_session_active=0
+        _zacrs_end_popup_session
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         return 1
     }
-    _zacrs_popup_session_active=0
+    _zacrs_end_popup_session
     _zacrs_cursor_stale=""
 
     local -a lines
@@ -555,12 +560,12 @@ _zacrs_invoke() {
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
-        _zacrs_popup_session_active=0
+        _zacrs_end_popup_session
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         return 1
     }
-    _zacrs_popup_session_active=0
+    _zacrs_end_popup_session
     _zacrs_cursor_stale=""
 
     local -a lines
@@ -971,7 +976,7 @@ TRAPWINCH() {
         _zacrs_ignore_next_winch=0
         return 0
     fi
-    if (( _zacrs_popup_visible )) \
+    if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]]; then
         _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" ""
         if (( $? == 0 )); then
