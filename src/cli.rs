@@ -42,6 +42,9 @@ pub enum Command {
         context_key: Option<String>,
 
         #[arg(long)]
+        popup_key: Option<String>,
+
+        #[arg(long)]
         prev_popup_row: Option<u16>,
 
         #[arg(long)]
@@ -121,6 +124,7 @@ mod tests {
                 stale_hex,
                 reuse_token,
                 context_key,
+                popup_key,
                 prev_popup_row,
                 prev_popup_height,
                 ..
@@ -132,6 +136,7 @@ mod tests {
                 assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
                 assert_eq!(reuse_token.as_deref(), Some("123"));
                 assert_eq!(context_key.as_deref(), Some("ctx"));
+                assert_eq!(popup_key, None);
                 assert_eq!(prev_popup_row, Some(6));
                 assert_eq!(prev_popup_height, Some(12));
             }

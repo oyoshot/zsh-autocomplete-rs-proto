@@ -27,32 +27,21 @@ typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
 typeset -g _zacrs_popup_snapshot_lbuffer=""
-typeset -g _zacrs_popup_snapshot_prefix=""
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
-typeset -g _zacrs_popup_snapshot_candidates=""
-typeset -gi _zacrs_popup_snapshot_cursor_row=0
-typeset -gi _zacrs_popup_snapshot_cursor_col=0
-typeset -g _zacrs_popup_snapshot_reuse_token=""
-typeset -gi _zacrs_popup_snapshot_from_gather=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
+typeset -gi _zacrs_popup_session_active=0
+typeset -gi _zacrs_ignore_next_winch=0
 typeset -gF _zacrs_debounce_until=0.0
 
 # Render header parse results (set by _zacrs_parse_render_header)
-typeset -g  _zacrs_parsed_reuse_token=""
 typeset -gi _zacrs_parsed_tty_len=0
 # Daemon send helper (set by _zacrs_daemon_send_render on OK)
 typeset -gi _zacrs_send_render_fd=0
 
 _zacrs_reset_popup_snapshot() {
     _zacrs_popup_snapshot_lbuffer=""
-    _zacrs_popup_snapshot_prefix=""
     _zacrs_popup_snapshot_prefix_len=0
-    _zacrs_popup_snapshot_candidates=""
-    _zacrs_popup_snapshot_cursor_row=0
-    _zacrs_popup_snapshot_cursor_col=0
-    _zacrs_popup_snapshot_reuse_token=""
-    _zacrs_popup_snapshot_from_gather=0
     _zacrs_popup_snapshot_columns=0
     _zacrs_popup_snapshot_lines=0
 }
@@ -62,16 +51,34 @@ _zacrs_reset_cache() {
     _zacrs_debounce_until=0.0
 }
 
+_zacrs_end_popup_session() {
+    _zacrs_popup_session_active=0
+    _zacrs_ignore_next_winch=0
+}
+
+_zacrs_current_context_key() {
+    REPLY=""
+    local lbase=""
+    if [[ "$LBUFFER" == *" "* ]]; then
+        lbase="${LBUFFER% *} "
+    fi
+    [[ -z "$lbase" ]] && return 0
+
+    local _ctx_lbase="$lbase"
+    _ctx_lbase="${_ctx_lbase//%/%25}"
+    _ctx_lbase="${_ctx_lbase//:/%3A}"
+    _ctx_lbase="${_ctx_lbase// /%20}"
+    local _ctx_pwd="$PWD"
+    _ctx_pwd="${_ctx_pwd//%/%25}"
+    _ctx_pwd="${_ctx_pwd//:/%3A}"
+    _ctx_pwd="${_ctx_pwd// /%20}"
+    REPLY="${$}:${_ctx_pwd}:${_ctx_lbase}"
+}
+
 _zacrs_record_popup_snapshot() {
-    local prefix="$1" prefix_len="$2" candidates_str="$3" cursor_col="$4" reuse_token="$5" from_gather="${6:-0}"
+    local prefix_len="$1"
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
-    _zacrs_popup_snapshot_prefix="$prefix"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
-    _zacrs_popup_snapshot_candidates="$candidates_str"
-    _zacrs_popup_snapshot_cursor_row=$_zacrs_popup_cursor_row
-    _zacrs_popup_snapshot_cursor_col=$cursor_col
-    _zacrs_popup_snapshot_reuse_token="$reuse_token"
-    _zacrs_popup_snapshot_from_gather=$from_gather
     _zacrs_popup_snapshot_columns=$COLUMNS
     _zacrs_popup_snapshot_lines=$LINES
 }
@@ -142,10 +149,9 @@ fi
 
 # Parse an "OK key=val ... <tty_len>" header into globals.
 # Sets: _zacrs_popup_row, _zacrs_popup_height, _zacrs_popup_cursor_row,
-#        _zacrs_parsed_reuse_token, _zacrs_parsed_tty_len
+#        _zacrs_parsed_tty_len
 _zacrs_parse_render_header() {
     local header="$1"
-    _zacrs_parsed_reuse_token=""
     _zacrs_parsed_tty_len=0
     local token
     for token in ${(s: :)header}; do
@@ -155,7 +161,6 @@ _zacrs_parse_render_header() {
             popup_row)              _zacrs_popup_row=$val ;;
             popup_height)           _zacrs_popup_height=$val ;;
             cursor_row)             _zacrs_popup_cursor_row=$val ;;
-            reuse_token)            _zacrs_parsed_reuse_token=$val ;;
             tty_len)                _zacrs_parsed_tty_len=$val ;;
         esac
     done
@@ -173,12 +178,13 @@ _zacrs_daemon_send_render() {
     local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}"
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
-        _zacrs_mark_daemon_unavailable
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 2
     fi
     fd=$REPLY
     local render_cmd="render $_cr $_cc $COLUMNS $LINES"
     [[ -n "$_ctx_key" ]] && render_cmd+=" context_key=$_ctx_key"
+    render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
     print -u $fd -- "$render_cmd"
     printf '%s\n' "$_pfx" >&$fd
@@ -200,7 +206,7 @@ _zacrs_daemon_send_render() {
         return 3
     else
         exec {fd}<&-
-        _zacrs_mark_daemon_unavailable
+        (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 2
     fi
 }
@@ -279,14 +285,14 @@ _zacrs_render() {
         local _send_rc=$?
         if (( _send_rc == 0 )); then
             local fd=$_zacrs_send_render_fd
-            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
+            local tty_len=$_zacrs_parsed_tty_len
             local tty_ok=1
             _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
                 _zacrs_last_render_cursor_row=$cursor_row
                 _zacrs_last_render_cursor_col=$cursor_col
-                _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "$reuse_token" "$from_gather"
+                _zacrs_record_popup_snapshot "$prefix_len"
             else
                 _zacrs_clear_popup
                 _zacrs_mark_daemon_unavailable
@@ -316,7 +322,7 @@ _zacrs_render() {
         _zacrs_last_render_cursor_row=$cursor_row
         _zacrs_last_render_cursor_col=$cursor_col
         _zacrs_parse_render_header "$output"
-        _zacrs_record_popup_snapshot "$prefix" "$prefix_len" "$candidates_str" "$cursor_col" "" "$from_gather"
+        _zacrs_record_popup_snapshot "$prefix_len"
     else
         _zacrs_reset_popup_snapshot
     fi
@@ -452,7 +458,7 @@ _zacrs_apply() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" reuse_token="${7:-}" context_key="${8:-}" accept_single="${9:-0}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
@@ -473,22 +479,27 @@ _zacrs_invoke_daemon() {
         --cursor-col "$cursor_col"
         --cols "$COLUMNS"
         --rows "$LINES"
+        --popup-key "$$"
     )
     (( is_cmd_pos )) && complete_args+=(--command-position)
     (( accept_single )) && complete_args+=(--accept-single)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
-    (( reuse_visible )) && [[ -n "$reuse_token" ]] && complete_args+=(--reuse-token "$reuse_token")
+    (( reuse_visible )) && complete_args+=(--reuse-token 1)
     [[ -n "$context_key" ]] && complete_args+=(--context-key "$context_key")
 
     local output
+    _zacrs_popup_session_active=1
+    _zacrs_ignore_next_winch=1
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
+        _zacrs_end_popup_session
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         return 1
     }
+    _zacrs_end_popup_session
     _zacrs_cursor_stale=""
 
     local -a lines
@@ -546,11 +557,15 @@ _zacrs_invoke() {
     fi
 
     local output
+    _zacrs_popup_session_active=1
+    _zacrs_ignore_next_winch=1
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
+        _zacrs_end_popup_session
         [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
         _zacrs_cursor_stale=""
         return 1
     }
+    _zacrs_end_popup_session
     _zacrs_cursor_stale=""
 
     local -a lines
@@ -614,7 +629,7 @@ _zacrs_apply_single_candidate() {
     _zacrs_clear_popup
     local cursor_row=0 cursor_col=0
     if (( _zacrs_daemon_available )); then
-        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" "" 1 && return
+        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" 1 && return
     fi
     _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 1 && return
 
@@ -642,7 +657,6 @@ _zacrs_complete_popup() {
     local prefix="" prefix_len=0 candidates_str=""
     local cursor_row="" cursor_col=""
     local reuse_visible=0
-    local reuse_token=""
     local naive_prefix="${LBUFFER##* }"
     local lbase=""
     if [[ "$LBUFFER" == *" "* ]]; then
@@ -661,21 +675,20 @@ _zacrs_complete_popup() {
         context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
     fi
 
+    prefix="$naive_prefix"
+    prefix_len=${#naive_prefix}
+
     if (( _zacrs_popup_visible )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
-        && (( _zacrs_popup_snapshot_lines == LINES )) \
-        && (( ! _zacrs_popup_snapshot_from_gather )); then
+        && (( _zacrs_popup_snapshot_lines == LINES )); then
         reuse_visible=1
-        prefix="$_zacrs_popup_snapshot_prefix"
         prefix_len=$_zacrs_popup_snapshot_prefix_len
-        candidates_str="$_zacrs_popup_snapshot_candidates"
-        cursor_row=$_zacrs_popup_snapshot_cursor_row
-        cursor_col=$_zacrs_popup_snapshot_cursor_col
-        reuse_token="$_zacrs_popup_snapshot_reuse_token"
+        cursor_row=$_zacrs_popup_cursor_row
+        cursor_col=$_zacrs_last_render_cursor_col
     fi
 
-    if (( ! reuse_visible )) || [[ -z "$candidates_str" ]]; then
+    if (( ! reuse_visible )) || (( ! _zacrs_daemon_available )); then
         _zacrs_collect_candidates
     fi
 
@@ -701,7 +714,7 @@ _zacrs_complete_popup() {
     # Try daemon path first, fall back to subprocess
     if (( _zacrs_daemon_available )); then
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-            "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" "$context_key"
+            "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1
         local daemon_rc=$?
         if (( daemon_rc == 0 )); then
             return
@@ -720,7 +733,7 @@ _zacrs_complete_popup() {
                 return
             fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-                "$cursor_row" "$cursor_col" "$reuse_visible" "$reuse_token" "$context_key" && return
+                "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 && return
         fi
     fi
     if [[ -z "$candidates_str" ]]; then
@@ -829,14 +842,14 @@ _zacrs_line_pre_redraw() {
         if (( _cache_rc == 0 )); then
             # キャッシュヒット: 描画完了
             local fd=$_zacrs_send_render_fd
-            local tty_len=$_zacrs_parsed_tty_len reuse_token="$_zacrs_parsed_reuse_token"
+            local tty_len=$_zacrs_parsed_tty_len
             local tty_ok=1
             _zacrs_daemon_draw_atomic $fd $tty_len $_prev_vis $_prev_row $_prev_height 0 || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
                 _zacrs_last_render_cursor_row=$cursor_row
                 _zacrs_last_render_cursor_col=$cursor_col
-                _zacrs_record_popup_snapshot "$naive_prefix" "$prefix_len" "" "$cursor_col" "$reuse_token" 0
+                _zacrs_record_popup_snapshot "$prefix_len"
             else
                 _zacrs_clear_popup
                 _zacrs_mark_daemon_unavailable
@@ -956,6 +969,37 @@ zle -N send-break _zacrs_send_break
 # === ターミナルリサイズ対応 ===
 
 TRAPWINCH() {
+    if (( _zacrs_popup_session_active )); then
+        return 0
+    fi
+    if (( _zacrs_ignore_next_winch )); then
+        _zacrs_ignore_next_winch=0
+        return 0
+    fi
+    # Only attempt a reuse-based redraw when the terminal width is unchanged.
+    # A width change reflows the prompt and input line, making the cached
+    # cursor_row/cursor_col stale; in that case fall through to clear+reset
+    # and let the next ZLE event render a fresh popup with correct geometry.
+    if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
+        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
+        _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" ""
+        if (( $? == 0 )); then
+            local fd=$_zacrs_send_render_fd
+            local tty_len=$_zacrs_parsed_tty_len
+            local tty_ok=1
+            _zacrs_daemon_draw_atomic $fd $tty_len 1 $_zacrs_popup_row $_zacrs_popup_height 0 || tty_ok=0
+            exec {fd}<&-
+            if (( tty_ok )); then
+                _zacrs_popup_visible=1
+                _zacrs_last_render_cursor_row=$_zacrs_popup_cursor_row
+                _zacrs_popup_snapshot_columns=$COLUMNS
+                _zacrs_popup_snapshot_lines=$LINES
+                zle -R
+                return 0
+            fi
+        fi
+    fi
     _zacrs_clear_popup
     _zacrs_reset_cache
 }

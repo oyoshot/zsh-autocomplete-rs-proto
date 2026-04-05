@@ -260,6 +260,20 @@ impl App {
         self.sync_max_visible();
     }
 
+    pub fn set_terminal_state(
+        &mut self,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+    ) {
+        self.term_cols = term_cols.max(1);
+        self.term_rows = term_rows.max(1);
+        self.cursor_row = cursor_row.min(self.term_rows.saturating_sub(1));
+        self.cursor_col = cursor_col.min(self.term_cols.saturating_sub(1));
+        self.sync_max_visible();
+    }
+
     pub fn sync_max_visible(&mut self) {
         let max_popup_height = self.term_rows.saturating_sub(1);
         let max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
@@ -820,6 +834,19 @@ mod tests {
         let sel = app.selected().unwrap();
         assert!(sel >= app.scroll_offset);
         assert!(sel < app.scroll_offset + app.max_visible);
+    }
+
+    #[test]
+    fn set_terminal_state_updates_cursor_for_resized_wrap() {
+        let candidates = make_candidates(&["alpha", "beta", "gamma"]);
+        let mut app = App::new_with_term_size(candidates, "".to_string(), 5, 35, 40, 24);
+
+        app.set_terminal_state(2, 18, 80, 24);
+
+        assert_eq!(app.term_cols, 80);
+        assert_eq!(app.term_rows, 24);
+        assert_eq!(app.cursor_row, 2);
+        assert_eq!(app.cursor_col, 18);
     }
 
     #[test]

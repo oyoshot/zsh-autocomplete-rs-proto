@@ -53,6 +53,7 @@ pub struct TextRenderRequest {
     pub term_rows: u16,
     pub selected: Option<usize>,
     pub context_key: Option<String>,
+    pub popup_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub struct TextCompleteRequest {
     pub reuse_token: Option<String>,
     pub shift_tab_sequence: Option<Vec<u8>>,
     pub context_key: Option<String>,
+    pub popup_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +103,19 @@ pub struct TextCompleteResult {
     pub chain: bool,
     pub execute: bool,
     pub restore_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextSessionRequest {
+    Key {
+        byte_count: usize,
+    },
+    Resize {
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+    },
 }
 
 fn write_u32(buf: &mut Vec<u8>, val: u32) {
@@ -377,11 +392,14 @@ impl TextRequest {
             ] => {
                 let mut selected = None;
                 let mut context_key = None;
+                let mut popup_key = None;
                 for token in rest {
                     if let Some(value) = token.strip_prefix("selected=") {
                         selected = value.parse().ok();
                     } else if let Some(value) = token.strip_prefix("context_key=") {
                         context_key = Some(value.to_string());
+                    } else if let Some(value) = token.strip_prefix("popup_key=") {
+                        popup_key = Some(value.to_string());
                     }
                 }
                 Some(Self::Render(TextRenderRequest {
@@ -391,6 +409,7 @@ impl TextRequest {
                     term_rows: parse_u16_token(term_rows)?,
                     selected,
                     context_key,
+                    popup_key,
                 }))
             }
             [
@@ -408,6 +427,7 @@ impl TextRequest {
                 let mut reuse_token = None;
                 let mut shift_tab_sequence = None;
                 let mut context_key = None;
+                let mut popup_key = None;
                 for token in rest {
                     if let Some(value) = token.strip_prefix("prev_popup_row=") {
                         prev_popup_row = value.parse().ok();
@@ -419,6 +439,8 @@ impl TextRequest {
                         shift_tab_sequence = decode_hex_bytes(value);
                     } else if let Some(value) = token.strip_prefix("context_key=") {
                         context_key = Some(value.to_string());
+                    } else if let Some(value) = token.strip_prefix("popup_key=") {
+                        popup_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("command_position=") {
                         command_position = value == "1";
                     } else if let Some(value) = token.strip_prefix("accept_single=") {
@@ -436,6 +458,7 @@ impl TextRequest {
                     reuse_token,
                     shift_tab_sequence,
                     context_key,
+                    popup_key,
                 }))
             }
             ["clear", popup_row, popup_height, cursor_row] => Some(Self::Clear(TextClearRequest {
@@ -446,6 +469,36 @@ impl TextRequest {
             ["ping"] => Some(Self::Ping),
             ["shutdown"] => Some(Self::Shutdown),
             _ => None,
+        }
+    }
+}
+
+impl TextSessionRequest {
+    pub fn parse(line: &str) -> Option<Self> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            ["KEY", byte_count] => Some(Self::Key {
+                byte_count: byte_count.parse().ok()?,
+            }),
+            ["RESIZE", cursor_row, cursor_col, term_cols, term_rows] => Some(Self::Resize {
+                cursor_row: parse_u16_token(cursor_row)?,
+                cursor_col: parse_u16_token(cursor_col)?,
+                term_cols: parse_u16_token(term_cols)?,
+                term_rows: parse_u16_token(term_rows)?,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn header_line(&self) -> String {
+        match self {
+            Self::Key { byte_count } => format!("KEY {byte_count}"),
+            Self::Resize {
+                cursor_row,
+                cursor_col,
+                term_cols,
+                term_rows,
+            } => format!("RESIZE {cursor_row} {cursor_col} {term_cols} {term_rows}"),
         }
     }
 }
@@ -470,6 +523,9 @@ impl TextCompleteRequest {
         }
         if let Some(key) = &self.context_key {
             line.push_str(&format!(" context_key={key}"));
+        }
+        if let Some(key) = &self.popup_key {
+            line.push_str(&format!(" popup_key={key}"));
         }
         if let Some(shift_tab_sequence) = self.shift_tab_sequence.as_deref() {
             line.push_str(&format!(
@@ -898,10 +954,44 @@ mod tests {
             reuse_token: Some("123".to_string()),
             shift_tab_sequence: Some(b"\x1b[Z".to_vec()),
             context_key: Some("ctx".to_string()),
+            popup_key: Some("popup".to_string()),
         };
 
         let parsed = TextRequest::parse_header(&request.header_line()).unwrap();
         assert_eq!(parsed, TextRequest::Complete(request));
+    }
+
+    #[test]
+    fn text_render_request_header_parses_popup_key() {
+        let parsed = TextRequest::parse_header(
+            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            TextRequest::Render(TextRenderRequest {
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: Some(1),
+                context_key: Some("ctx".to_string()),
+                popup_key: Some("popup".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn text_session_resize_header_roundtrip() {
+        let request = TextSessionRequest::Resize {
+            cursor_row: 8,
+            cursor_col: 14,
+            term_cols: 120,
+            term_rows: 40,
+        };
+
+        let parsed = TextSessionRequest::parse(&request.header_line()).unwrap();
+        assert_eq!(parsed, request);
     }
 
     #[test]
