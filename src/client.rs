@@ -433,14 +433,7 @@ struct SigwinchPipe {
 
 impl SigwinchPipe {
     fn new() -> Result<Self, DaemonUnavailable> {
-        let mut fds = [0; 2];
-        let flags = libc::O_CLOEXEC | libc::O_NONBLOCK;
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), flags) } != 0 {
-            return Err(DaemonUnavailable::NotRunning);
-        }
-
-        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let (read_fd, write_fd) = create_nonblocking_pipe()?;
         let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
         let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
         action.sa_sigaction = handle_sigwinch as *const () as usize;
@@ -462,6 +455,32 @@ impl SigwinchPipe {
     fn read_fd(&self) -> i32 {
         self.read_fd.as_raw_fd()
     }
+}
+
+fn create_nonblocking_pipe() -> Result<(OwnedFd, OwnedFd), DaemonUnavailable> {
+    let mut fds = [0; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(DaemonUnavailable::NotRunning);
+    }
+
+    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+    set_fd_flags(read_fd.as_raw_fd(), libc::FD_CLOEXEC, libc::F_SETFD)?;
+    set_fd_flags(write_fd.as_raw_fd(), libc::FD_CLOEXEC, libc::F_SETFD)?;
+    set_fd_flags(read_fd.as_raw_fd(), libc::O_NONBLOCK, libc::F_SETFL)?;
+    set_fd_flags(write_fd.as_raw_fd(), libc::O_NONBLOCK, libc::F_SETFL)?;
+    Ok((read_fd, write_fd))
+}
+
+fn set_fd_flags(fd: i32, flag: libc::c_int, set_cmd: libc::c_int) -> Result<(), DaemonUnavailable> {
+    let get_cmd = if set_cmd == libc::F_SETFD {
+        libc::F_GETFD
+    } else {
+        libc::F_GETFL
+    };
+    let current = retry_on_eintr(|| unsafe { libc::fcntl(fd, get_cmd) })?;
+    retry_on_eintr(|| unsafe { libc::fcntl(fd, set_cmd, current | flag) })?;
+    Ok(())
 }
 
 impl Drop for SigwinchPipe {
@@ -789,16 +808,12 @@ mod tests {
     #[test]
     fn read_session_event_returns_resize_when_resize_fd_is_ready() {
         let mut tty_fds = [0; 2];
-        let mut resize_fds = [0; 2];
         assert_eq!(unsafe { libc::pipe(tty_fds.as_mut_ptr()) }, 0);
-        assert_eq!(
-            unsafe { libc::pipe2(resize_fds.as_mut_ptr(), libc::O_NONBLOCK) },
-            0
-        );
+        let (resize_reader_fd, resize_writer_fd) = create_nonblocking_pipe().unwrap();
         let tty_reader = unsafe { File::from_raw_fd(tty_fds[0]) };
         let tty_writer = unsafe { File::from_raw_fd(tty_fds[1]) };
-        let resize_reader = unsafe { File::from_raw_fd(resize_fds[0]) };
-        let mut resize_writer = unsafe { File::from_raw_fd(resize_fds[1]) };
+        let resize_reader = File::from(resize_reader_fd);
+        let mut resize_writer = File::from(resize_writer_fd);
         resize_writer.write_all(&[1]).unwrap();
 
         let event = read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd()).unwrap();
