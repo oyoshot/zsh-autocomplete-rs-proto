@@ -436,6 +436,23 @@ const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 static SIGWINCH_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
+/// Returns a pointer to the calling thread's errno variable.
+/// Async-signal-safe: both __errno_location (Linux) and __error (macOS)
+/// are documented as async-signal-safe.
+#[inline]
+fn errno_location() -> *mut libc::c_int {
+    #[cfg(target_os = "linux")]
+    // SAFETY: __errno_location is always valid on Linux.
+    unsafe {
+        libc::__errno_location()
+    }
+    #[cfg(target_os = "macos")]
+    // SAFETY: __error is always valid on macOS.
+    unsafe {
+        libc::__error()
+    }
+}
+
 extern "C" fn handle_sigwinch(_signal: libc::c_int) {
     let fd = SIGWINCH_WRITE_FD.load(Ordering::Relaxed);
     if fd < 0 {
@@ -446,9 +463,10 @@ extern "C" fn handle_sigwinch(_signal: libc::c_int) {
     // code may be inspecting errno after a syscall returns EINTR.
     let byte = [1u8; 1];
     unsafe {
-        let saved = *libc::__errno_location();
+        let errno_ptr = errno_location();
+        let saved = *errno_ptr;
         libc::write(fd, byte.as_ptr() as *const libc::c_void, byte.len());
-        *libc::__errno_location() = saved;
+        *errno_ptr = saved;
     }
 }
 
