@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775324734099,
+  "lastUpdate": 1775377527679,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -10019,6 +10019,234 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 754,
             "range": "± 16",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "86f8c3224b60bd2fe7d6c4446224c2c6806102c8",
+          "message": "fix(popup): keep popup state stable on resize (#98)\n\n* feat(shell): forward terminal resize to popup session\n\n* fix(client): make resize self-pipe portable on macos\n\n* fix(daemon): clear old popup when resize shifts columns\n\n* refactor(daemon): own auto-popup reuse state\n\n* test(daemon): cover popup cache regressions\n\n* fix(shell): restore daemon single accept\n\n* fix(shell): refresh cursor cache after resize redraw\n\n* fix(daemon): recompute cursor position on resize\n\n* fix(shell): tighten WINCH popup handling\n\n* fix(client): reduce send_resize argument count to satisfy clippy\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(daemon): remove unreachable popup_key branch in complete cache resolution\n\nAfter the `if context_key.is_none()` guard, `context_key` is guaranteed\nto be Some, so the `else if let Some(key) = context_key` arm always\nmatches. The subsequent `else if popup_key` and `else` arms were dead\ncode that could never execute.\n\nReplace the else-if chain with a plain `else` that unwraps context_key\ndirectly, making the exhaustiveness explicit.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(client): save and restore errno in handle_sigwinch\n\nSignal handlers that call write(2) may clobber errno. Code interrupted\nmid-syscall (e.g. read_line_retry checking ErrorKind::Interrupted) reads\nerrno after the signal returns, so a clobbered value could mis-classify a\nhard I/O error as a retryable EINTR.\n\nSave errno before the write and restore it afterwards.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(client): tighten SigwinchPipe setup and teardown order\n\nSetup: publish the write-end fd before calling sigaction so that the\nhandler always sees a valid fd from the moment it is first invokable.\n\nTeardown: restore the previous handler before clearing the fd so that\nany SIGWINCH arriving during Drop is dispatched to the original handler\nrather than hitting handle_sigwinch with fd=-1 and being silently lost.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(client): make errno_location cross-platform for macOS\n\n__errno_location() is Linux-specific; macOS uses __error(). Introduce a\nthin errno_location() wrapper with #[cfg] so handle_sigwinch compiles\nand saves/restores errno correctly on both platforms.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(shell): skip TRAPWINCH reuse-redraw when terminal width changes\n\nAfter a width change the prompt and input line reflow, so the cached\n_zacrs_popup_cursor_row and _zacrs_last_render_cursor_col no longer\npoint to where the cursor actually is. Passing these stale values to\nthe daemon would misplace the redrawn popup.\n\nGuard the reuse-based redraw with (( _zacrs_popup_snapshot_columns == COLUMNS )).\nWhen width changes we fall through to _zacrs_clear_popup + _zacrs_reset_cache\nand the next ZLE event re-renders with correct geometry.\nHeight-only resizes continue to use the fast reuse path as before.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* fix(client): emit compile_error for unsupported OS in errno_location\n\nerrno_location() only has implementations for Linux and macOS.\nOn other platforms (FreeBSD, etc.) the function body would be empty\nand fail to compile with a confusing error.\n\nAdd a top-level compile_error! under #[cfg(not(any(linux, macos)))]\nso the failure is immediate and explains which platforms are supported.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* refactor(client): narrow send_resize to reject non-Resize session requests\n\nThe previous signature accepted any TextSessionRequest, so passing a Key\nvariant would silently skip the cursor-state update and serialise an\nincomplete KEY frame, desyncing the daemon protocol.\n\nAccept a (cursor_row, cursor_col, term_cols, term_rows) tuple instead and\nconstruct TextSessionRequest::Resize internally, making it impossible to\ncall with the wrong variant.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* style(client): rustfmt compile_error! in errno_location\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-04-05T17:17:24+09:00",
+          "tree_id": "9b0d2b4d685e595bf64faecdb86d46b3043ca75b",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/86f8c3224b60bd2fe7d6c4446224c2c6806102c8"
+        },
+        "date": 1775377526790,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7455,
+            "range": "± 269",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 74678,
+            "range": "± 351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 895854,
+            "range": "± 7084",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 192340,
+            "range": "± 2124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 100930,
+            "range": "± 947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 75228,
+            "range": "± 488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 20333,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19032,
+            "range": "± 131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 12142,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 312806,
+            "range": "± 1925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 307818,
+            "range": "± 7933",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 271201,
+            "range": "± 830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 295092,
+            "range": "± 3798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 26942,
+            "range": "± 160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 307627,
+            "range": "± 2025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 3363749,
+            "range": "± 19773",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 151429,
+            "range": "± 1080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 113262,
+            "range": "± 346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 361042,
+            "range": "± 1991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 735,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 41,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 113,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 96,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 90,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 49,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 64,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 138,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 857,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7623,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 755,
+            "range": "± 6",
             "unit": "ns/iter"
           }
         ]
