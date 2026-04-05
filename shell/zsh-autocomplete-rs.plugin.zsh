@@ -976,8 +976,13 @@ TRAPWINCH() {
         _zacrs_ignore_next_winch=0
         return 0
     fi
+    # Only attempt a reuse-based redraw when the terminal width is unchanged.
+    # A width change reflows the prompt and input line, making the cached
+    # cursor_row/cursor_col stale; in that case fall through to clear+reset
+    # and let the next ZLE event render a fresh popup with correct geometry.
     if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
-        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]]; then
+        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
         _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" ""
         if (( $? == 0 )); then
             local fd=$_zacrs_send_render_fd
