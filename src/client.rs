@@ -209,12 +209,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                     reader,
                     writer,
                     &mut tty_writer,
-                    TextSessionRequest::Resize {
-                        cursor_row,
-                        cursor_col,
-                        term_cols,
-                        term_rows,
-                    },
+                    (cursor_row, cursor_col, term_cols, term_rows),
                 )? {
                     raw_mode.restore();
                     state.clear_popup(&mut tty_writer)?;
@@ -356,17 +351,17 @@ impl SessionState {
         reader: &mut R,
         writer: &mut W,
         tty_writer: &mut File,
-        req: TextSessionRequest,
+        dims: (u16, u16, u16, u16),
     ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
-        if let TextSessionRequest::Resize {
+        let (cursor_row, cursor_col, term_cols, term_rows) = dims;
+        self.cursor_row = cursor_row;
+        self.cursor_col = cursor_col;
+        let req = TextSessionRequest::Resize {
             cursor_row,
             cursor_col,
-            ..
-        } = &req
-        {
-            self.cursor_row = *cursor_row;
-            self.cursor_col = *cursor_col;
-        }
+            term_cols,
+            term_rows,
+        };
         writeln!(writer, "{}", req.header_line())
             .and_then(|_| writer.flush())
             .map_err(|_| DaemonUnavailable::NotRunning)?;
