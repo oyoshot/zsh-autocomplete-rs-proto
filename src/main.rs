@@ -129,6 +129,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         stale_bytes,
         prev_popup_row.zip(prev_popup_height),
         cursor_row,
+        cursor_col,
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
     write_done_result(&mut stdout_writer, &result)?;

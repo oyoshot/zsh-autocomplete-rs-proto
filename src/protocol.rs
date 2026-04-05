@@ -108,7 +108,12 @@ pub struct TextCompleteResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextSessionRequest {
     Key { byte_count: usize },
-    Resize { term_cols: u16, term_rows: u16 },
+    Resize {
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+    },
 }
 
 fn write_u32(buf: &mut Vec<u8>, val: u32) {
@@ -473,7 +478,9 @@ impl TextSessionRequest {
             ["KEY", byte_count] => Some(Self::Key {
                 byte_count: byte_count.parse().ok()?,
             }),
-            ["RESIZE", term_cols, term_rows] => Some(Self::Resize {
+            ["RESIZE", cursor_row, cursor_col, term_cols, term_rows] => Some(Self::Resize {
+                cursor_row: parse_u16_token(cursor_row)?,
+                cursor_col: parse_u16_token(cursor_col)?,
                 term_cols: parse_u16_token(term_cols)?,
                 term_rows: parse_u16_token(term_rows)?,
             }),
@@ -485,9 +492,11 @@ impl TextSessionRequest {
         match self {
             Self::Key { byte_count } => format!("KEY {byte_count}"),
             Self::Resize {
+                cursor_row,
+                cursor_col,
                 term_cols,
                 term_rows,
-            } => format!("RESIZE {term_cols} {term_rows}"),
+            } => format!("RESIZE {cursor_row} {cursor_col} {term_cols} {term_rows}"),
         }
     }
 }
@@ -973,6 +982,8 @@ mod tests {
     #[test]
     fn text_session_resize_header_roundtrip() {
         let request = TextSessionRequest::Resize {
+            cursor_row: 8,
+            cursor_col: 14,
             term_cols: 120,
             term_rows: 40,
         };

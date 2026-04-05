@@ -1349,11 +1349,13 @@ impl DaemonServer {
                     }
                 }
                 Some(TextSessionRequest::Resize {
+                    cursor_row,
+                    cursor_col,
                     term_cols,
                     term_rows,
                 }) => {
                     let previous_popup = crate::ui::popup::Popup::compute(&app);
-                    app.set_term_size(term_cols, term_rows);
+                    app.set_terminal_state(cursor_row, cursor_col, term_cols, term_rows);
                     let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
                     let new_popup = crate::ui::popup::Popup::compute(&app);
                     let (extra_prefix, prev_popup) =
@@ -1656,7 +1658,12 @@ mod tests {
 
     enum SessionMessage<'a> {
         Key(&'a [u8]),
-        Resize(u16, u16),
+        Resize {
+            cursor_row: u16,
+            cursor_col: u16,
+            term_cols: u16,
+            term_rows: u16,
+        },
     }
 
     fn session_input(messages: &[SessionMessage<'_>]) -> Vec<u8> {
@@ -1667,8 +1674,17 @@ mod tests {
                     writeln!(&mut input, "KEY {}", bytes.len()).unwrap();
                     input.extend_from_slice(bytes);
                 }
-                SessionMessage::Resize(term_cols, term_rows) => {
-                    writeln!(&mut input, "RESIZE {term_cols} {term_rows}").unwrap();
+                SessionMessage::Resize {
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                } => {
+                    writeln!(
+                        &mut input,
+                        "RESIZE {cursor_row} {cursor_col} {term_cols} {term_rows}"
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -2053,9 +2069,9 @@ mod tests {
             &mut server,
             CompleteParams {
                 prefix: "g".to_string(),
-                cursor_row: 5,
-                cursor_col: 2,
-                term_cols: 80,
+                cursor_row: 3,
+                cursor_col: 35,
+                term_cols: 40,
                 term_rows: 24,
                 prev_popup_row: None,
                 prev_popup_height: None,
@@ -2065,13 +2081,18 @@ mod tests {
                 shift_tab_sequence: None,
             },
             "git\tcommand\tcommand\ngizmo\tcommand\tcommand\nghub\tcommand\tcommand\nglow\tcommand\tcommand\n",
-            &[SessionMessage::Resize(40, 4)],
+            &[SessionMessage::Resize {
+                cursor_row: 1,
+                cursor_col: 20,
+                term_cols: 80,
+                term_rows: 24,
+            }],
         );
         let _ = read_frame(&mut reader);
         let (header, _) = read_frame(&mut reader);
         let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
-        assert_eq!(frame.popup_height, 3);
-        assert!(frame.cursor_row <= 1);
+        assert_eq!(frame.cursor_row, 1);
+        assert_eq!(frame.popup_row, 2);
     }
 
     #[test]
@@ -2093,7 +2114,12 @@ mod tests {
                 shift_tab_sequence: None,
             },
             "git\tcommand\tcommand\nglow\tcommand\tcommand\n",
-            &[SessionMessage::Resize(60, 24)],
+            &[SessionMessage::Resize {
+                cursor_row: 5,
+                cursor_col: 20,
+                term_cols: 60,
+                term_rows: 24,
+            }],
         );
 
         let (first_header, _) = read_frame_bytes(&mut reader);

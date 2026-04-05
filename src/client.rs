@@ -138,6 +138,7 @@ pub fn try_daemon_complete(
         stale_bytes,
         prev_popup,
         cursor_row,
+        cursor_col,
     )?;
     Ok(CompleteSessionOutcome::Done(result))
 }
@@ -149,6 +150,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     stale_bytes: Vec<u8>,
     prev_popup: Option<(u16, u16)>,
     cursor_row: u16,
+    cursor_col: u16,
 ) -> Result<TextCompleteResult, DaemonUnavailable> {
     if initial_header == "NONE" {
         return Err(DaemonUnavailable::EmptyResult);
@@ -162,7 +164,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
     let sigwinch_pipe = SigwinchPipe::new()?;
 
-    let mut state = SessionState::with_prev_popup(prev_popup, cursor_row);
+    let mut state = SessionState::with_prev_popup(prev_popup, cursor_row, cursor_col);
     if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
         return Ok(result);
     }
@@ -184,7 +186,12 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     }
 
     loop {
-        match read_session_event(tty_fd.as_raw_fd(), sigwinch_pipe.read_fd())? {
+        match read_session_event(
+            tty_fd.as_raw_fd(),
+            sigwinch_pipe.read_fd(),
+            state.cursor_row,
+            state.cursor_col,
+        )? {
             SessionEvent::Key(key) => {
                 if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
                     raw_mode.restore();
@@ -193,11 +200,20 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 }
             }
             SessionEvent::Resize {
+                cursor_row,
+                cursor_col,
                 term_cols,
                 term_rows,
             } => {
-                if let Some(result) =
-                    state.send_resize(reader, writer, &mut tty_writer, term_cols, term_rows)?
+                if let Some(result) = state.send_resize(
+                    reader,
+                    writer,
+                    &mut tty_writer,
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                )?
                 {
                     raw_mode.restore();
                     state.clear_popup(&mut tty_writer)?;
@@ -254,15 +270,17 @@ struct SessionState {
     popup_row: u16,
     popup_height: u16,
     cursor_row: u16,
+    cursor_col: u16,
 }
 
 impl SessionState {
-    fn with_prev_popup(prev_popup: Option<(u16, u16)>, cursor_row: u16) -> Self {
+    fn with_prev_popup(prev_popup: Option<(u16, u16)>, cursor_row: u16, cursor_col: u16) -> Self {
         let (popup_row, popup_height) = prev_popup.unwrap_or((0, 0));
         Self {
             popup_row,
             popup_height,
             cursor_row,
+            cursor_col,
         }
     }
 
@@ -337,13 +355,19 @@ impl SessionState {
         reader: &mut R,
         writer: &mut W,
         tty_writer: &mut File,
+        cursor_row: u16,
+        cursor_col: u16,
         term_cols: u16,
         term_rows: u16,
     ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
+        self.cursor_row = cursor_row;
+        self.cursor_col = cursor_col;
         writeln!(
             writer,
             "{}",
             TextSessionRequest::Resize {
+                cursor_row,
+                cursor_col,
                 term_cols,
                 term_rows,
             }
@@ -431,7 +455,12 @@ extern "C" fn handle_sigwinch(_signal: libc::c_int) {
 
 enum SessionEvent {
     Key(Vec<u8>),
-    Resize { term_cols: u16, term_rows: u16 },
+    Resize {
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+    },
 }
 
 struct SigwinchPipe {
@@ -530,7 +559,12 @@ fn poll_fd_for_read(fd: i32) -> Result<bool, DaemonUnavailable> {
     Ok(ret != 0)
 }
 
-fn read_session_event(tty_fd: i32, resize_fd: i32) -> Result<SessionEvent, DaemonUnavailable> {
+fn read_session_event(
+    tty_fd: i32,
+    resize_fd: i32,
+    current_cursor_row: u16,
+    current_cursor_col: u16,
+) -> Result<SessionEvent, DaemonUnavailable> {
     loop {
         let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
         unsafe {
@@ -551,7 +585,11 @@ fn read_session_event(tty_fd: i32, resize_fd: i32) -> Result<SessionEvent, Daemo
         if unsafe { libc::FD_ISSET(resize_fd, &readfds) } {
             drain_resize_pipe(resize_fd)?;
             let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (cursor_col, cursor_row) =
+                crossterm::cursor::position().unwrap_or((current_cursor_col, current_cursor_row));
             return Ok(SessionEvent::Resize {
+                cursor_row,
+                cursor_col,
                 term_cols,
                 term_rows,
             });
@@ -823,7 +861,7 @@ mod tests {
         let mut writer = Vec::new();
 
         let result =
-            run_text_popup_session(&mut reader, &mut writer, "DONE 0 cargo ", vec![], None, 0)
+            run_text_popup_session(&mut reader, &mut writer, "DONE 0 cargo ", vec![], None, 0, 0)
                 .unwrap();
 
         assert_eq!(result.code, 0);
@@ -837,7 +875,7 @@ mod tests {
         let path = temp_file_path("initial-done-clear");
         let mut tty_writer = File::create(&path).unwrap();
         let mut reader = BufReader::new("APPLY chain=0 execute=0 restore=\n".as_bytes());
-        let mut state = SessionState::with_prev_popup(Some((3, 2)), 5);
+        let mut state = SessionState::with_prev_popup(Some((3, 2)), 5, 0);
 
         let result = state
             .handle_header(&mut reader, &mut tty_writer, "DONE 1 ", true)
@@ -890,12 +928,17 @@ mod tests {
         let mut resize_writer = File::from(resize_writer_fd);
         resize_writer.write_all(&[1]).unwrap();
 
-        let event = read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd()).unwrap();
+        let event = read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd(), 7, 11)
+            .unwrap();
         match event {
             SessionEvent::Resize {
+                cursor_row,
+                cursor_col,
                 term_cols,
                 term_rows,
             } => {
+                assert_eq!(cursor_row, 7);
+                assert_eq!(cursor_col, 11);
                 assert!(term_cols > 0);
                 assert!(term_rows > 0);
             }
