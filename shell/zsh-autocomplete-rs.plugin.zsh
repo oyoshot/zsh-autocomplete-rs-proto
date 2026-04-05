@@ -982,6 +982,7 @@ TRAPWINCH() {
             exec {fd}<&-
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
+                _zacrs_last_render_cursor_row=$_zacrs_popup_cursor_row
                 _zacrs_popup_snapshot_columns=$COLUMNS
                 _zacrs_popup_snapshot_lines=$LINES
                 zle -R
