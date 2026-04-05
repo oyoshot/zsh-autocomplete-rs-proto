@@ -1,11 +1,13 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use crate::protocol::{
     self, Request, Response, TextCompleteRequest, TextCompleteResult, TextFrameHeader,
+    TextSessionRequest,
 };
 use crate::tty;
 use crate::ui;
@@ -158,6 +160,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
 
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
     let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
+    let sigwinch_pipe = SigwinchPipe::new()?;
 
     let mut state = SessionState::with_prev_popup(prev_popup, cursor_row);
     if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
@@ -181,11 +184,26 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     }
 
     loop {
-        let key = read_key_from_fd(tty_fd.as_raw_fd())?;
-        if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
-            raw_mode.restore();
-            state.clear_popup(&mut tty_writer)?;
-            return Ok(result);
+        match read_session_event(tty_fd.as_raw_fd(), sigwinch_pipe.read_fd())? {
+            SessionEvent::Key(key) => {
+                if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
+                    raw_mode.restore();
+                    state.clear_popup(&mut tty_writer)?;
+                    return Ok(result);
+                }
+            }
+            SessionEvent::Resize {
+                term_cols,
+                term_rows,
+            } => {
+                if let Some(result) =
+                    state.send_resize(reader, writer, &mut tty_writer, term_cols, term_rows)?
+                {
+                    raw_mode.restore();
+                    state.clear_popup(&mut tty_writer)?;
+                    return Ok(result);
+                }
+            }
         }
     }
 }
@@ -294,11 +312,47 @@ impl SessionState {
         tty_writer: &mut File,
         key: &[u8],
     ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
-        writeln!(writer, "KEY {}", key.len()).map_err(|_| DaemonUnavailable::NotRunning)?;
+        writeln!(
+            writer,
+            "{}",
+            TextSessionRequest::Key {
+                byte_count: key.len(),
+            }
+            .header_line()
+        )
+        .map_err(|_| DaemonUnavailable::NotRunning)?;
         writer
             .write_all(key)
             .and_then(|_| writer.flush())
             .map_err(|_| DaemonUnavailable::NotRunning)?;
+
+        let mut header = String::new();
+        reader
+            .read_line(&mut header)
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
+        let header = trim_line_end(&header);
+        self.handle_header(reader, tty_writer, header, false)
+    }
+
+    fn send_resize<R: BufRead, W: Write>(
+        &mut self,
+        reader: &mut R,
+        writer: &mut W,
+        tty_writer: &mut File,
+        term_cols: u16,
+        term_rows: u16,
+    ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
+        writeln!(
+            writer,
+            "{}",
+            TextSessionRequest::Resize {
+                term_cols,
+                term_rows,
+            }
+            .header_line()
+        )
+        .and_then(|_| writer.flush())
+        .map_err(|_| DaemonUnavailable::NotRunning)?;
 
         let mut header = String::new();
         reader
@@ -352,6 +406,72 @@ fn open_tty_writer(tty_fd: &OwnedFd) -> io::Result<File> {
 const MAX_ESCAPE_SEQUENCE_LEN: usize = 32;
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
+static SIGWINCH_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn handle_sigwinch(_signal: libc::c_int) {
+    let fd = SIGWINCH_WRITE_FD.load(Ordering::Relaxed);
+    if fd < 0 {
+        return;
+    }
+
+    let byte = [1u8; 1];
+    unsafe {
+        libc::write(fd, byte.as_ptr() as *const libc::c_void, byte.len());
+    }
+}
+
+enum SessionEvent {
+    Key(Vec<u8>),
+    Resize { term_cols: u16, term_rows: u16 },
+}
+
+struct SigwinchPipe {
+    read_fd: OwnedFd,
+    _write_fd: OwnedFd,
+    previous: libc::sigaction,
+}
+
+impl SigwinchPipe {
+    fn new() -> Result<Self, DaemonUnavailable> {
+        let mut fds = [0; 2];
+        let flags = libc::O_CLOEXEC | libc::O_NONBLOCK;
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), flags) } != 0 {
+            return Err(DaemonUnavailable::NotRunning);
+        }
+
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        action.sa_sigaction = handle_sigwinch as *const () as usize;
+        action.sa_flags = 0;
+        unsafe { libc::sigemptyset(&mut action.sa_mask) };
+        if unsafe { libc::sigaction(libc::SIGWINCH, &action, &mut previous) } != 0 {
+            return Err(DaemonUnavailable::NotRunning);
+        }
+
+        SIGWINCH_WRITE_FD.store(write_fd.as_raw_fd(), Ordering::Relaxed);
+
+        Ok(Self {
+            read_fd,
+            _write_fd: write_fd,
+            previous,
+        })
+    }
+
+    fn read_fd(&self) -> i32 {
+        self.read_fd.as_raw_fd()
+    }
+}
+
+impl Drop for SigwinchPipe {
+    fn drop(&mut self) {
+        SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
+        unsafe {
+            libc::sigaction(libc::SIGWINCH, &self.previous, std::ptr::null_mut());
+        }
+    }
+}
 
 fn is_escape_sequence_complete(buf: &[u8]) -> bool {
     if buf.starts_with(BRACKETED_PASTE_START) && !buf.ends_with(BRACKETED_PASTE_END) {
@@ -380,6 +500,61 @@ fn poll_fd_for_read(fd: i32) -> Result<bool, DaemonUnavailable> {
         )
     })?;
     Ok(ret != 0)
+}
+
+fn read_session_event(tty_fd: i32, resize_fd: i32) -> Result<SessionEvent, DaemonUnavailable> {
+    loop {
+        let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::FD_SET(tty_fd, &mut readfds);
+            libc::FD_SET(resize_fd, &mut readfds);
+        }
+        let max_fd = tty_fd.max(resize_fd);
+        retry_on_eintr(|| unsafe {
+            libc::select(
+                max_fd + 1,
+                &mut readfds,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        })?;
+
+        if unsafe { libc::FD_ISSET(resize_fd, &readfds) } {
+            drain_resize_pipe(resize_fd)?;
+            let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            return Ok(SessionEvent::Resize {
+                term_cols,
+                term_rows,
+            });
+        }
+
+        if unsafe { libc::FD_ISSET(tty_fd, &readfds) } {
+            return read_key_from_fd(tty_fd).map(SessionEvent::Key);
+        }
+    }
+}
+
+fn drain_resize_pipe(fd: i32) -> Result<(), DaemonUnavailable> {
+    let mut buf = [0u8; 64];
+    loop {
+        let read = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if read > 0 {
+            continue;
+        }
+        if read == 0 {
+            return Ok(());
+        }
+
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::WouldBlock {
+            return Ok(());
+        }
+        if err.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(DaemonUnavailable::NotRunning);
+    }
 }
 
 fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
@@ -609,5 +784,38 @@ mod tests {
         let key = read_key_from_fd(reader.as_raw_fd()).unwrap();
 
         assert_eq!(key, b"\x1b[200~git status --short\x1b[201~");
+    }
+
+    #[test]
+    fn read_session_event_returns_resize_when_resize_fd_is_ready() {
+        let mut tty_fds = [0; 2];
+        let mut resize_fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(tty_fds.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::pipe2(resize_fds.as_mut_ptr(), libc::O_NONBLOCK) },
+            0
+        );
+        let tty_reader = unsafe { File::from_raw_fd(tty_fds[0]) };
+        let tty_writer = unsafe { File::from_raw_fd(tty_fds[1]) };
+        let resize_reader = unsafe { File::from_raw_fd(resize_fds[0]) };
+        let mut resize_writer = unsafe { File::from_raw_fd(resize_fds[1]) };
+        resize_writer.write_all(&[1]).unwrap();
+
+        let event = read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd()).unwrap();
+        match event {
+            SessionEvent::Resize {
+                term_cols,
+                term_rows,
+            } => {
+                assert!(term_cols > 0);
+                assert!(term_rows > 0);
+            }
+            SessionEvent::Key(_) => panic!("expected resize event"),
+        }
+
+        drop(resize_writer);
+        drop(resize_reader);
+        drop(tty_writer);
+        drop(tty_reader);
     }
 }

@@ -14,7 +14,7 @@ use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
 use crate::protocol::{
     self, Request, Response, TextClearRequest, TextCompleteRequest, TextCompleteResult,
-    TextFrameHeader, TextRenderRequest, TextRequest,
+    TextFrameHeader, TextRenderRequest, TextRequest, TextSessionRequest,
 };
 use crate::ui;
 use tracing::{debug, error, info, info_span, warn};
@@ -1037,155 +1037,23 @@ impl DaemonServer {
             }
             let msg_line = msg_line.trim_end();
 
-            if let Some(len_str) = msg_line.strip_prefix("KEY ") {
-                let byte_count: usize = len_str.parse().unwrap_or(0);
-                if byte_count == 0 {
-                    let _ = writeln!(writer, "NONE");
-                    let _ = writer.flush();
-                    continue;
-                }
-                if byte_count > MAX_INLINE_KEY_BYTES {
-                    let drained = match drain_key_payload(reader, byte_count) {
-                        Ok(bytes) => bytes,
-                        Err(_) => break,
-                    };
-                    let _ = write_apply_result(
-                        writer,
-                        &ApplyResult {
-                            code: 3,
-                            text: encode_hex_bytes(&drained),
-                            chain: false,
-                            execute: false,
-                            restore_text: app.filter_text.clone(),
-                        },
-                    );
-                    break;
-                }
-                let mut key_buf = vec![0u8; byte_count];
-                if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
-                    break;
-                }
-
-                let action = input::parse_tty_bytes_with_shift_tab(
-                    &key_buf,
-                    &self.key_bindings,
-                    shift_tab_sequence.as_deref(),
-                )
-                .unwrap_or(Action::None);
-
-                match action {
-                    Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
-                        apply_navigation(&mut app, action);
-                        if self
-                            .send_frame(writer, &app, &[], None, false, None)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Action::TypeChar(c) => {
-                        let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
-                        app.type_char(c);
-                        if app.filtered_indices.is_empty() {
-                            let _ = write_apply_result(
-                                writer,
-                                &ApplyResult::cancel(app.filter_text.clone()),
-                            );
-                            break;
-                        }
-                        if self
-                            .send_frame(writer, &app, &clear_bytes, None, false, None)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Action::Backspace => {
-                        let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
-                        if !app.backspace() {
-                            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
-                            break;
-                        }
-                        if app.filtered_indices.is_empty()
-                            || app.filter_text.len() < app.prefix.len()
-                        {
-                            let _ = write_apply_result(
-                                writer,
-                                &ApplyResult::cancel(app.filter_text.clone()),
-                            );
-                            break;
-                        }
-                        if self
-                            .send_frame(writer, &app, &clear_bytes, None, false, None)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Action::Confirm => {
-                        match app.selected_candidate() {
-                            Some(c) => {
-                                let _ = write_apply_result(
-                                    writer,
-                                    &ApplyResult::confirm(c.text_with_suffix_for_command_position(
-                                        &self.config.suffixes,
-                                        command_position,
-                                    )),
-                                );
-                            }
-                            None => {
-                                let _ = write_apply_result(
-                                    writer,
-                                    &ApplyResult::cancel(app.filter_text.clone()),
-                                );
-                            }
-                        }
-                        break;
-                    }
-                    Action::DismissWithSpace => {
-                        match app.selected_candidate() {
-                            Some(c) => {
-                                let _ = write_apply_result(
-                                    writer,
-                                    &ApplyResult::dismiss_with_space(
-                                        c.text_for_dismiss_with_space(
-                                            &self.config.suffixes,
-                                            command_position,
-                                        ),
-                                    ),
-                                );
-                            }
-                            None => {
-                                let _ = write_apply_result(
-                                    writer,
-                                    &ApplyResult::dismiss_with_space(format!(
-                                        "{} ",
-                                        app.filter_text
-                                    )),
-                                );
-                            }
-                        }
-                        break;
-                    }
-                    Action::Cancel => {
-                        let text = if app.filter_text != app.prefix {
-                            &app.filter_text
-                        } else {
-                            ""
-                        };
-                        let _ = write_apply_result(writer, &ApplyResult::cancel(text.to_string()));
-                        break;
-                    }
-                    Action::Resize(_, _) => {
+            match TextSessionRequest::parse(msg_line) {
+                Some(TextSessionRequest::Key { byte_count }) => {
+                    if byte_count == 0 {
                         let _ = writeln!(writer, "NONE");
                         let _ = writer.flush();
+                        continue;
                     }
-                    Action::None => {
+                    if byte_count > MAX_INLINE_KEY_BYTES {
+                        let drained = match drain_key_payload(reader, byte_count) {
+                            Ok(bytes) => bytes,
+                            Err(_) => break,
+                        };
                         let _ = write_apply_result(
                             writer,
                             &ApplyResult {
                                 code: 3,
-                                text: encode_hex_bytes(&key_buf),
+                                text: encode_hex_bytes(&drained),
                                 chain: false,
                                 execute: false,
                                 restore_text: app.filter_text.clone(),
@@ -1193,11 +1061,170 @@ impl DaemonServer {
                         );
                         break;
                     }
+                    let mut key_buf = vec![0u8; byte_count];
+                    if std::io::Read::read_exact(reader, &mut key_buf).is_err() {
+                        break;
+                    }
+
+                    let action = input::parse_tty_bytes_with_shift_tab(
+                        &key_buf,
+                        &self.key_bindings,
+                        shift_tab_sequence.as_deref(),
+                    )
+                    .unwrap_or(Action::None);
+
+                    match action {
+                        Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+                            apply_navigation(&mut app, action);
+                            if self
+                                .send_frame(writer, &app, &[], None, false, None)
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Action::TypeChar(c) => {
+                            let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
+                            app.type_char(c);
+                            if app.filtered_indices.is_empty() {
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::cancel(app.filter_text.clone()),
+                                );
+                                break;
+                            }
+                            if self
+                                .send_frame(writer, &app, &clear_bytes, None, false, None)
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Action::Backspace => {
+                            let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
+                            if !app.backspace() {
+                                let _ =
+                                    write_apply_result(writer, &ApplyResult::cancel(String::new()));
+                                break;
+                            }
+                            if app.filtered_indices.is_empty()
+                                || app.filter_text.len() < app.prefix.len()
+                            {
+                                let _ = write_apply_result(
+                                    writer,
+                                    &ApplyResult::cancel(app.filter_text.clone()),
+                                );
+                                break;
+                            }
+                            if self
+                                .send_frame(writer, &app, &clear_bytes, None, false, None)
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Action::Confirm => {
+                            match app.selected_candidate() {
+                                Some(c) => {
+                                    let _ = write_apply_result(
+                                        writer,
+                                        &ApplyResult::confirm(
+                                            c.text_with_suffix_for_command_position(
+                                                &self.config.suffixes,
+                                                command_position,
+                                            ),
+                                        ),
+                                    );
+                                }
+                                None => {
+                                    let _ = write_apply_result(
+                                        writer,
+                                        &ApplyResult::cancel(app.filter_text.clone()),
+                                    );
+                                }
+                            }
+                            break;
+                        }
+                        Action::DismissWithSpace => {
+                            match app.selected_candidate() {
+                                Some(c) => {
+                                    let _ = write_apply_result(
+                                        writer,
+                                        &ApplyResult::dismiss_with_space(
+                                            c.text_for_dismiss_with_space(
+                                                &self.config.suffixes,
+                                                command_position,
+                                            ),
+                                        ),
+                                    );
+                                }
+                                None => {
+                                    let _ = write_apply_result(
+                                        writer,
+                                        &ApplyResult::dismiss_with_space(format!(
+                                            "{} ",
+                                            app.filter_text
+                                        )),
+                                    );
+                                }
+                            }
+                            break;
+                        }
+                        Action::Cancel => {
+                            let text = if app.filter_text != app.prefix {
+                                &app.filter_text
+                            } else {
+                                ""
+                            };
+                            let _ =
+                                write_apply_result(writer, &ApplyResult::cancel(text.to_string()));
+                            break;
+                        }
+                        Action::Resize(_, _) => {
+                            let _ = writeln!(writer, "NONE");
+                            let _ = writer.flush();
+                        }
+                        Action::None => {
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult {
+                                    code: 3,
+                                    text: encode_hex_bytes(&key_buf),
+                                    chain: false,
+                                    execute: false,
+                                    restore_text: app.filter_text.clone(),
+                                },
+                            );
+                            break;
+                        }
+                    }
                 }
-            } else {
-                // Unknown message, ignore
-                let _ = writeln!(writer, "NONE");
-                let _ = writer.flush();
+                Some(TextSessionRequest::Resize {
+                    term_cols,
+                    term_rows,
+                }) => {
+                    let previous_popup = crate::ui::popup::Popup::compute(&app);
+                    app.set_term_size(term_cols, term_rows);
+                    let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+                    if self
+                        .send_frame(
+                            writer,
+                            &app,
+                            &scroll_bytes,
+                            Some((previous_popup.row, previous_popup.height)),
+                            false,
+                            None,
+                        )
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                None => {
+                    // Unknown message, ignore
+                    let _ = writeln!(writer, "NONE");
+                    let _ = writer.flush();
+                }
             }
         }
 
@@ -1431,11 +1458,10 @@ mod tests {
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
+    use crate::protocol::TextFrameHeader;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
-    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
-    use std::thread;
 
     fn read_frame<R: BufRead>(reader: &mut R) -> (String, String) {
         let mut header = String::new();
@@ -1452,10 +1478,38 @@ mod tests {
         (header, String::from_utf8_lossy(&tty_bytes).into_owned())
     }
 
-    fn send_key(writer: &mut UnixStream, bytes: &[u8]) {
-        writeln!(writer, "KEY {}", bytes.len()).unwrap();
-        writer.write_all(bytes).unwrap();
-        writer.flush().unwrap();
+    enum SessionMessage<'a> {
+        Key(&'a [u8]),
+        Resize(u16, u16),
+    }
+
+    fn session_input(messages: &[SessionMessage<'_>]) -> Vec<u8> {
+        let mut input = Vec::new();
+        for message in messages {
+            match message {
+                SessionMessage::Key(bytes) => {
+                    writeln!(&mut input, "KEY {}", bytes.len()).unwrap();
+                    input.extend_from_slice(bytes);
+                }
+                SessionMessage::Resize(term_cols, term_rows) => {
+                    writeln!(&mut input, "RESIZE {term_cols} {term_rows}").unwrap();
+                }
+            }
+        }
+        input
+    }
+
+    fn run_complete_session(
+        server: &mut DaemonServer,
+        params: CompleteParams,
+        tsv: &str,
+        messages: &[SessionMessage<'_>],
+    ) -> BufReader<Cursor<Vec<u8>>> {
+        let input = session_input(messages);
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut writer = Vec::new();
+        server.handle_complete(&mut reader, &mut writer, params, tsv);
+        BufReader::new(Cursor::new(writer))
     }
 
     fn read_done<R: BufRead>(reader: &mut R) -> (String, String) {
@@ -1483,48 +1537,33 @@ mod tests {
     }
 
     fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let prefix = prefix.to_string();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix,
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: prefix.to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[SessionMessage::Key(key)],
+        );
 
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, key);
-
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=0 execute=0 restore_hex=6769"
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -1661,147 +1700,108 @@ mod tests {
     fn handle_complete_initial_frame_includes_common_prefix_when_enabled() {
         // With auto_insert_unambiguous=true, the first FRAME header must carry
         // common_prefix= when candidates share a longer prefix than the typed input.
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            server.config.auto_insert_unambiguous = true;
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let mut server = test_server();
+        server.config.auto_insert_unambiguous = true;
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            &[],
+        );
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(
             header.contains("common_prefix=git-"),
             "initial FRAME must contain common_prefix=git- when auto_insert enabled: {header}"
         );
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_sends_initial_frame_for_new_popup() {
         let mut server = test_server();
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[],
+        );
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "));
-
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_reuse_popup_redraws_popup_without_filter_line() {
         let mut server = test_server();
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: true,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(client_stream);
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: true,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[],
+        );
         let (header, tty) = read_frame(&mut reader);
         assert!(header.starts_with("FRAME "));
         assert!(tty.contains("┌"));
         assert!(!tty.contains("\u{1b}[6;1Hgi"));
-
-        drop(reader);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_initial_frame_includes_popup_border() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\n",
-            );
-        });
-
-        let mut reader = BufReader::new(&client_stream);
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\n",
+            &[],
+        );
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "));
@@ -1816,107 +1816,101 @@ mod tests {
         let tty = String::from_utf8_lossy(&tty_bytes);
         assert!(tty.contains("┌"));
         assert!(tty.contains("git"));
+    }
 
-        drop(reader);
-        drop(client_stream);
-        handle.join().unwrap();
+    #[test]
+    fn handle_complete_resize_recomputes_popup_geometry() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\nghub\tcommand\tcommand\nglow\tcommand\tcommand\n",
+            &[SessionMessage::Resize(40, 4)],
+        );
+        let _ = read_frame(&mut reader);
+        let (header, _) = read_frame(&mut reader);
+        let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
+        assert_eq!(frame.popup_height, 3);
+        assert!(frame.cursor_row <= 1);
     }
 
     #[test]
     fn handle_complete_tab_after_typing_selects_top_filtered_candidate() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[
+                SessionMessage::Key(b"a"),
+                SessionMessage::Key(b"\t"),
+                SessionMessage::Key(b"\r"),
+            ],
+        );
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\t");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\r");
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=1 execute=1 restore_hex="
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_confirm_after_typing_returns_filter_text() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[SessionMessage::Key(b"a"), SessionMessage::Key(b"\r")],
+        );
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\r");
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 1 a");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=0 execute=0 restore_hex="
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -1955,96 +1949,68 @@ mod tests {
 
     #[test]
     fn handle_complete_space_after_selection_returns_selected_candidate() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "ab\tcommand\tcommand\nax\tcommand\tcommand\nb\tcommand\tcommand\n",
+            &[
+                SessionMessage::Key(b"a"),
+                SessionMessage::Key(b"\t"),
+                SessionMessage::Key(b" "),
+            ],
+        );
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"a");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b"\t");
         let _ = read_frame(&mut reader);
-
-        send_key(&mut writer, b" ");
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=1 execute=0 restore_hex="
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
     fn handle_complete_space_after_empty_kind_selection_appends_space() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\t\ngizmo\tcommand\t\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\t\ngizmo\tcommand\t\n",
+            &[SessionMessage::Key(b" ")],
+        );
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b" ");
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=1 execute=0 restore_hex="
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2061,36 +2027,26 @@ mod tests {
 
     #[test]
     fn handle_complete_ctrl_j_passthrough_does_not_inject_newline() {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[SessionMessage::Key(b"\n")],
+        );
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"\n");
 
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done, "DONE 3 0a\n");
@@ -2102,10 +2058,6 @@ mod tests {
             extra.is_empty(),
             "unexpected extra protocol line: {extra:?}"
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2123,45 +2075,30 @@ mod tests {
         expected_done: &str,
         expected_apply: &str,
     ) {
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let prefix = prefix.to_string();
-        let candidates_tsv = candidates_tsv.to_string();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix,
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                &candidates_tsv,
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: prefix.to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            candidates_tsv,
+            &[SessionMessage::Key(b"\r")],
+        );
 
         let _ = read_frame(&mut reader);
-        send_key(&mut writer, b"\r");
         let (done, apply) = read_done(&mut reader);
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), expected_done);
         assert_eq!(apply.strip_suffix('\n').unwrap_or(&apply), expected_apply);
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     #[test]
@@ -2341,39 +2278,27 @@ mod tests {
     fn handle_complete_cancel_returns_typed_prefix_when_auto_insert_disabled() {
         // With auto_insert_unambiguous=false, cancel should echo back the typed
         // prefix ("gi"), not the extended common prefix ("git-").
-        let (server_stream, client_stream) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || {
-            let mut server = test_server();
-            server.config.auto_insert_unambiguous = false;
-            let mut reader = BufReader::new(&server_stream);
-            let mut writer = std::io::BufWriter::new(&server_stream);
-            server.handle_complete(
-                &mut reader,
-                &mut writer,
-                CompleteParams {
-                    prefix: "gi".to_string(),
-                    cursor_row: 5,
-                    cursor_col: 2,
-                    term_cols: 80,
-                    term_rows: 24,
-                    prev_popup_row: None,
-                    prev_popup_height: None,
-                    command_position: false,
-                    accept_single: false,
-                    reuse_popup: false,
-                    shift_tab_sequence: None,
-                },
-                "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
-            );
-        });
-
-        let mut writer = client_stream.try_clone().unwrap();
-        let mut reader = BufReader::new(client_stream);
-
+        let mut server = test_server();
+        server.config.auto_insert_unambiguous = false;
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gi".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
+            &[SessionMessage::Key(b"\x1b")],
+        );
         let _ = read_frame(&mut reader);
-        // Send Escape (cancel)
-        send_key(&mut writer, b"\x1b");
-
         let (done, apply) = read_done(&mut reader);
         // filter_text stays at "gi" (= prefix), so Cancel returns empty text.
         // With auto_insert enabled the extended "git-" would have been returned.
@@ -2382,10 +2307,6 @@ mod tests {
             apply.strip_suffix('\n').unwrap_or(&apply),
             "APPLY chain=0 execute=0 restore_hex="
         );
-
-        drop(reader);
-        drop(writer);
-        handle.join().unwrap();
     }
 
     // --- Quoted-prefix regression tests (issue #15) ---

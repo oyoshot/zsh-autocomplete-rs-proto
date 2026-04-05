@@ -103,6 +103,12 @@ pub struct TextCompleteResult {
     pub restore_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextSessionRequest {
+    Key { byte_count: usize },
+    Resize { term_cols: u16, term_rows: u16 },
+}
+
 fn write_u32(buf: &mut Vec<u8>, val: u32) {
     buf.extend_from_slice(&val.to_be_bytes());
 }
@@ -446,6 +452,32 @@ impl TextRequest {
             ["ping"] => Some(Self::Ping),
             ["shutdown"] => Some(Self::Shutdown),
             _ => None,
+        }
+    }
+}
+
+impl TextSessionRequest {
+    pub fn parse(line: &str) -> Option<Self> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            ["KEY", byte_count] => Some(Self::Key {
+                byte_count: byte_count.parse().ok()?,
+            }),
+            ["RESIZE", term_cols, term_rows] => Some(Self::Resize {
+                term_cols: parse_u16_token(term_cols)?,
+                term_rows: parse_u16_token(term_rows)?,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn header_line(&self) -> String {
+        match self {
+            Self::Key { byte_count } => format!("KEY {byte_count}"),
+            Self::Resize {
+                term_cols,
+                term_rows,
+            } => format!("RESIZE {term_cols} {term_rows}"),
         }
     }
 }
@@ -902,6 +934,17 @@ mod tests {
 
         let parsed = TextRequest::parse_header(&request.header_line()).unwrap();
         assert_eq!(parsed, TextRequest::Complete(request));
+    }
+
+    #[test]
+    fn text_session_resize_header_roundtrip() {
+        let request = TextSessionRequest::Resize {
+            term_cols: 120,
+            term_rows: 40,
+        };
+
+        let parsed = TextSessionRequest::parse(&request.header_line()).unwrap();
+        assert_eq!(parsed, request);
     }
 
     #[test]
