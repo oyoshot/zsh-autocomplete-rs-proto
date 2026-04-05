@@ -442,9 +442,13 @@ extern "C" fn handle_sigwinch(_signal: libc::c_int) {
         return;
     }
 
+    // Save and restore errno: write(2) may clobber it, and the interrupted
+    // code may be inspecting errno after a syscall returns EINTR.
     let byte = [1u8; 1];
     unsafe {
+        let saved = *libc::__errno_location();
         libc::write(fd, byte.as_ptr() as *const libc::c_void, byte.len());
+        *libc::__errno_location() = saved;
     }
 }
 
