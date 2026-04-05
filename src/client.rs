@@ -607,11 +607,9 @@ fn read_session_event(
         if unsafe { libc::FD_ISSET(resize_fd, &readfds) } {
             drain_resize_pipe(resize_fd)?;
             let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let (cursor_col, cursor_row) =
-                crossterm::cursor::position().unwrap_or((current_cursor_col, current_cursor_row));
             return Ok(SessionEvent::Resize {
-                cursor_row,
-                cursor_col,
+                cursor_row: current_cursor_row,
+                cursor_col: current_cursor_col,
                 term_cols,
                 term_rows,
             });
