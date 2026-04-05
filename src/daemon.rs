@@ -1206,15 +1206,27 @@ impl DaemonServer {
                     let previous_popup = crate::ui::popup::Popup::compute(&app);
                     app.set_term_size(term_cols, term_rows);
                     let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+                    let new_popup = crate::ui::popup::Popup::compute(&app);
+                    let (extra_prefix, prev_popup) =
+                        if resize_requires_full_popup_clear(&previous_popup, &new_popup) {
+                            let mut clear_bytes = match ui::render::clear_rect_to_bytes(
+                                previous_popup.row,
+                                previous_popup.height,
+                                app.cursor_row,
+                            ) {
+                                Ok(bytes) => bytes,
+                                Err(_) => break,
+                            };
+                            clear_bytes.extend_from_slice(&scroll_bytes);
+                            (clear_bytes, None)
+                        } else {
+                            (
+                                scroll_bytes,
+                                Some((previous_popup.row, previous_popup.height)),
+                            )
+                        };
                     if self
-                        .send_frame(
-                            writer,
-                            &app,
-                            &scroll_bytes,
-                            Some((previous_popup.row, previous_popup.height)),
-                            false,
-                            None,
-                        )
+                        .send_frame(writer, &app, &extra_prefix, prev_popup, false, None)
                         .is_err()
                     {
                         break;
@@ -1358,6 +1370,13 @@ fn apply_navigation(app: &mut App, action: Action) {
     }
 }
 
+fn resize_requires_full_popup_clear(
+    previous_popup: &crate::ui::popup::Popup,
+    new_popup: &crate::ui::popup::Popup,
+) -> bool {
+    previous_popup.col != new_popup.col || previous_popup.width != new_popup.width
+}
+
 /// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
 /// bytes needed to make room for the popup below the cursor.
 fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
@@ -1459,11 +1478,12 @@ mod tests {
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use crate::protocol::TextFrameHeader;
+    use crate::ui;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
     use std::path::PathBuf;
 
-    fn read_frame<R: BufRead>(reader: &mut R) -> (String, String) {
+    fn read_frame_bytes<R: BufRead>(reader: &mut R) -> (String, Vec<u8>) {
         let mut header = String::new();
         reader.read_line(&mut header).unwrap();
         assert!(header.starts_with("FRAME "), "header was: {header:?}");
@@ -1475,6 +1495,11 @@ mod tests {
             .expect("tty_len in frame header");
         let mut tty_bytes = vec![0; tty_len];
         reader.read_exact(&mut tty_bytes).unwrap();
+        (header, tty_bytes)
+    }
+
+    fn read_frame<R: BufRead>(reader: &mut R) -> (String, String) {
+        let (header, tty_bytes) = read_frame_bytes(reader);
         (header, String::from_utf8_lossy(&tty_bytes).into_owned())
     }
 
@@ -1844,6 +1869,41 @@ mod tests {
         let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
         assert_eq!(frame.popup_height, 3);
         assert!(frame.cursor_row <= 1);
+    }
+
+    #[test]
+    fn handle_complete_resize_clears_previous_popup_when_column_changes() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 5,
+                cursor_col: 35,
+                term_cols: 40,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\nglow\tcommand\tcommand\n",
+            &[SessionMessage::Resize(60, 24)],
+        );
+
+        let (first_header, _) = read_frame_bytes(&mut reader);
+        let first_frame = TextFrameHeader::parse(first_header.trim_end()).unwrap();
+        let expected_clear =
+            ui::render::clear_rect_to_bytes(first_frame.popup_row, first_frame.popup_height, 0)
+                .unwrap();
+
+        let (_, second_tty_bytes) = read_frame_bytes(&mut reader);
+        assert!(
+            second_tty_bytes.starts_with(&expected_clear),
+            "resize redraw must clear the old popup before drawing at the new column"
+        );
     }
 
     #[test]
