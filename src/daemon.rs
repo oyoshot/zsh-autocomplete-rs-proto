@@ -124,10 +124,17 @@ struct CompleteParams {
 /// Maximum number of candidate-set cache entries retained across connections.
 /// When this limit is reached the oldest entry is evicted to bound memory use.
 const CANDIDATE_CACHE_MAX_ENTRIES: usize = 8;
+const ACTIVE_POPUP_MAX_ENTRIES: usize = 16;
 
 #[derive(Clone)]
 struct CandidateCacheEntry {
     source_prefix: String,
+    tsv: String,
+}
+
+#[derive(Clone)]
+struct ActivePopupEntry {
+    prefix: String,
     tsv: String,
 }
 
@@ -144,6 +151,9 @@ struct DaemonServer {
     candidate_cache: HashMap<String, CandidateCacheEntry>,
     /// Insertion-order tracking for LRU eviction.
     candidate_cache_order: Vec<String>,
+    /// Most recent auto-popup payload per shell session.
+    active_popups: HashMap<String, ActivePopupEntry>,
+    active_popup_order: Vec<String>,
 }
 
 impl DaemonServer {
@@ -161,6 +171,8 @@ impl DaemonServer {
             fuzzy: Some(FuzzyMatcher::new()),
             candidate_cache: HashMap::new(),
             candidate_cache_order: Vec::new(),
+            active_popups: HashMap::new(),
+            active_popup_order: Vec::new(),
         }
     }
 }
@@ -197,6 +209,8 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         fuzzy: Some(FuzzyMatcher::new()),
         candidate_cache: HashMap::new(),
         candidate_cache_order: Vec::new(),
+        active_popups: HashMap::new(),
+        active_popup_order: Vec::new(),
     };
     let params = CompleteParams {
         prefix,
@@ -295,6 +309,13 @@ impl DaemonServer {
         }
     }
 
+    fn touch_active_popup_key(&mut self, popup_key: &str) {
+        if self.active_popups.contains_key(popup_key) {
+            self.active_popup_order.retain(|k| k != popup_key);
+            self.active_popup_order.push(popup_key.to_string());
+        }
+    }
+
     /// Look up a cached TSV payload by `context_key`.
     /// Returns `Some(tsv)` only when `current_prefix` exactly matches the
     /// cached `source_prefix`; otherwise the lookup is treated as a miss
@@ -326,6 +347,29 @@ impl DaemonServer {
         }
         self.candidate_cache_order.push(context_key.to_string());
         self.candidate_cache.insert(context_key.to_string(), entry);
+    }
+
+    fn get_active_popup(&mut self, popup_key: &str) -> Option<ActivePopupEntry> {
+        let entry = self.active_popups.get(popup_key)?.clone();
+        self.touch_active_popup_key(popup_key);
+        Some(entry)
+    }
+
+    fn store_active_popup(&mut self, popup_key: &str, prefix: String, tsv: String) {
+        let entry = ActivePopupEntry { prefix, tsv };
+        if self.active_popups.contains_key(popup_key) {
+            self.active_popups.insert(popup_key.to_string(), entry);
+            self.touch_active_popup_key(popup_key);
+            return;
+        }
+        if self.active_popup_order.len() >= ACTIVE_POPUP_MAX_ENTRIES {
+            if let Some(oldest) = self.active_popup_order.first().cloned() {
+                self.active_popups.remove(&oldest);
+                self.active_popup_order.remove(0);
+            }
+        }
+        self.active_popup_order.push(popup_key.to_string());
+        self.active_popups.insert(popup_key.to_string(), entry);
     }
 
     fn maybe_reload_config(&mut self) {
@@ -397,7 +441,7 @@ impl DaemonServer {
                 .entered();
                 let response = self.handle_render(
                     RenderParams {
-                        prefix,
+                        prefix: prefix.clone(),
                         cursor_row,
                         cursor_col,
                         term_cols,
@@ -518,8 +562,9 @@ impl DaemonServer {
                 term_rows,
                 selected,
                 context_key,
+                popup_key,
             }) => {
-                let (prefix, tsv_opt) =
+                let (mut prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
                         Ok(v) => v,
                         Err(()) => return false,
@@ -527,7 +572,62 @@ impl DaemonServer {
 
                 // Cache-only request: TSV absent, context_key present.
                 if tsv_opt.is_none() {
-                    if let Some(ref key) = context_key {
+                    let active_popup = if context_key.is_none() {
+                        popup_key
+                            .as_deref()
+                            .and_then(|key| self.get_active_popup(key))
+                    } else {
+                        None
+                    };
+                    if let Some(active_popup) = active_popup {
+                        prefix = active_popup.prefix;
+                        let cached_tsv = active_popup.tsv;
+                        let _span = info_span!(
+                            "render",
+                            protocol = "text",
+                            prefix_len = prefix.len(),
+                            cursor_row,
+                            cursor_col,
+                            term_cols,
+                            term_rows,
+                            ?selected,
+                            cache = "popup",
+                            payload_bytes = cached_tsv.len()
+                        )
+                        .entered();
+                        let response = self.handle_render(
+                            RenderParams {
+                                prefix: prefix.clone(),
+                                cursor_row,
+                                cursor_col,
+                                term_cols,
+                                term_rows,
+                                selected,
+                            },
+                            cached_tsv.as_bytes(),
+                        );
+                        match response {
+                            Response::Success {
+                                tty_bytes,
+                                metadata,
+                            } => {
+                                if let Some(ref key) = popup_key {
+                                    self.store_active_popup(key, prefix, cached_tsv.clone());
+                                }
+                                let meta = metadata.unwrap_or_default();
+                                let _ =
+                                    protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
+                                let _ = writer.write_all(&tty_bytes);
+                                let _ = writer.flush();
+                            }
+                            Response::Empty => {
+                                let _ = writeln!(writer, "EMPTY");
+                            }
+                            Response::Error(msg) => {
+                                let _ = writeln!(writer, "ERROR {}", msg);
+                            }
+                        }
+                    } else if let Some(ref key) = context_key {
                         if let Some(cached_tsv) = self.get_cached_tsv(key, &prefix) {
                             let _span = info_span!(
                                 "render",
@@ -544,7 +644,7 @@ impl DaemonServer {
                             .entered();
                             let response = self.handle_render(
                                 RenderParams {
-                                    prefix,
+                                    prefix: prefix.clone(),
                                     cursor_row,
                                     cursor_col,
                                     term_cols,
@@ -558,6 +658,9 @@ impl DaemonServer {
                                     tty_bytes,
                                     metadata,
                                 } => {
+                                    if let Some(ref key) = popup_key {
+                                        self.store_active_popup(key, prefix, cached_tsv.clone());
+                                    }
                                     let meta = metadata.unwrap_or_default();
                                     let _ = protocol::write_text_ok(
                                         &mut writer,
@@ -608,7 +711,7 @@ impl DaemonServer {
                 .entered();
                 let response = self.handle_render(
                     RenderParams {
-                        prefix,
+                        prefix: prefix.clone(),
                         cursor_row,
                         cursor_col,
                         term_cols,
@@ -623,6 +726,9 @@ impl DaemonServer {
                         tty_bytes,
                         metadata,
                     } => {
+                        if let Some(ref key) = popup_key {
+                            self.store_active_popup(key, prefix, tsv);
+                        }
                         let meta = metadata.unwrap_or_default();
                         let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
                         let _ = writer.write_all(&tty_bytes);
@@ -648,8 +754,9 @@ impl DaemonServer {
                 reuse_token,
                 shift_tab_sequence,
                 context_key,
+                popup_key,
             }) => {
-                let (prefix, tsv_opt) =
+                let (mut prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "complete") {
                         Ok(v) => v,
                         Err(()) => return false,
@@ -658,7 +765,35 @@ impl DaemonServer {
                 // Cache-only request: resolve TSV from cache or report miss.
                 let tsv = match tsv_opt {
                     None => {
-                        if let Some(ref key) = context_key {
+                        if context_key.is_none() {
+                            if let Some(ref key) = popup_key {
+                                match self.get_active_popup(key) {
+                                    Some(active_popup) => {
+                                        debug!(
+                                            popup_key = key.as_str(),
+                                            "complete popup cache hit"
+                                        );
+                                        prefix = active_popup.prefix;
+                                        active_popup.tsv
+                                    }
+                                    None => {
+                                        debug!(
+                                            popup_key = key.as_str(),
+                                            "complete popup cache miss"
+                                        );
+                                        let _ = writeln!(writer, "CACHE_MISS");
+                                        let _ = writer.flush();
+                                        return false;
+                                    }
+                                }
+                            } else {
+                                let _ = write_apply_result(
+                                    &mut writer,
+                                    &ApplyResult::cancel(String::new()),
+                                );
+                                return false;
+                            }
+                        } else if let Some(ref key) = context_key {
                             match self.get_cached_tsv(key, &prefix) {
                                 Some(cached) => {
                                     debug!(context_key = key.as_str(), "complete cache hit");
@@ -666,6 +801,20 @@ impl DaemonServer {
                                 }
                                 None => {
                                     debug!(context_key = key.as_str(), "complete cache miss");
+                                    let _ = writeln!(writer, "CACHE_MISS");
+                                    let _ = writer.flush();
+                                    return false;
+                                }
+                            }
+                        } else if let Some(ref key) = popup_key {
+                            match self.get_active_popup(key) {
+                                Some(active_popup) => {
+                                    debug!(popup_key = key.as_str(), "complete popup cache hit");
+                                    prefix = active_popup.prefix;
+                                    active_popup.tsv
+                                }
+                                None => {
+                                    debug!(popup_key = key.as_str(), "complete popup cache miss");
                                     let _ = writeln!(writer, "CACHE_MISS");
                                     let _ = writer.flush();
                                     return false;
@@ -1558,6 +1707,8 @@ mod tests {
             fuzzy: Some(FuzzyMatcher::new()),
             candidate_cache: HashMap::new(),
             candidate_cache_order: Vec::new(),
+            active_popups: HashMap::new(),
+            active_popup_order: Vec::new(),
         }
     }
 
@@ -2486,6 +2637,21 @@ mod tests {
             Some("git\tcommand\tcommand\n".to_string())
         );
         assert_eq!(server.get_cached_tsv("missing", "git"), None);
+    }
+
+    #[test]
+    fn active_popup_get_returns_stored_payload() {
+        let mut server = test_server();
+        server.store_active_popup(
+            "popup-1",
+            "git".to_string(),
+            "git\tcommand\tcommand\n".to_string(),
+        );
+
+        let entry = server.get_active_popup("popup-1").unwrap();
+
+        assert_eq!(entry.prefix, "git");
+        assert_eq!(entry.tsv, "git\tcommand\tcommand\n");
     }
 
     #[test]

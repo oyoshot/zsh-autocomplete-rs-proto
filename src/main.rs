@@ -32,6 +32,7 @@ struct CompleteCommand {
     stale_bytes: Vec<u8>,
     reuse_token: Option<String>,
     context_key: Option<String>,
+    popup_key: Option<String>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
 }
@@ -50,6 +51,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         stale_bytes,
         reuse_token,
         context_key,
+        popup_key,
         prev_popup_row,
         prev_popup_height,
     } = command;
@@ -73,6 +75,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             prev_popup_row.zip(prev_popup_height),
             reuse_token.as_deref(),
             context_key.as_deref(),
+            popup_key.as_deref(),
         ) {
             Ok(client::CompleteSessionOutcome::Done(result)) => {
                 write_done_result(&mut writer, &result)?
@@ -245,6 +248,7 @@ fn main() {
             stale_hex,
             reuse_token,
             context_key,
+            popup_key,
             prev_popup_row,
             prev_popup_height,
             cols,
@@ -267,6 +271,7 @@ fn main() {
                 .unwrap_or_default(),
             reuse_token,
             context_key,
+            popup_key,
             prev_popup_row,
             prev_popup_height,
         }) {

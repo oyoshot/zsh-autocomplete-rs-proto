@@ -92,6 +92,7 @@ pub fn try_daemon_complete(
     prev_popup: Option<(u16, u16)>,
     reuse_token: Option<&str>,
     context_key: Option<&str>,
+    popup_key: Option<&str>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let stream = connect_stream()?;
@@ -113,6 +114,7 @@ pub fn try_daemon_complete(
         reuse_token: reuse_token.map(str::to_string),
         shift_tab_sequence,
         context_key: context_key.map(str::to_string),
+        popup_key: popup_key.map(str::to_string),
     };
     writeln!(writer, "{}", request.header_line()).map_err(|_| DaemonUnavailable::NotRunning)?;
     writeln!(writer, "{prefix}").map_err(|_| DaemonUnavailable::NotRunning)?;
@@ -123,9 +125,7 @@ pub fn try_daemon_complete(
     writer.flush().map_err(|_| DaemonUnavailable::NotRunning)?;
 
     let mut header = String::new();
-    reader
-        .read_line(&mut header)
-        .map_err(|_| DaemonUnavailable::NotRunning)?;
+    read_line_retry(&mut reader, &mut header)?;
     let header = trim_line_end(&header).to_string();
     if header == "CACHE_MISS" {
         return Ok(CompleteSessionOutcome::CacheMiss);
@@ -327,9 +327,7 @@ impl SessionState {
             .map_err(|_| DaemonUnavailable::NotRunning)?;
 
         let mut header = String::new();
-        reader
-            .read_line(&mut header)
-            .map_err(|_| DaemonUnavailable::NotRunning)?;
+        read_line_retry(reader, &mut header)?;
         let header = trim_line_end(&header);
         self.handle_header(reader, tty_writer, header, false)
     }
@@ -355,9 +353,7 @@ impl SessionState {
         .map_err(|_| DaemonUnavailable::NotRunning)?;
 
         let mut header = String::new();
-        reader
-            .read_line(&mut header)
-            .map_err(|_| DaemonUnavailable::NotRunning)?;
+        read_line_retry(reader, &mut header)?;
         let header = trim_line_end(&header);
         self.handle_header(reader, tty_writer, header, false)
     }
@@ -378,6 +374,19 @@ impl SessionState {
 
 fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
+}
+
+fn read_line_retry<R: BufRead>(
+    reader: &mut R,
+    buf: &mut String,
+) -> Result<usize, DaemonUnavailable> {
+    loop {
+        match reader.read_line(buf) {
+            Ok(n) => return Ok(n),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(DaemonUnavailable::NotRunning),
+        }
+    }
 }
 
 fn relay_tty_bytes<R: Read>(
@@ -437,7 +446,7 @@ impl SigwinchPipe {
         let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
         let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
         action.sa_sigaction = handle_sigwinch as *const () as usize;
-        action.sa_flags = 0;
+        action.sa_flags = libc::SA_RESTART;
         unsafe { libc::sigemptyset(&mut action.sa_mask) };
         if unsafe { libc::sigaction(libc::SIGWINCH, &action, &mut previous) } != 0 {
             return Err(DaemonUnavailable::NotRunning);
@@ -715,8 +724,62 @@ impl Drop for RawModeGuard {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io;
     use std::os::fd::FromRawFd;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct InterruptingBuf {
+        data: Vec<u8>,
+        pos: usize,
+        interrupted: bool,
+    }
+
+    impl InterruptingBuf {
+        fn new(data: &[u8]) -> Self {
+            Self {
+                data: data.to_vec(),
+                pos: 0,
+                interrupted: false,
+            }
+        }
+    }
+
+    impl Read for InterruptingBuf {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "synthetic EINTR",
+                ));
+            }
+            let remaining = &self.data[self.pos..];
+            if remaining.is_empty() {
+                return Ok(0);
+            }
+            let len = remaining.len().min(buf.len());
+            buf[..len].copy_from_slice(&remaining[..len]);
+            self.pos += len;
+            Ok(len)
+        }
+    }
+
+    impl BufRead for InterruptingBuf {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "synthetic EINTR",
+                ));
+            }
+            Ok(&self.data[self.pos..])
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.pos = (self.pos + amt).min(self.data.len());
+        }
+    }
 
     fn temp_file_path(label: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -730,6 +793,17 @@ mod tests {
     fn trim_line_end_preserves_trailing_spaces() {
         assert_eq!(trim_line_end("DONE 0 cargo \n"), "DONE 0 cargo ");
         assert_eq!(trim_line_end("DONE 0 cargo \r\n"), "DONE 0 cargo ");
+    }
+
+    #[test]
+    fn read_line_retry_retries_on_eintr() {
+        let mut reader = InterruptingBuf::new(b"FRAME 1 2 3\n");
+        let mut line = String::new();
+
+        let read = read_line_retry(&mut reader, &mut line).unwrap();
+
+        assert_eq!(read, line.len());
+        assert_eq!(line, "FRAME 1 2 3\n");
     }
 
     #[test]
