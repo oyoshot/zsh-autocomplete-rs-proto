@@ -793,39 +793,21 @@ impl DaemonServer {
                                 );
                                 return false;
                             }
-                        } else if let Some(ref key) = context_key {
+                        } else {
+                            // context_key is Some here (we checked is_none() above)
+                            let key = context_key.as_deref().unwrap();
                             match self.get_cached_tsv(key, &prefix) {
                                 Some(cached) => {
-                                    debug!(context_key = key.as_str(), "complete cache hit");
+                                    debug!(context_key = key, "complete cache hit");
                                     cached
                                 }
                                 None => {
-                                    debug!(context_key = key.as_str(), "complete cache miss");
+                                    debug!(context_key = key, "complete cache miss");
                                     let _ = writeln!(writer, "CACHE_MISS");
                                     let _ = writer.flush();
                                     return false;
                                 }
                             }
-                        } else if let Some(ref key) = popup_key {
-                            match self.get_active_popup(key) {
-                                Some(active_popup) => {
-                                    debug!(popup_key = key.as_str(), "complete popup cache hit");
-                                    prefix = active_popup.prefix;
-                                    active_popup.tsv
-                                }
-                                None => {
-                                    debug!(popup_key = key.as_str(), "complete popup cache miss");
-                                    let _ = writeln!(writer, "CACHE_MISS");
-                                    let _ = writer.flush();
-                                    return false;
-                                }
-                            }
-                        } else {
-                            let _ = write_apply_result(
-                                &mut writer,
-                                &ApplyResult::cancel(String::new()),
-                            );
-                            return false;
                         }
                     }
                     Some(tsv) => {
