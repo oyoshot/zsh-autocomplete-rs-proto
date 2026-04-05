@@ -209,12 +209,13 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                     reader,
                     writer,
                     &mut tty_writer,
-                    cursor_row,
-                    cursor_col,
-                    term_cols,
-                    term_rows,
-                )?
-                {
+                    TextSessionRequest::Resize {
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                    },
+                )? {
                     raw_mode.restore();
                     state.clear_popup(&mut tty_writer)?;
                     return Ok(result);
@@ -355,26 +356,20 @@ impl SessionState {
         reader: &mut R,
         writer: &mut W,
         tty_writer: &mut File,
-        cursor_row: u16,
-        cursor_col: u16,
-        term_cols: u16,
-        term_rows: u16,
+        req: TextSessionRequest,
     ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
-        self.cursor_row = cursor_row;
-        self.cursor_col = cursor_col;
-        writeln!(
-            writer,
-            "{}",
-            TextSessionRequest::Resize {
-                cursor_row,
-                cursor_col,
-                term_cols,
-                term_rows,
-            }
-            .header_line()
-        )
-        .and_then(|_| writer.flush())
-        .map_err(|_| DaemonUnavailable::NotRunning)?;
+        if let TextSessionRequest::Resize {
+            cursor_row,
+            cursor_col,
+            ..
+        } = &req
+        {
+            self.cursor_row = *cursor_row;
+            self.cursor_col = *cursor_col;
+        }
+        writeln!(writer, "{}", req.header_line())
+            .and_then(|_| writer.flush())
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
 
         let mut header = String::new();
         read_line_retry(reader, &mut header)?;
@@ -860,9 +855,16 @@ mod tests {
         let mut reader = BufReader::new("APPLY chain=1 execute=1 restore_hex=\n".as_bytes());
         let mut writer = Vec::new();
 
-        let result =
-            run_text_popup_session(&mut reader, &mut writer, "DONE 0 cargo ", vec![], None, 0, 0)
-                .unwrap();
+        let result = run_text_popup_session(
+            &mut reader,
+            &mut writer,
+            "DONE 0 cargo ",
+            vec![],
+            None,
+            0,
+            0,
+        )
+        .unwrap();
 
         assert_eq!(result.code, 0);
         assert_eq!(result.text, "cargo ");
@@ -928,8 +930,8 @@ mod tests {
         let mut resize_writer = File::from(resize_writer_fd);
         resize_writer.write_all(&[1]).unwrap();
 
-        let event = read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd(), 7, 11)
-            .unwrap();
+        let event =
+            read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd(), 7, 11).unwrap();
         match event {
             SessionEvent::Resize {
                 cursor_row,

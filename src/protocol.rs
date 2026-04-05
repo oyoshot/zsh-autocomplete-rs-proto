@@ -107,7 +107,9 @@ pub struct TextCompleteResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextSessionRequest {
-    Key { byte_count: usize },
+    Key {
+        byte_count: usize,
+    },
     Resize {
         cursor_row: u16,
         cursor_col: u16,
