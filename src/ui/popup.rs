@@ -34,10 +34,10 @@ impl Popup {
         if let Some(orig_idx) = selected_original_idx {
             meta.push_str(&format!(" selected_original_idx={}", orig_idx));
         }
-        if let Some(cp) = common_prefix {
-            if is_safe_prefix(cp) {
-                meta.push_str(&format!(" common_prefix={}", cp));
-            }
+        if let Some(cp) = common_prefix
+            && is_safe_prefix(cp)
+        {
+            meta.push_str(&format!(" common_prefix={}", cp));
         }
         meta
     }

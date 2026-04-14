@@ -679,7 +679,7 @@ pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) ->
 }
 
 pub fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || hex.len() % 2 != 0 {
+    if hex.is_empty() || !hex.len().is_multiple_of(2) {
         return None;
     }
 
