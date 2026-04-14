@@ -103,6 +103,29 @@ fn filter_sequence(c: &mut Criterion) {
     group.finish();
 }
 
+fn command_typo_rescue(c: &mut Criterion) {
+    let normal_candidates = helpers::generate_realistic_command_candidates(10_000, false);
+    let rescue_candidates = helpers::generate_realistic_command_candidates(10_000, true);
+    let mut group = c.benchmark_group("command_typo_rescue");
+
+    group.bench_function("normal_prefix_cargo", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| matcher.filter(&normal_candidates, "cargo"));
+    });
+
+    group.bench_function("normal_typo_calude", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| matcher.filter(&normal_candidates, "calude"));
+    });
+
+    group.bench_function("rescue_typo_calude", |b| {
+        let mut matcher = FuzzyMatcher::new();
+        b.iter(|| matcher.filter(&rescue_candidates, "calude"));
+    });
+
+    group.finish();
+}
+
 fn app_backspace_sequence(c: &mut Criterion) {
     let candidates = helpers::generate_candidates(1_000);
     let mut group = c.benchmark_group("app_backspace_sequence");
@@ -140,6 +163,7 @@ criterion_group!(
     filter_unicode_query_variants,
     filter_unicode_scaling,
     filter_sequence,
+    command_typo_rescue,
     app_backspace_sequence
 );
 criterion_main!(benches);

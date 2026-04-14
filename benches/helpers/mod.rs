@@ -175,6 +175,51 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
     candidates
 }
 
+pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<Candidate> {
+    let mut candidates = vec![
+        Candidate {
+            text: "claude".to_string(),
+            description: "claude command".to_string(),
+            kind: command_kind(rescue),
+        },
+        Candidate {
+            text: "clang-include-fixer".to_string(),
+            description: "clang include fixer".to_string(),
+            kind: command_kind(rescue),
+        },
+        Candidate {
+            text: "clang-include-cleaner".to_string(),
+            description: "clang include cleaner".to_string(),
+            kind: command_kind(rescue),
+        },
+        Candidate {
+            text: "cargo-install-update".to_string(),
+            description: "cargo install update".to_string(),
+            kind: command_kind(rescue),
+        },
+    ];
+
+    for i in candidates.len()..count {
+        let base = COMMAND_NAMES[i % COMMAND_NAMES.len()];
+        let text = if i < COMMAND_NAMES.len() {
+            base.to_string()
+        } else {
+            format!("{}-{}", base, i / COMMAND_NAMES.len())
+        };
+        candidates.push(Candidate {
+            text,
+            description: format!("{} command", base),
+            kind: command_kind(rescue),
+        });
+    }
+
+    candidates
+}
+
+fn command_kind(rescue: bool) -> String {
+    if rescue { "command_rescue" } else { "command" }.to_string()
+}
+
 pub fn candidates_to_tsv(candidates: &[Candidate]) -> String {
     let mut tsv = String::new();
     for c in candidates {
