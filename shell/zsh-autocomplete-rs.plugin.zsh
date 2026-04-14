@@ -620,6 +620,10 @@ _zacrs_collect_candidates() {
             prefix_len=${#prefix}
         fi
     fi
+    if [[ -z "$candidates_str" && ${#prefix} -ge 3 && "$prefix" != */* ]] \
+        && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
+        candidates_str="$(_zacrs_gather_command_rescue "$prefix")"
+    fi
 }
 
 # Handle single-candidate immediate completion.
@@ -639,7 +643,7 @@ _zacrs_apply_single_candidate() {
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
     case "$kind" in
         directory) [[ "$text" != */ ]] && result_text+="/" ;;
-        command|alias|builtin|function|file) result_text+=" " ;;
+        command|alias|builtin|function|command_rescue|alias_rescue|builtin_rescue|function_rescue|file) result_text+=" " ;;
         "")
             if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
                 result_text+=" "
@@ -918,6 +922,11 @@ _zacrs_line_pre_redraw() {
             prefix_len=${#naive_prefix}
             from_gather=1
         fi
+    fi
+    if [[ -z "$candidates_str" && ${#prefix} -ge 3 && "$prefix" != */* ]] \
+        && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
+        candidates_str="$(_zacrs_gather_command_rescue "$prefix")"
+        from_gather=1
     fi
 
     # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)

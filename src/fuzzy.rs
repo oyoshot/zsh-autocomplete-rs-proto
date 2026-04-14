@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::candidate::Candidate;
+use frizbee::{Config as TypoConfig, Matcher as TypoMatcher};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
@@ -74,6 +75,10 @@ impl FuzzyMatcher {
             return results;
         }
 
+        if query.chars().count() >= 3 && has_typo_rescue_candidates(candidates, fuzzy_scope) {
+            return filter_typo_rescue_matches(candidates, query, fuzzy_scope);
+        }
+
         self.ensure_pattern(query);
 
         let pattern = &self.pattern;
@@ -120,6 +125,77 @@ impl FuzzyMatcher {
             })
             .collect()
     }
+}
+
+fn has_typo_rescue_candidates(candidates: &[Candidate], fuzzy_scope: Option<&[usize]>) -> bool {
+    match fuzzy_scope {
+        Some(scope) => scope
+            .iter()
+            .any(|&candidate_idx| candidates[candidate_idx].is_typo_rescue()),
+        None => candidates.iter().any(Candidate::is_typo_rescue),
+    }
+}
+
+fn typo_rescue_max_typos(query: &str) -> u16 {
+    if query.chars().count() >= 5 { 2 } else { 1 }
+}
+
+fn filter_typo_rescue_matches(
+    candidates: &[Candidate],
+    query: &str,
+    fuzzy_scope: Option<&[usize]>,
+) -> Vec<ScoredMatch> {
+    let max_typos = typo_rescue_max_typos(query);
+    let query_len = query.chars().count();
+    let mut candidate_indices = Vec::new();
+    let mut haystacks = Vec::new();
+
+    if let Some(scope) = fuzzy_scope {
+        for &candidate_idx in scope {
+            let candidate = &candidates[candidate_idx];
+            if candidate.is_typo_rescue()
+                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
+            {
+                candidate_indices.push(candidate_idx);
+                haystacks.push(candidate.text.as_str());
+            }
+        }
+    } else {
+        for (candidate_idx, candidate) in candidates.iter().enumerate() {
+            if candidate.is_typo_rescue()
+                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
+            {
+                candidate_indices.push(candidate_idx);
+                haystacks.push(candidate.text.as_str());
+            }
+        }
+    }
+
+    if haystacks.is_empty() {
+        return Vec::new();
+    }
+
+    let config = TypoConfig {
+        max_typos: Some(max_typos),
+        sort: false,
+        ..TypoConfig::default()
+    };
+    let mut matcher = TypoMatcher::new(query, &config);
+    let mut results: Vec<ScoredMatch> = matcher
+        .match_iter(&haystacks)
+        .filter_map(|m| {
+            candidate_indices
+                .get(m.index as usize)
+                .copied()
+                .map(|candidate_idx| ScoredMatch {
+                    candidate_idx,
+                    score: u32::from(m.score),
+                })
+        })
+        .collect();
+
+    sort_scored_matches(&mut results, candidates);
+    results
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
@@ -192,6 +268,38 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn typo_rescue_surfaces_transposed_command() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates_with_kind(&[
+            ("clang-include-fixer", "command_rescue"),
+            ("clang-include-cleaner", "command_rescue"),
+            ("cargo-install-update", "command_rescue"),
+            ("claude", "command_rescue"),
+        ]);
+
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_eq!(texts.first(), Some(&"claude"), "results: {texts:?}");
+    }
+
+    #[test]
+    fn typo_rescue_requires_rescue_candidate_kind() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates_with_kind(&[
+            ("clang-include-fixer", "command"),
+            ("clang-include-cleaner", "command"),
+            ("cargo-install-update", "command"),
+            ("claude", "command"),
+        ]);
+
+        let results = m.filter(&candidates, "calude");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+
+        assert_ne!(texts.first(), Some(&"claude"), "results: {texts:?}");
     }
 
     fn make_candidates_with_kind(items: &[(&str, &str)]) -> Vec<Candidate> {
