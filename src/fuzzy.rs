@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
 use frizbee::{Config as MatchConfig, Matcher};
@@ -214,8 +214,12 @@ fn should_match_candidate(
     true
 }
 
-fn normalize_for_matching(text: &str) -> String {
-    text.nfd().filter(|c| !is_combining_mark(*c)).collect()
+fn normalize_for_matching(text: &str) -> Cow<'_, str> {
+    if text.is_ascii() {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(text.nfd().filter(|c| !is_combining_mark(*c)).collect())
+    }
 }
 
 fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
