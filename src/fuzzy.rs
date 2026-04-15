@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 
 use crate::candidate::Candidate;
 use frizbee::{Config as MatchConfig, Matcher};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
@@ -123,7 +124,9 @@ impl FuzzyMatcher {
         fuzzy_scope: Option<&[usize]>,
         max_typos: u16,
     ) -> Vec<ScoredMatch> {
-        let query_len = query.chars().count();
+        let normalized_query = normalize_for_matching(query);
+        let query_len = normalized_query.chars().count();
+        let smart_case = max_typos == 0 && query.chars().any(char::is_uppercase);
         let mut candidate_indices = Vec::new();
         let mut haystacks = Vec::new();
         let rescue_only = max_typos > 0;
@@ -132,16 +135,34 @@ impl FuzzyMatcher {
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
-                if should_match_candidate(candidate, query_len, rescue_only, max_typos_usize) {
+                let normalized_text = normalize_for_matching(&candidate.text);
+                if should_match_candidate(
+                    candidate,
+                    &normalized_text,
+                    &normalized_query,
+                    query_len,
+                    rescue_only,
+                    max_typos_usize,
+                    smart_case,
+                ) {
                     candidate_indices.push(candidate_idx);
-                    haystacks.push(candidate.text.as_str());
+                    haystacks.push(normalized_text);
                 }
             }
         } else {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                if should_match_candidate(candidate, query_len, rescue_only, max_typos_usize) {
+                let normalized_text = normalize_for_matching(&candidate.text);
+                if should_match_candidate(
+                    candidate,
+                    &normalized_text,
+                    &normalized_query,
+                    query_len,
+                    rescue_only,
+                    max_typos_usize,
+                    smart_case,
+                ) {
                     candidate_indices.push(candidate_idx);
-                    haystacks.push(candidate.text.as_str());
+                    haystacks.push(normalized_text);
                 }
             }
         }
@@ -150,7 +171,7 @@ impl FuzzyMatcher {
             return Vec::new();
         }
 
-        self.ensure_matcher(query, max_typos);
+        self.ensure_matcher(&normalized_query, max_typos);
         let mut results: Vec<ScoredMatch> = self
             .matcher
             .match_iter(&haystacks)
@@ -172,15 +193,36 @@ impl FuzzyMatcher {
 
 fn should_match_candidate(
     candidate: &Candidate,
+    normalized_text: &str,
+    normalized_query: &str,
     query_len: usize,
     rescue_only: bool,
     max_typos: usize,
+    smart_case: bool,
 ) -> bool {
-    if !rescue_only {
-        return true;
+    if rescue_only
+        && (!candidate.is_typo_rescue()
+            || normalized_text.chars().count().abs_diff(query_len) > max_typos)
+    {
+        return false;
     }
 
-    candidate.is_typo_rescue() && candidate.text.chars().count().abs_diff(query_len) <= max_typos
+    if smart_case && !case_sensitive_subsequence_matches(normalized_query, normalized_text) {
+        return false;
+    }
+
+    true
+}
+
+fn normalize_for_matching(text: &str) -> String {
+    text.nfd().filter(|c| !is_combining_mark(*c)).collect()
+}
+
+fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
+    let mut chars = haystack.chars();
+    query
+        .chars()
+        .all(|query_char| chars.any(|c| c == query_char))
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
@@ -253,6 +295,72 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn normal_matching_strips_accents() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["café", "cacao", "São-Paulo"]);
+
+        let cafe_results = m.filter(&candidates, "cafe");
+        let cafe_texts: Vec<&str> = cafe_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(cafe_texts.contains(&"café"), "results: {cafe_texts:?}");
+
+        let sao_results = m.filter(&candidates, "sao-paulo");
+        let sao_texts: Vec<&str> = sao_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert_eq!(
+            sao_texts.first(),
+            Some(&"São-Paulo"),
+            "results: {sao_texts:?}"
+        );
+    }
+
+    #[test]
+    fn uppercase_query_filters_case_sensitively() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["foo", "Foo", "FooBar", "fool"]);
+
+        let uppercase_results = m.filter(&candidates, "Foo");
+        let uppercase_texts: Vec<&str> = uppercase_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !uppercase_texts.contains(&"foo"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            !uppercase_texts.contains(&"fool"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            uppercase_texts.contains(&"Foo"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            uppercase_texts.contains(&"FooBar"),
+            "results: {uppercase_texts:?}"
+        );
+
+        let lowercase_results = m.filter(&candidates, "foo");
+        let lowercase_texts: Vec<&str> = lowercase_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            lowercase_texts.contains(&"foo"),
+            "results: {lowercase_texts:?}"
+        );
+        assert!(
+            lowercase_texts.contains(&"Foo"),
+            "results: {lowercase_texts:?}"
+        );
     }
 
     #[test]
