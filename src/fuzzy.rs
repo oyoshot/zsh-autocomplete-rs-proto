@@ -1,15 +1,13 @@
 use std::cmp::Ordering;
 
 use crate::candidate::Candidate;
-use frizbee::{Config as TypoConfig, Matcher as TypoMatcher};
-use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
+use frizbee::{Config as MatchConfig, Matcher};
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
-    pattern: Pattern,
+    config: MatchConfig,
     last_query: String,
-    utf32_buf: Vec<char>,
+    last_max_typos: u16,
 }
 
 pub struct ScoredCandidate {
@@ -30,27 +28,28 @@ impl Default for FuzzyMatcher {
 
 impl FuzzyMatcher {
     pub fn new() -> Self {
+        let config = MatchConfig {
+            max_typos: Some(0),
+            sort: false,
+            ..MatchConfig::default()
+        };
         Self {
-            matcher: Matcher::new(Config::DEFAULT),
-            pattern: Pattern::new(
-                "",
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            ),
+            matcher: Matcher::new("", &config),
+            config,
             last_query: String::new(),
-            utf32_buf: Vec::new(),
+            last_max_typos: 0,
         }
     }
 
-    fn ensure_pattern(&mut self, query: &str) {
+    fn ensure_matcher(&mut self, query: &str, max_typos: u16) {
+        if self.last_max_typos != max_typos {
+            self.config.max_typos = Some(max_typos);
+            self.matcher.set_config(&self.config);
+            self.last_max_typos = max_typos;
+        }
+
         if self.last_query != query {
-            self.pattern = Pattern::new(
-                query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            );
+            self.matcher.set_needle(query);
             self.last_query.clear();
             self.last_query.push_str(query);
         }
@@ -76,44 +75,10 @@ impl FuzzyMatcher {
         }
 
         if query.chars().count() >= 3 && has_typo_rescue_candidates(candidates, fuzzy_scope) {
-            return filter_typo_rescue_matches(candidates, query, fuzzy_scope);
+            return self.filter_typo_rescue_matches(candidates, query, fuzzy_scope);
         }
 
-        self.ensure_pattern(query);
-
-        let pattern = &self.pattern;
-        let matcher = &mut self.matcher;
-        let utf32_buf = &mut self.utf32_buf;
-        let mut results: Vec<ScoredMatch> =
-            Vec::with_capacity(fuzzy_scope.map_or(candidates.len(), <[usize]>::len));
-
-        if let Some(scope) = fuzzy_scope {
-            for &candidate_idx in scope {
-                let candidate = &candidates[candidate_idx];
-                utf32_buf.clear();
-                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                if let Some(score) = pattern.score(haystack, matcher) {
-                    results.push(ScoredMatch {
-                        candidate_idx,
-                        score,
-                    });
-                }
-            }
-        } else {
-            for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                utf32_buf.clear();
-                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                if let Some(score) = pattern.score(haystack, matcher) {
-                    results.push(ScoredMatch {
-                        candidate_idx,
-                        score,
-                    });
-                }
-            }
-        }
-
-        sort_scored_matches(&mut results, candidates);
-        results
+        self.filter_frizbee_matches(candidates, query, fuzzy_scope, 0)
     }
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
@@ -140,62 +105,82 @@ fn typo_rescue_max_typos(query: &str) -> u16 {
     if query.chars().count() >= 5 { 2 } else { 1 }
 }
 
-fn filter_typo_rescue_matches(
-    candidates: &[Candidate],
-    query: &str,
-    fuzzy_scope: Option<&[usize]>,
-) -> Vec<ScoredMatch> {
-    let max_typos = typo_rescue_max_typos(query);
-    let query_len = query.chars().count();
-    let mut candidate_indices = Vec::new();
-    let mut haystacks = Vec::new();
-
-    if let Some(scope) = fuzzy_scope {
-        for &candidate_idx in scope {
-            let candidate = &candidates[candidate_idx];
-            if candidate.is_typo_rescue()
-                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
-            {
-                candidate_indices.push(candidate_idx);
-                haystacks.push(candidate.text.as_str());
-            }
-        }
-    } else {
-        for (candidate_idx, candidate) in candidates.iter().enumerate() {
-            if candidate.is_typo_rescue()
-                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
-            {
-                candidate_indices.push(candidate_idx);
-                haystacks.push(candidate.text.as_str());
-            }
-        }
+impl FuzzyMatcher {
+    fn filter_typo_rescue_matches(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+    ) -> Vec<ScoredMatch> {
+        let max_typos = typo_rescue_max_typos(query);
+        self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos)
     }
 
-    if haystacks.is_empty() {
-        return Vec::new();
+    fn filter_frizbee_matches(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+        max_typos: u16,
+    ) -> Vec<ScoredMatch> {
+        let query_len = query.chars().count();
+        let mut candidate_indices = Vec::new();
+        let mut haystacks = Vec::new();
+        let rescue_only = max_typos > 0;
+        let max_typos_usize = usize::from(max_typos);
+
+        if let Some(scope) = fuzzy_scope {
+            for &candidate_idx in scope {
+                let candidate = &candidates[candidate_idx];
+                if should_match_candidate(candidate, query_len, rescue_only, max_typos_usize) {
+                    candidate_indices.push(candidate_idx);
+                    haystacks.push(candidate.text.as_str());
+                }
+            }
+        } else {
+            for (candidate_idx, candidate) in candidates.iter().enumerate() {
+                if should_match_candidate(candidate, query_len, rescue_only, max_typos_usize) {
+                    candidate_indices.push(candidate_idx);
+                    haystacks.push(candidate.text.as_str());
+                }
+            }
+        }
+
+        if haystacks.is_empty() {
+            return Vec::new();
+        }
+
+        self.ensure_matcher(query, max_typos);
+        let mut results: Vec<ScoredMatch> = self
+            .matcher
+            .match_iter(&haystacks)
+            .filter_map(|m| {
+                candidate_indices
+                    .get(m.index as usize)
+                    .copied()
+                    .map(|candidate_idx| ScoredMatch {
+                        candidate_idx,
+                        score: u32::from(m.score),
+                    })
+            })
+            .collect();
+
+        sort_scored_matches(&mut results, candidates);
+        results
+    }
+}
+
+fn should_match_candidate(
+    candidate: &Candidate,
+    query_len: usize,
+    rescue_only: bool,
+    max_typos: usize,
+) -> bool {
+    if !rescue_only {
+        return true;
     }
 
-    let config = TypoConfig {
-        max_typos: Some(max_typos),
-        sort: false,
-        ..TypoConfig::default()
-    };
-    let mut matcher = TypoMatcher::new(query, &config);
-    let mut results: Vec<ScoredMatch> = matcher
-        .match_iter(&haystacks)
-        .filter_map(|m| {
-            candidate_indices
-                .get(m.index as usize)
-                .copied()
-                .map(|candidate_idx| ScoredMatch {
-                    candidate_idx,
-                    score: u32::from(m.score),
-                })
-        })
-        .collect();
-
-    sort_scored_matches(&mut results, candidates);
-    results
+    candidate.is_typo_rescue() && candidate.text.chars().count().abs_diff(query_len) <= max_typos
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {

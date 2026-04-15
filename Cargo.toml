@@ -16,7 +16,6 @@ path = "src/main.rs"
 [dependencies]
 libc = "0.2"
 crossterm = "0.29"
-nucleo-matcher = "0.3"
 frizbee = "0.9"
 unicode-width = "0.2"
 clap = { version = "4", features = ["derive"] }
