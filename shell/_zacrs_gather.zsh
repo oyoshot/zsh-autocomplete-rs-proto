@@ -45,3 +45,28 @@ _zacrs_gather() {
         done
     fi
 }
+
+_zacrs_gather_command_rescue() {
+    local prefix="$1"
+    [[ ${#prefix} -lt 3 || "$prefix" == */* ]] && return
+
+    local initial="${prefix[1]}"
+    local name
+    for name in ${(k)commands}; do
+        [[ "${name[1]}" == "$initial" ]] || continue
+        printf '%s\tcommand\tcommand_rescue\n' "$name"
+    done
+    for name in ${(k)aliases}; do
+        [[ "${name[1]}" == "$initial" ]] || continue
+        printf '%s\talias\talias_rescue\n' "$name"
+    done
+    for name in ${(k)builtins}; do
+        [[ "${name[1]}" == "$initial" ]] || continue
+        printf '%s\tbuiltin\tbuiltin_rescue\n' "$name"
+    done
+    for name in ${(k)functions}; do
+        [[ "$name" == _* ]] && continue
+        [[ "${name[1]}" == "$initial" ]] || continue
+        printf '%s\tfunction\tfunction_rescue\n' "$name"
+    done
+}

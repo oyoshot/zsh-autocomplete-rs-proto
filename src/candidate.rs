@@ -9,7 +9,7 @@ pub struct Candidate {
 
 impl Candidate {
     pub fn kind_priority(&self) -> u8 {
-        match self.kind.as_str() {
+        match self.base_kind() {
             "directory" => 0,
             "file" => 1,
             "command" => 2,
@@ -20,8 +20,16 @@ impl Candidate {
         }
     }
 
+    pub fn base_kind(&self) -> &str {
+        self.kind.strip_suffix("_rescue").unwrap_or(&self.kind)
+    }
+
+    pub fn is_typo_rescue(&self) -> bool {
+        self.kind.ends_with("_rescue")
+    }
+
     pub fn text_with_suffix(&self, suffixes: &SuffixConfig) -> String {
-        let Some(suffix) = suffixes.suffix_for_kind(&self.kind) else {
+        let Some(suffix) = suffixes.suffix_for_kind(self.base_kind()) else {
             return self.text.clone();
         };
         let base_text = self
@@ -150,6 +158,14 @@ mod tests {
     #[test]
     fn text_with_suffix_command() {
         let c = Candidate::parse_line("git\t\tcommand");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "git ");
+    }
+
+    #[test]
+    fn text_with_suffix_command_rescue_uses_command_suffix() {
+        let c = Candidate::parse_line("git\t\tcommand_rescue");
+        let command = Candidate::parse_line("git\t\tcommand");
+        assert_eq!(c.kind_priority(), command.kind_priority());
         assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "git ");
     }
 

@@ -339,11 +339,11 @@ impl DaemonServer {
             self.touch_cached_key(context_key);
             return;
         }
-        if self.candidate_cache_order.len() >= CANDIDATE_CACHE_MAX_ENTRIES {
-            if let Some(oldest) = self.candidate_cache_order.first().cloned() {
-                self.candidate_cache.remove(&oldest);
-                self.candidate_cache_order.remove(0);
-            }
+        if self.candidate_cache_order.len() >= CANDIDATE_CACHE_MAX_ENTRIES
+            && let Some(oldest) = self.candidate_cache_order.first().cloned()
+        {
+            self.candidate_cache.remove(&oldest);
+            self.candidate_cache_order.remove(0);
         }
         self.candidate_cache_order.push(context_key.to_string());
         self.candidate_cache.insert(context_key.to_string(), entry);
@@ -362,11 +362,11 @@ impl DaemonServer {
             self.touch_active_popup_key(popup_key);
             return;
         }
-        if self.active_popup_order.len() >= ACTIVE_POPUP_MAX_ENTRIES {
-            if let Some(oldest) = self.active_popup_order.first().cloned() {
-                self.active_popups.remove(&oldest);
-                self.active_popup_order.remove(0);
-            }
+        if self.active_popup_order.len() >= ACTIVE_POPUP_MAX_ENTRIES
+            && let Some(oldest) = self.active_popup_order.first().cloned()
+        {
+            self.active_popups.remove(&oldest);
+            self.active_popup_order.remove(0);
         }
         self.active_popup_order.push(popup_key.to_string());
         self.active_popups.insert(popup_key.to_string(), entry);
