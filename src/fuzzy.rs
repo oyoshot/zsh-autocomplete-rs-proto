@@ -1,7 +1,9 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
+use any_ascii::any_ascii_char;
 use frizbee::{Config as MatchConfig, Matcher};
+use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub struct FuzzyMatcher {
@@ -124,15 +126,11 @@ impl FuzzyMatcher {
         fuzzy_scope: Option<&[usize]>,
         max_typos: u16,
     ) -> Vec<ScoredMatch> {
-        let normalized_query = normalize_for_matching(query);
-        let normalize_candidates = normalized_query == query;
-        let match_query = if normalize_candidates {
-            normalized_query
-        } else {
-            Cow::Borrowed(query)
-        };
-        let query_len = match_query.chars().count();
+        let normalize_candidates = normalize_for_matching(query) == query;
         let smart_case = max_typos == 0 && query.chars().any(char::is_uppercase);
+        let fold_case = !smart_case;
+        let match_query = normalize_case_for_matching(query, fold_case);
+        let query_len = match_query.chars().count();
         let mut candidate_indices = Vec::new();
         let mut haystacks = Vec::new();
         let rescue_only = max_typos > 0;
@@ -141,8 +139,11 @@ impl FuzzyMatcher {
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
-                let normalized_text =
-                    normalize_candidate_for_matching(&candidate.text, normalize_candidates);
+                let normalized_text = normalize_candidate_for_matching(
+                    &candidate.text,
+                    normalize_candidates,
+                    fold_case,
+                );
                 if should_match_candidate(
                     candidate,
                     &normalized_text,
@@ -158,8 +159,11 @@ impl FuzzyMatcher {
             }
         } else {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                let normalized_text =
-                    normalize_candidate_for_matching(&candidate.text, normalize_candidates);
+                let normalized_text = normalize_candidate_for_matching(
+                    &candidate.text,
+                    normalize_candidates,
+                    fold_case,
+                );
                 if should_match_candidate(
                     candidate,
                     &normalized_text,
@@ -226,16 +230,93 @@ fn normalize_for_matching(text: &str) -> Cow<'_, str> {
     if text.is_ascii() {
         Cow::Borrowed(text)
     } else {
-        Cow::Owned(text.nfd().filter(|c| !is_combining_mark(*c)).collect())
+        let mut normalized = String::with_capacity(text.len());
+        let mut changed = false;
+
+        for c in text.nfd() {
+            if is_combining_mark(c) {
+                changed = true;
+                continue;
+            }
+
+            let mapped = latin_ascii_equivalent(c);
+            changed |= mapped != c;
+            normalized.push(mapped);
+        }
+
+        if changed {
+            Cow::Owned(normalized)
+        } else {
+            Cow::Borrowed(text)
+        }
     }
 }
 
-fn normalize_candidate_for_matching(text: &str, normalize: bool) -> Cow<'_, str> {
-    if normalize {
-        normalize_for_matching(text)
+fn normalize_case_for_matching(text: &str, fold_case: bool) -> Cow<'_, str> {
+    if !fold_case || text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+
+    // frizbee folds ASCII bytes only, so fold non-ASCII before matching.
+    let mut folded = String::with_capacity(text.len());
+    let mut changed = false;
+    for c in text.chars() {
+        if c.is_ascii() {
+            folded.push(c);
+            continue;
+        }
+
+        let mut chars = c.case_fold_with(Variant::Simple, Locale::NonTurkic);
+        let folded_char = chars.next().unwrap_or(c);
+        debug_assert!(chars.next().is_none());
+        changed |= folded_char != c;
+        folded.push(folded_char);
+    }
+
+    if changed {
+        Cow::Owned(folded)
     } else {
         Cow::Borrowed(text)
     }
+}
+
+fn normalize_candidate_for_matching(text: &str, normalize: bool, fold_case: bool) -> Cow<'_, str> {
+    match (normalize, fold_case) {
+        (false, false) => Cow::Borrowed(text),
+        (false, true) => normalize_case_for_matching(text, true),
+        (true, false) => normalize_for_matching(text),
+        (true, true) => {
+            let normalized = normalize_for_matching(text);
+            match normalize_case_for_matching(&normalized, true) {
+                Cow::Borrowed(_) => normalized,
+                Cow::Owned(folded) => Cow::Owned(folded),
+            }
+        }
+    }
+}
+
+// Match Nucleo-style Latin ASCII folding without romanizing non-Latin scripts.
+fn latin_ascii_equivalent(c: char) -> char {
+    match c {
+        'ß' => 's',
+        'ẞ' => 'S',
+        _ if is_latin_ascii_fold_candidate(c) => {
+            let folded = any_ascii_char(c);
+            let mut chars = folded.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ascii), None) if ascii.is_ascii_alphabetic() => ascii,
+                _ => c,
+            }
+        }
+        _ => c,
+    }
+}
+
+fn is_latin_ascii_fold_candidate(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00C0..=0x02AF | 0x1D00..=0x1EFF | 0x2071 | 0x2095..=0x209C | 0x2184
+    )
 }
 
 fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
@@ -342,9 +423,29 @@ mod tests {
     }
 
     #[test]
+    fn ascii_query_matches_non_decomposing_latin_letters() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Søren", "Łódź", "resume"]);
+
+        let soren_results = m.filter(&candidates, "soren");
+        let soren_texts: Vec<&str> = soren_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(soren_texts.contains(&"Søren"), "results: {soren_texts:?}");
+
+        let lodz_results = m.filter(&candidates, "lodz");
+        let lodz_texts: Vec<&str> = lodz_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(lodz_texts.contains(&"Łódź"), "results: {lodz_texts:?}");
+    }
+
+    #[test]
     fn accented_query_keeps_smart_normalization_asymmetric() {
         let mut m = FuzzyMatcher::new();
-        let candidates = make_candidates(&["resume", "résumé"]);
+        let candidates = make_candidates(&["resume", "résumé", "RÉSUMÉ"]);
 
         let accented_results = m.filter(&candidates, "résumé");
         let accented_texts: Vec<&str> = accented_results
@@ -359,6 +460,10 @@ mod tests {
             accented_texts.contains(&"résumé"),
             "results: {accented_texts:?}"
         );
+        assert!(
+            accented_texts.contains(&"RÉSUMÉ"),
+            "results: {accented_texts:?}"
+        );
 
         let plain_results = m.filter(&candidates, "resume");
         let plain_texts: Vec<&str> = plain_results
@@ -367,6 +472,7 @@ mod tests {
             .collect();
         assert!(plain_texts.contains(&"resume"), "results: {plain_texts:?}");
         assert!(plain_texts.contains(&"résumé"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"RÉSUMÉ"), "results: {plain_texts:?}");
     }
 
     #[test]
