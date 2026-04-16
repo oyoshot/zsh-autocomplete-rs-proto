@@ -125,7 +125,13 @@ impl FuzzyMatcher {
         max_typos: u16,
     ) -> Vec<ScoredMatch> {
         let normalized_query = normalize_for_matching(query);
-        let query_len = normalized_query.chars().count();
+        let normalize_candidates = normalized_query == query;
+        let match_query = if normalize_candidates {
+            normalized_query
+        } else {
+            Cow::Borrowed(query)
+        };
+        let query_len = match_query.chars().count();
         let smart_case = max_typos == 0 && query.chars().any(char::is_uppercase);
         let mut candidate_indices = Vec::new();
         let mut haystacks = Vec::new();
@@ -135,11 +141,12 @@ impl FuzzyMatcher {
         if let Some(scope) = fuzzy_scope {
             for &candidate_idx in scope {
                 let candidate = &candidates[candidate_idx];
-                let normalized_text = normalize_for_matching(&candidate.text);
+                let normalized_text =
+                    normalize_candidate_for_matching(&candidate.text, normalize_candidates);
                 if should_match_candidate(
                     candidate,
                     &normalized_text,
-                    &normalized_query,
+                    &match_query,
                     query_len,
                     rescue_only,
                     max_typos_usize,
@@ -151,11 +158,12 @@ impl FuzzyMatcher {
             }
         } else {
             for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                let normalized_text = normalize_for_matching(&candidate.text);
+                let normalized_text =
+                    normalize_candidate_for_matching(&candidate.text, normalize_candidates);
                 if should_match_candidate(
                     candidate,
                     &normalized_text,
-                    &normalized_query,
+                    &match_query,
                     query_len,
                     rescue_only,
                     max_typos_usize,
@@ -171,7 +179,7 @@ impl FuzzyMatcher {
             return Vec::new();
         }
 
-        self.ensure_matcher(&normalized_query, max_typos);
+        self.ensure_matcher(&match_query, max_typos);
         let mut results: Vec<ScoredMatch> = self
             .matcher
             .match_iter(&haystacks)
@@ -219,6 +227,14 @@ fn normalize_for_matching(text: &str) -> Cow<'_, str> {
         Cow::Borrowed(text)
     } else {
         Cow::Owned(text.nfd().filter(|c| !is_combining_mark(*c)).collect())
+    }
+}
+
+fn normalize_candidate_for_matching(text: &str, normalize: bool) -> Cow<'_, str> {
+    if normalize {
+        normalize_for_matching(text)
+    } else {
+        Cow::Borrowed(text)
     }
 }
 
@@ -323,6 +339,34 @@ mod tests {
             Some(&"São-Paulo"),
             "results: {sao_texts:?}"
         );
+    }
+
+    #[test]
+    fn accented_query_keeps_smart_normalization_asymmetric() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["resume", "résumé"]);
+
+        let accented_results = m.filter(&candidates, "résumé");
+        let accented_texts: Vec<&str> = accented_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !accented_texts.contains(&"resume"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&"résumé"),
+            "results: {accented_texts:?}"
+        );
+
+        let plain_results = m.filter(&candidates, "resume");
+        let plain_texts: Vec<&str> = plain_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(plain_texts.contains(&"resume"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"résumé"), "results: {plain_texts:?}");
     }
 
     #[test]
