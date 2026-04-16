@@ -253,28 +253,36 @@ fn normalize_for_matching(text: &str) -> Cow<'_, str> {
 }
 
 fn normalize_case_for_matching(text: &str, fold_case: bool) -> Cow<'_, str> {
-    if !fold_case || text.is_ascii() {
+    if text.is_ascii() {
         return Cow::Borrowed(text);
     }
 
     // frizbee folds ASCII bytes only, so fold non-ASCII before matching.
-    let mut folded = String::with_capacity(text.len());
+    let mut normalized = String::with_capacity(text.len());
     let mut changed = false;
     for c in text.chars() {
         if c.is_ascii() {
-            folded.push(c);
+            normalized.push(c);
             continue;
         }
 
-        let mut chars = c.case_fold_with(Variant::Simple, Locale::NonTurkic);
-        let folded_char = chars.next().unwrap_or(c);
-        debug_assert!(chars.next().is_none());
+        let folded_char = if fold_case {
+            let mut chars = c.case_fold_with(Variant::Simple, Locale::NonTurkic);
+            let folded_char = chars.next().unwrap_or(c);
+            debug_assert!(chars.next().is_none());
+            folded_char
+        } else {
+            c
+        };
         changed |= folded_char != c;
-        folded.push(folded_char);
+        normalized.push(folded_char);
     }
 
+    let canonical: String = normalized.nfc().collect();
+    changed |= canonical != normalized;
+
     if changed {
-        Cow::Owned(folded)
+        Cow::Owned(canonical)
     } else {
         Cow::Borrowed(text)
     }
@@ -473,6 +481,43 @@ mod tests {
         assert!(plain_texts.contains(&"resume"), "results: {plain_texts:?}");
         assert!(plain_texts.contains(&"résumé"), "results: {plain_texts:?}");
         assert!(plain_texts.contains(&"RÉSUMÉ"), "results: {plain_texts:?}");
+    }
+
+    #[test]
+    fn decomposed_accented_query_matches_canonical_equivalents_only() {
+        let mut m = FuzzyMatcher::new();
+        let decomposed = "cafe\u{301}";
+        let candidates = make_candidates(&["cafe", "café", decomposed]);
+
+        let accented_results = m.filter(&candidates, decomposed);
+        let accented_texts: Vec<&str> = accented_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !accented_texts.contains(&"cafe"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&"café"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&decomposed),
+            "results: {accented_texts:?}"
+        );
+
+        let plain_results = m.filter(&candidates, "cafe");
+        let plain_texts: Vec<&str> = plain_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(plain_texts.contains(&"cafe"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"café"), "results: {plain_texts:?}");
+        assert!(
+            plain_texts.contains(&decomposed),
+            "results: {plain_texts:?}"
+        );
     }
 
     #[test]
