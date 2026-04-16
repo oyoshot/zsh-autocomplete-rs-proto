@@ -1,15 +1,16 @@
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
-use frizbee::{Config as TypoConfig, Matcher as TypoMatcher};
-use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
+use any_ascii::any_ascii_char;
+use frizbee::{Config as MatchConfig, Matcher};
+use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
-    pattern: Pattern,
+    config: MatchConfig,
     last_query: String,
-    utf32_buf: Vec<char>,
+    last_max_typos: u16,
 }
 
 pub struct ScoredCandidate {
@@ -30,27 +31,28 @@ impl Default for FuzzyMatcher {
 
 impl FuzzyMatcher {
     pub fn new() -> Self {
+        let config = MatchConfig {
+            max_typos: Some(0),
+            sort: false,
+            ..MatchConfig::default()
+        };
         Self {
-            matcher: Matcher::new(Config::DEFAULT),
-            pattern: Pattern::new(
-                "",
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            ),
+            matcher: Matcher::new("", &config),
+            config,
             last_query: String::new(),
-            utf32_buf: Vec::new(),
+            last_max_typos: 0,
         }
     }
 
-    fn ensure_pattern(&mut self, query: &str) {
+    fn ensure_matcher(&mut self, query: &str, max_typos: u16) {
+        if self.last_max_typos != max_typos {
+            self.config.max_typos = Some(max_typos);
+            self.matcher.set_config(&self.config);
+            self.last_max_typos = max_typos;
+        }
+
         if self.last_query != query {
-            self.pattern = Pattern::new(
-                query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            );
+            self.matcher.set_needle(query);
             self.last_query.clear();
             self.last_query.push_str(query);
         }
@@ -76,44 +78,10 @@ impl FuzzyMatcher {
         }
 
         if query.chars().count() >= 3 && has_typo_rescue_candidates(candidates, fuzzy_scope) {
-            return filter_typo_rescue_matches(candidates, query, fuzzy_scope);
+            return self.filter_typo_rescue_matches(candidates, query, fuzzy_scope);
         }
 
-        self.ensure_pattern(query);
-
-        let pattern = &self.pattern;
-        let matcher = &mut self.matcher;
-        let utf32_buf = &mut self.utf32_buf;
-        let mut results: Vec<ScoredMatch> =
-            Vec::with_capacity(fuzzy_scope.map_or(candidates.len(), <[usize]>::len));
-
-        if let Some(scope) = fuzzy_scope {
-            for &candidate_idx in scope {
-                let candidate = &candidates[candidate_idx];
-                utf32_buf.clear();
-                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                if let Some(score) = pattern.score(haystack, matcher) {
-                    results.push(ScoredMatch {
-                        candidate_idx,
-                        score,
-                    });
-                }
-            }
-        } else {
-            for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                utf32_buf.clear();
-                let haystack = Utf32Str::new(&candidate.text, utf32_buf);
-                if let Some(score) = pattern.score(haystack, matcher) {
-                    results.push(ScoredMatch {
-                        candidate_idx,
-                        score,
-                    });
-                }
-            }
-        }
-
-        sort_scored_matches(&mut results, candidates);
-        results
+        self.filter_frizbee_matches(candidates, query, fuzzy_scope, 0)
     }
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
@@ -140,62 +108,230 @@ fn typo_rescue_max_typos(query: &str) -> u16 {
     if query.chars().count() >= 5 { 2 } else { 1 }
 }
 
-fn filter_typo_rescue_matches(
-    candidates: &[Candidate],
-    query: &str,
-    fuzzy_scope: Option<&[usize]>,
-) -> Vec<ScoredMatch> {
-    let max_typos = typo_rescue_max_typos(query);
-    let query_len = query.chars().count();
-    let mut candidate_indices = Vec::new();
-    let mut haystacks = Vec::new();
+impl FuzzyMatcher {
+    fn filter_typo_rescue_matches(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+    ) -> Vec<ScoredMatch> {
+        let max_typos = typo_rescue_max_typos(query);
+        self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos)
+    }
 
-    if let Some(scope) = fuzzy_scope {
-        for &candidate_idx in scope {
-            let candidate = &candidates[candidate_idx];
-            if candidate.is_typo_rescue()
-                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
-            {
-                candidate_indices.push(candidate_idx);
-                haystacks.push(candidate.text.as_str());
+    fn filter_frizbee_matches(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+        max_typos: u16,
+    ) -> Vec<ScoredMatch> {
+        let normalize_candidates = normalize_for_matching(query) == query;
+        let smart_case = max_typos == 0 && query.chars().any(char::is_uppercase);
+        let fold_case = !smart_case;
+        let match_query = normalize_case_for_matching(query, fold_case);
+        let query_len = match_query.chars().count();
+        let mut candidate_indices = Vec::new();
+        let mut haystacks = Vec::new();
+        let rescue_only = max_typos > 0;
+        let max_typos_usize = usize::from(max_typos);
+
+        if let Some(scope) = fuzzy_scope {
+            for &candidate_idx in scope {
+                let candidate = &candidates[candidate_idx];
+                let normalized_text = normalize_candidate_for_matching(
+                    &candidate.text,
+                    normalize_candidates,
+                    fold_case,
+                );
+                if should_match_candidate(
+                    candidate,
+                    &normalized_text,
+                    &match_query,
+                    query_len,
+                    rescue_only,
+                    max_typos_usize,
+                    smart_case,
+                ) {
+                    candidate_indices.push(candidate_idx);
+                    haystacks.push(normalized_text);
+                }
+            }
+        } else {
+            for (candidate_idx, candidate) in candidates.iter().enumerate() {
+                let normalized_text = normalize_candidate_for_matching(
+                    &candidate.text,
+                    normalize_candidates,
+                    fold_case,
+                );
+                if should_match_candidate(
+                    candidate,
+                    &normalized_text,
+                    &match_query,
+                    query_len,
+                    rescue_only,
+                    max_typos_usize,
+                    smart_case,
+                ) {
+                    candidate_indices.push(candidate_idx);
+                    haystacks.push(normalized_text);
+                }
             }
         }
+
+        if haystacks.is_empty() {
+            return Vec::new();
+        }
+
+        self.ensure_matcher(&match_query, max_typos);
+        let mut results: Vec<ScoredMatch> = self
+            .matcher
+            .match_iter(&haystacks)
+            .filter_map(|m| {
+                candidate_indices
+                    .get(m.index as usize)
+                    .copied()
+                    .map(|candidate_idx| ScoredMatch {
+                        candidate_idx,
+                        score: u32::from(m.score),
+                    })
+            })
+            .collect();
+
+        sort_scored_matches(&mut results, candidates);
+        results
+    }
+}
+
+fn should_match_candidate(
+    candidate: &Candidate,
+    normalized_text: &str,
+    normalized_query: &str,
+    query_len: usize,
+    rescue_only: bool,
+    max_typos: usize,
+    smart_case: bool,
+) -> bool {
+    if rescue_only
+        && (!candidate.is_typo_rescue()
+            || normalized_text.chars().count().abs_diff(query_len) > max_typos)
+    {
+        return false;
+    }
+
+    if smart_case && !case_sensitive_subsequence_matches(normalized_query, normalized_text) {
+        return false;
+    }
+
+    true
+}
+
+fn normalize_for_matching(text: &str) -> Cow<'_, str> {
+    if text.is_ascii() {
+        Cow::Borrowed(text)
     } else {
-        for (candidate_idx, candidate) in candidates.iter().enumerate() {
-            if candidate.is_typo_rescue()
-                && candidate.text.chars().count().abs_diff(query_len) <= usize::from(max_typos)
-            {
-                candidate_indices.push(candidate_idx);
-                haystacks.push(candidate.text.as_str());
+        let mut normalized = String::with_capacity(text.len());
+        let mut changed = false;
+
+        for c in text.nfd() {
+            if is_combining_mark(c) {
+                changed = true;
+                continue;
+            }
+
+            let mapped = latin_ascii_equivalent(c);
+            changed |= mapped != c;
+            normalized.push(mapped);
+        }
+
+        if changed {
+            Cow::Owned(normalized)
+        } else {
+            Cow::Borrowed(text)
+        }
+    }
+}
+
+fn normalize_case_for_matching(text: &str, fold_case: bool) -> Cow<'_, str> {
+    if text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+
+    // frizbee folds ASCII bytes only, so fold non-ASCII before matching.
+    let mut normalized = String::with_capacity(text.len());
+    let mut changed = false;
+    for c in text.chars() {
+        if c.is_ascii() {
+            normalized.push(c);
+            continue;
+        }
+
+        let folded_char = if fold_case {
+            let mut chars = c.case_fold_with(Variant::Simple, Locale::NonTurkic);
+            let folded_char = chars.next().unwrap_or(c);
+            debug_assert!(chars.next().is_none());
+            folded_char
+        } else {
+            c
+        };
+        changed |= folded_char != c;
+        normalized.push(folded_char);
+    }
+
+    let canonical: String = normalized.nfc().collect();
+    changed |= canonical != normalized;
+
+    if changed {
+        Cow::Owned(canonical)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+fn normalize_candidate_for_matching(text: &str, normalize: bool, fold_case: bool) -> Cow<'_, str> {
+    match (normalize, fold_case) {
+        (false, false) => Cow::Borrowed(text),
+        (false, true) => normalize_case_for_matching(text, true),
+        (true, false) => normalize_for_matching(text),
+        (true, true) => {
+            let normalized = normalize_for_matching(text);
+            match normalize_case_for_matching(&normalized, true) {
+                Cow::Borrowed(_) => normalized,
+                Cow::Owned(folded) => Cow::Owned(folded),
             }
         }
     }
+}
 
-    if haystacks.is_empty() {
-        return Vec::new();
+// Match Nucleo-style Latin ASCII folding without romanizing non-Latin scripts.
+fn latin_ascii_equivalent(c: char) -> char {
+    match c {
+        'ß' => 's',
+        'ẞ' => 'S',
+        _ if is_latin_ascii_fold_candidate(c) => {
+            let folded = any_ascii_char(c);
+            let mut chars = folded.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ascii), None) if ascii.is_ascii_alphabetic() => ascii,
+                _ => c,
+            }
+        }
+        _ => c,
     }
+}
 
-    let config = TypoConfig {
-        max_typos: Some(max_typos),
-        sort: false,
-        ..TypoConfig::default()
-    };
-    let mut matcher = TypoMatcher::new(query, &config);
-    let mut results: Vec<ScoredMatch> = matcher
-        .match_iter(&haystacks)
-        .filter_map(|m| {
-            candidate_indices
-                .get(m.index as usize)
-                .copied()
-                .map(|candidate_idx| ScoredMatch {
-                    candidate_idx,
-                    score: u32::from(m.score),
-                })
-        })
-        .collect();
+fn is_latin_ascii_fold_candidate(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00C0..=0x02AF | 0x1D00..=0x1EFF | 0x2071 | 0x2095..=0x209C | 0x2184
+    )
+}
 
-    sort_scored_matches(&mut results, candidates);
-    results
+fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
+    let mut chars = haystack.chars();
+    query
+        .chars()
+        .all(|query_char| chars.any(|c| c == query_char))
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
@@ -268,6 +404,162 @@ mod tests {
         let candidates = make_candidates(&["foo", "bar"]);
         let results = m.filter(&candidates, "zzz");
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn normal_matching_strips_accents() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["café", "cacao", "São-Paulo"]);
+
+        let cafe_results = m.filter(&candidates, "cafe");
+        let cafe_texts: Vec<&str> = cafe_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(cafe_texts.contains(&"café"), "results: {cafe_texts:?}");
+
+        let sao_results = m.filter(&candidates, "sao-paulo");
+        let sao_texts: Vec<&str> = sao_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert_eq!(
+            sao_texts.first(),
+            Some(&"São-Paulo"),
+            "results: {sao_texts:?}"
+        );
+    }
+
+    #[test]
+    fn ascii_query_matches_non_decomposing_latin_letters() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["Søren", "Łódź", "resume"]);
+
+        let soren_results = m.filter(&candidates, "soren");
+        let soren_texts: Vec<&str> = soren_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(soren_texts.contains(&"Søren"), "results: {soren_texts:?}");
+
+        let lodz_results = m.filter(&candidates, "lodz");
+        let lodz_texts: Vec<&str> = lodz_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(lodz_texts.contains(&"Łódź"), "results: {lodz_texts:?}");
+    }
+
+    #[test]
+    fn accented_query_keeps_smart_normalization_asymmetric() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["resume", "résumé", "RÉSUMÉ"]);
+
+        let accented_results = m.filter(&candidates, "résumé");
+        let accented_texts: Vec<&str> = accented_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !accented_texts.contains(&"resume"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&"résumé"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&"RÉSUMÉ"),
+            "results: {accented_texts:?}"
+        );
+
+        let plain_results = m.filter(&candidates, "resume");
+        let plain_texts: Vec<&str> = plain_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(plain_texts.contains(&"resume"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"résumé"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"RÉSUMÉ"), "results: {plain_texts:?}");
+    }
+
+    #[test]
+    fn decomposed_accented_query_matches_canonical_equivalents_only() {
+        let mut m = FuzzyMatcher::new();
+        let decomposed = "cafe\u{301}";
+        let candidates = make_candidates(&["cafe", "café", decomposed]);
+
+        let accented_results = m.filter(&candidates, decomposed);
+        let accented_texts: Vec<&str> = accented_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !accented_texts.contains(&"cafe"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&"café"),
+            "results: {accented_texts:?}"
+        );
+        assert!(
+            accented_texts.contains(&decomposed),
+            "results: {accented_texts:?}"
+        );
+
+        let plain_results = m.filter(&candidates, "cafe");
+        let plain_texts: Vec<&str> = plain_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(plain_texts.contains(&"cafe"), "results: {plain_texts:?}");
+        assert!(plain_texts.contains(&"café"), "results: {plain_texts:?}");
+        assert!(
+            plain_texts.contains(&decomposed),
+            "results: {plain_texts:?}"
+        );
+    }
+
+    #[test]
+    fn uppercase_query_filters_case_sensitively() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = make_candidates(&["foo", "Foo", "FooBar", "fool"]);
+
+        let uppercase_results = m.filter(&candidates, "Foo");
+        let uppercase_texts: Vec<&str> = uppercase_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            !uppercase_texts.contains(&"foo"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            !uppercase_texts.contains(&"fool"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            uppercase_texts.contains(&"Foo"),
+            "results: {uppercase_texts:?}"
+        );
+        assert!(
+            uppercase_texts.contains(&"FooBar"),
+            "results: {uppercase_texts:?}"
+        );
+
+        let lowercase_results = m.filter(&candidates, "foo");
+        let lowercase_texts: Vec<&str> = lowercase_results
+            .iter()
+            .map(|r| r.candidate.text.as_str())
+            .collect();
+        assert!(
+            lowercase_texts.contains(&"foo"),
+            "results: {lowercase_texts:?}"
+        );
+        assert!(
+            lowercase_texts.contains(&"Foo"),
+            "results: {lowercase_texts:?}"
+        );
     }
 
     #[test]
