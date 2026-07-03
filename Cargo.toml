@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 libc = "0.2"
 crossterm = "0.29"
-frizbee = "0.9"
+frizbee = "0.10"
 unicode-width = "0.2"
 unicode-normalization = "0.1"
 unicode-casefold = "0.2"
