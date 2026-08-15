@@ -29,6 +29,37 @@ _zacrs_ensure_compinit() {
     (( $+functions[_main_complete] ))
 }
 
+_zacrs_compadd_has_file_flag() {
+    local _arg _chars _char
+    local -i _idx _expect_value=0
+
+    for _arg in "$@"; do
+        if (( _expect_value )); then
+            _expect_value=0
+            continue
+        fi
+        [[ "$_arg" == "-" || "$_arg" == "--" ]] && break
+        [[ "$_arg" == -?* ]] || continue
+
+        _chars="${_arg[2,-1]}"
+        for (( _idx = 1; _idx <= ${#_chars}; _idx++ )); do
+            _char="${_chars[_idx]}"
+            case "$_char" in
+                f) return 0 ;;
+                [akqQenUl12C]) ;;
+                [diIOADVJXxPSpsWFMrRE])
+                    (( _idx == ${#_chars} )) && _expect_value=1
+                    break
+                    ;;
+                o) break ;;
+                *) break ;;
+            esac
+        done
+    done
+
+    return 1
+}
+
 _zacrs_compsys_func() {
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
@@ -50,7 +81,8 @@ _zacrs_compsys_func() {
 
         # Skip probe calls that use -O or -D (internal completion system tests)
         local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0 _disp_array_name=""
-        local _prev="" _is_option_value=0 _prev_flags="" _opt_chars="" _opt_char="" _opt_idx=0
+        local _prev="" _is_option_value=0 _prev_flags=""
+        _zacrs_compadd_has_file_flag "$@" && _is_file=1
         for _a in "$@"; do
             _is_option_value=0
             if (( ${#_prev} >= 2 )); then
@@ -63,21 +95,6 @@ _zacrs_compsys_func() {
                 : # この "-" / "--" はフラグの値 → breakしない
             else
                 [[ "$_a" == "-" || "$_a" == "--" ]] && break
-                if [[ "$_a" == -?* ]]; then
-                    # compadd combines short options (for example `-Qf`).
-                    # Stop at an option that consumes the rest of this argument,
-                    # so an attached value such as `-P/foo` is not scanned for `f`.
-                    _opt_chars="${_a[2,-1]}"
-                    for (( _opt_idx = 1; _opt_idx <= ${#_opt_chars}; _opt_idx++ )); do
-                        _opt_char="${_opt_chars[_opt_idx]}"
-                        case "$_opt_char" in
-                            f) _is_file=1 ;;
-                            [akqQenUl12C]) ;;
-                            [diIOADVJXxPSpsWFMrREo]) break ;;
-                            *) break ;;
-                        esac
-                    done
-                fi
             fi
             [[ "$_a" == "-O" || "$_a" == "-D" ]] && { _skip=1; break; }
             [[ "$_prev" == "-P" ]] && _vis_prefix="$_a"
