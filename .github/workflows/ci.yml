@@ -88,4 +88,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-build-${{ matrix.os }}
+      - name: Install Zsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - run: cargo test
+      - run: zsh shell/tests/compsys_options.zsh
