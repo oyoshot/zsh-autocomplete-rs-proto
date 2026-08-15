@@ -50,12 +50,34 @@ _zacrs_compsys_func() {
 
         # Skip probe calls that use -O or -D (internal completion system tests)
         local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0 _disp_array_name=""
-        local _prev=""
+        local _prev="" _is_option_value=0 _prev_flags="" _opt_chars="" _opt_char="" _opt_idx=0
         for _a in "$@"; do
-            if [[ "$_prev" == -[pPSXd] ]]; then
-                : # この "--" はフラグの値 → breakしない
+            _is_option_value=0
+            if (( ${#_prev} >= 2 )); then
+                _prev_flags="${_prev[2,-2]}"
+                if [[ "${_prev[-1]}" == [diIOADVJXxPSpsWFMrRE] && "${_prev_flags//[akqQfenUl12C]/}" == "" ]]; then
+                    _is_option_value=1
+                fi
+            fi
+            if (( _is_option_value )); then
+                : # この "-" / "--" はフラグの値 → breakしない
             else
-                [[ "$_a" == "--" ]] && break
+                [[ "$_a" == "-" || "$_a" == "--" ]] && break
+                if [[ "$_a" == -?* ]]; then
+                    # compadd combines short options (for example `-Qf`).
+                    # Stop at an option that consumes the rest of this argument,
+                    # so an attached value such as `-P/foo` is not scanned for `f`.
+                    _opt_chars="${_a[2,-1]}"
+                    for (( _opt_idx = 1; _opt_idx <= ${#_opt_chars}; _opt_idx++ )); do
+                        _opt_char="${_opt_chars[_opt_idx]}"
+                        case "$_opt_char" in
+                            f) _is_file=1 ;;
+                            [akqQenUl12C]) ;;
+                            [diIOADVJXxPSpsWFMrREo]) break ;;
+                            *) break ;;
+                        esac
+                    done
+                fi
             fi
             [[ "$_a" == "-O" || "$_a" == "-D" ]] && { _skip=1; break; }
             [[ "$_prev" == "-P" ]] && _vis_prefix="$_a"
@@ -63,7 +85,6 @@ _zacrs_compsys_func() {
             [[ "$_prev" == "-S" ]] && _vis_suffix="$_a"
             [[ "$_prev" == "-X" ]] && _xdesc="$_a"
             [[ "$_prev" == "-d" ]] && _disp_array_name="$_a"
-            [[ "$_a" == "-f" ]] && _is_file=1
             _prev="$_a"
         done
 
