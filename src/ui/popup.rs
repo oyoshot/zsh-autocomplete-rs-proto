@@ -47,7 +47,7 @@ impl Popup {
         let term_rows = app.term_rows;
 
         let visible = app.visible_candidate_indices();
-        let filter_display = format!(" {} ", &app.filter_text);
+        let filter_display = format!(" {} ", app.filter_text);
 
         let max_content_width = visible
             .iter()
