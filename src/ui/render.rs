@@ -88,7 +88,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     crossterm::queue!(buf, cursor::Hide)?;
 
     // Top border with filter text
-    let filter_label = format!(" {} ", &app.filter_text);
+    let filter_label = format!(" {} ", app.filter_text);
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
