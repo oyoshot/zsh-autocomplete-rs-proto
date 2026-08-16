@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786905382142,
+  "lastUpdate": 1786906753272,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -12215,6 +12215,270 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 842,
             "range": "± 4",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad3d1dc5a1bd68ef3889190fe347d1e19c97020e",
+          "message": "feat(shell): add zsh init command (#123)",
+          "timestamp": "2026-08-17T03:49:47+09:00",
+          "tree_id": "4139dd5000e520bc0c68ad0b58a30c9113496149",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/ad3d1dc5a1bd68ef3889190fe347d1e19c97020e"
+        },
+        "date": 1786906752183,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 9325,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 88545,
+            "range": "± 468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1117759,
+            "range": "± 38151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 242455,
+            "range": "± 1802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 134229,
+            "range": "± 297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 89121,
+            "range": "± 564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 27334,
+            "range": "± 202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 27267,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 21318,
+            "range": "± 143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 256112,
+            "range": "± 1317",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 264709,
+            "range": "± 17514",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 259146,
+            "range": "± 1170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 246170,
+            "range": "± 1574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 24871,
+            "range": "± 168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 265210,
+            "range": "± 1277",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 2767441,
+            "range": "± 20901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 249895,
+            "range": "± 4382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 193656,
+            "range": "± 1018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 870162,
+            "range": "± 3707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 293741,
+            "range": "± 2064",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 337165,
+            "range": "± 10216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 92143,
+            "range": "± 312582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 164554,
+            "range": "± 53069",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 765003,
+            "range": "± 25038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 571182,
+            "range": "± 7927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 750,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 110,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 34,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 98,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 91,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 61,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 135,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 869,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7719,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 843,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
