@@ -17,6 +17,18 @@ if (( ! ${+_zacrs_embedded_init} )); then
 fi
 
 # Internal state
+# Recover if a previous reload interrupted the temporary type-ahead wrapper.
+# Already-dispatched wrapper calls may still need the saved widget, so keep the
+# alias alive and only restore the public self-insert binding here.
+zmodload zsh/zleparameter 2>/dev/null
+if [[ "${widgets[self-insert]}" == user:_zacrs_deferred_self_insert ]]; then
+    if (( ${+widgets[_zacrs_saved_self_insert]} )); then
+        zle -A _zacrs_saved_self_insert self-insert
+    else
+        zle -A .self-insert self-insert
+    fi
+fi
+
 typeset -g _zacrs_prev_lbuffer=""
 typeset -g _zacrs_suppressed=0
 typeset -g _zacrs_popup_visible=0
@@ -36,7 +48,8 @@ typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
-typeset -gF _zacrs_debounce_until=0.0
+typeset -gi _zacrs_redraw_deferred=0
+typeset -gi _zacrs_self_insert_wrapped=0
 
 # Render header parse results (set by _zacrs_parse_render_header)
 typeset -gi _zacrs_parsed_tty_len=0
@@ -52,7 +65,26 @@ _zacrs_reset_popup_snapshot() {
 
 _zacrs_reset_cache() {
     _zacrs_chain_retry=0
-    _zacrs_debounce_until=0.0
+    _zacrs_redraw_deferred=0
+    _zacrs_restore_self_insert
+}
+
+_zacrs_restore_self_insert() {
+    if (( _zacrs_self_insert_wrapped )); then
+        zle -A _zacrs_saved_self_insert self-insert
+        _zacrs_self_insert_wrapped=0
+    fi
+}
+
+# Temporarily observe the tail of a type-ahead (Shinsoku-typing) batch without
+# permanently replacing another plugin's self-insert widget.
+_zacrs_defer_redraw() {
+    _zacrs_redraw_deferred=1
+    if (( ! _zacrs_self_insert_wrapped )); then
+        zle -A self-insert _zacrs_saved_self_insert
+        zle -N self-insert _zacrs_deferred_self_insert
+        _zacrs_self_insert_wrapped=1
+    fi
 }
 
 _zacrs_end_popup_session() {
@@ -91,9 +123,6 @@ _zacrs_record_popup_snapshot() {
 
 # Try to load zsh/system for sysread (used by daemon complete)
 zmodload zsh/system 2>/dev/null
-# Try to load zsh/datetime for EPOCHREALTIME (debounce timestamps)
-zmodload zsh/datetime 2>/dev/null
-
 # Try to load zsh/net/socket (preferred) or zsh/net/unix for zsocket support
 if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; then
     _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
@@ -734,6 +763,10 @@ _zacrs_complete_popup() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
+    # A non-insert widget may drain the type-ahead batch. Restore the original
+    # self-insert before any unchanged-buffer early return.
+    (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
+
     # LBUFFER が変わってなければスキップ
     if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
         # Defer popup clear — _zacrs_render will do selective clear to avoid flicker.
@@ -746,8 +779,13 @@ _zacrs_line_pre_redraw() {
     # _zacrs_prev_lbuffer so the next redraw retries this buffer.
     if (( PENDING > 0 )); then
         _zacrs_clear_popup
+        # ZLE may consume the rest of a type-ahead batch without invoking the
+        # redraw hook again. The self-insert wrapper resumes on its final key.
+        _zacrs_defer_redraw
         return
     fi
+
+    _zacrs_redraw_deferred=0
 
     _zacrs_prev_lbuffer="$LBUFFER"
 
@@ -770,13 +808,6 @@ _zacrs_line_pre_redraw() {
         lbase="${LBUFFER% *} "
     else
         lbase=""
-    fi
-    # Even with cache-first enabled, a cache miss for a non-empty argument
-    # prefix may have no implicit later redraw. Keep a retry signal for that
-    # final heavy-path attempt.
-    local needs_final_retry=0
-    if [[ -n "$lbase" && -n "$naive_prefix" ]]; then
-        needs_final_retry=1
     fi
     # context_key は引数位置で設定する。候補キャッシュ自体の安全性は
     # daemon 側が cached_prefix/current_prefix を比較して判定する。
@@ -849,19 +880,9 @@ _zacrs_line_pre_redraw() {
         # _cache_rc == 2: daemon unavailable → heavy path へ
     fi
 
-    # Heavy path: compsys + gather (no cache available).
-    # Debounce: when keystrokes arrive faster than compsys can complete,
-    # skip this cycle and let the next line-pre-redraw retry.
-    # Non-empty argument prefixes cannot rely on that later redraw, so bypass
-    # debounce for those buffers and complete the final prefix immediately.
-    if (( ! needs_final_retry )) \
-        && (( ${+EPOCHREALTIME} )) \
-        && (( EPOCHREALTIME < _zacrs_debounce_until )); then
-        _zacrs_clear_popup
-        _zacrs_prev_lbuffer=""
-        return
-    fi
-
+    # Heavy path: compsys + gather (no cache available). The PENDING guards
+    # above and below are the debounce: unlike a timestamp-only delay, they
+    # guarantee that the final keypress still gets a render pass.
     _zacrs_captured=()
     local _zacrs_fd2
     exec {_zacrs_fd2}>&2
@@ -907,9 +928,6 @@ _zacrs_line_pre_redraw() {
         from_gather=1
     fi
 
-    # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)
-    (( ${+EPOCHREALTIME} )) && _zacrs_debounce_until=$(( EPOCHREALTIME + 0.050 ))
-
     _zacrs_should_render_candidates "$candidates_str" "$LBUFFER" "$prefix" \
         || { _zacrs_clear_popup; return }
 
@@ -926,10 +944,7 @@ _zacrs_line_pre_redraw() {
     if (( PENDING > 0 )); then
         _zacrs_clear_popup
         _zacrs_prev_lbuffer=""
-        # Non-empty argument prefixes have no cache reuse path, so request one
-        # more redraw for the final buffer instead of waiting for an implicit
-        # later redisplay that may never happen.
-        (( needs_final_retry )) && zle -R
+        _zacrs_defer_redraw
         return
     fi
 
@@ -998,6 +1013,19 @@ TRAPWINCH() {
 }
 
 # === Register widgets and keybindings ===
+
+# A large type-ahead batch can have only one redraw hook invocation while
+# PENDING is still non-zero. This wrapper is installed only for the remaining
+# batch, delegates to the widget that was active before zacrs, and restores it
+# before resuming the deferred render.
+_zacrs_deferred_self_insert() {
+    zle _zacrs_saved_self_insert -w
+    if (( _zacrs_redraw_deferred && PENDING == 0 )); then
+        _zacrs_restore_self_insert
+        _zacrs_prev_lbuffer=""
+        _zacrs_line_pre_redraw
+    fi
+}
 
 # Popup widget
 zle -N _zacrs_complete_popup
