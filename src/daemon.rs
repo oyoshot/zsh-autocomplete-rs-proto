@@ -580,6 +580,45 @@ impl DaemonServer {
                         Err(()) => return false,
                     };
 
+                // A non-empty command-position prefix can be completed solely by
+                // configured abbreviations.  In that case the shell intentionally
+                // sends no TSV lines; do not mistake it for a popup-cache lookup.
+                if tsv_opt.is_none() && command_position && !prefix.is_empty() {
+                    let response = self.handle_render(
+                        RenderParams {
+                            prefix: prefix.clone(),
+                            cursor_row,
+                            cursor_col,
+                            term_cols,
+                            term_rows,
+                            selected,
+                            command_position,
+                        },
+                        b"",
+                    );
+                    match response {
+                        Response::Success {
+                            tty_bytes,
+                            metadata,
+                        } => {
+                            if let Some(ref key) = popup_key {
+                                self.store_active_popup(key, prefix, String::new());
+                            }
+                            let meta = metadata.unwrap_or_default();
+                            let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
+                            let _ = writer.write_all(&tty_bytes);
+                            let _ = writer.flush();
+                        }
+                        Response::Empty => {
+                            let _ = writeln!(writer, "EMPTY");
+                        }
+                        Response::Error(msg) => {
+                            let _ = writeln!(writer, "ERROR {}", msg);
+                        }
+                    }
+                    return false;
+                }
+
                 // Cache-only request: TSV absent, context_key present.
                 if tsv_opt.is_none() {
                     let active_popup = if context_key.is_none() {
@@ -2620,6 +2659,35 @@ mod tests {
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn handle_text_render_empty_tsv_includes_command_abbreviation() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "gpo".to_string(),
+            expansion: "git push origin HEAD".to_string(),
+            description: String::new(),
+        }];
+        server.store_active_popup(
+            "popup-1",
+            "g".to_string(),
+            "go\tcommand\tcommand\n".to_string(),
+        );
+
+        let output = run_text_request(
+            &mut server,
+            text_request_input(
+                "render 5 2 80 24 popup_key=popup-1 command_position=1",
+                "gpo",
+                None,
+            ),
+        );
+
+        let (_, tty) = read_text_ok(&output);
+        assert!(tty.contains("gpo"), "tty was: {tty:?}");
+        assert!(tty.contains("git push origin HEAD"), "tty was: {tty:?}");
+        assert!(!tty.contains("go"), "tty was: {tty:?}");
     }
 
     #[test]

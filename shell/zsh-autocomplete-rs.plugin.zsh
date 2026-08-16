@@ -909,12 +909,16 @@ _zacrs_line_pre_redraw() {
     # Heavy path 完了後、デバウンスウィンドウを設定 (50ms)
     (( ${+EPOCHREALTIME} )) && _zacrs_debounce_until=$(( EPOCHREALTIME + 0.050 ))
 
-    [[ -z "$candidates_str" ]] && { _zacrs_clear_popup; return }
+    _zacrs_should_render_candidates "$candidates_str" "$LBUFFER" "$prefix" \
+        || { _zacrs_clear_popup; return }
 
     local -a cands
     cands=( ${(f)candidates_str} )
     cands=( ${cands:#} )
-    [[ ${#cands[@]} -eq 0 ]] && { _zacrs_clear_popup; return }
+    if [[ -n "$candidates_str" && ${#cands[@]} -eq 0 ]]; then
+        _zacrs_clear_popup
+        return
+    fi
 
     # Type-ahead arrived during candidate gathering: skip render.
     # Reset prev_lbuffer so the next redraw retries this buffer.
