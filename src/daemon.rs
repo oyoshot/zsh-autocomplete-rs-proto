@@ -573,12 +573,52 @@ impl DaemonServer {
                 context_key,
                 popup_key,
                 command_position,
+                candidates_present,
             }) => {
                 let (mut prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
                         Ok(v) => v,
                         Err(()) => return false,
                     };
+
+                // An explicit empty candidate set can still be completed from
+                // configured abbreviations. Do not conflate it with a cache-only
+                // request, which also has no TSV lines but leaves this flag unset.
+                if tsv_opt.is_none() && candidates_present {
+                    let response = self.handle_render(
+                        RenderParams {
+                            prefix: prefix.clone(),
+                            cursor_row,
+                            cursor_col,
+                            term_cols,
+                            term_rows,
+                            selected,
+                            command_position,
+                        },
+                        b"",
+                    );
+                    match response {
+                        Response::Success {
+                            tty_bytes,
+                            metadata,
+                        } => {
+                            if let Some(ref key) = popup_key {
+                                self.store_active_popup(key, prefix, String::new());
+                            }
+                            let meta = metadata.unwrap_or_default();
+                            let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
+                            let _ = writer.write_all(&tty_bytes);
+                            let _ = writer.flush();
+                        }
+                        Response::Empty => {
+                            let _ = writeln!(writer, "EMPTY");
+                        }
+                        Response::Error(msg) => {
+                            let _ = writeln!(writer, "ERROR {}", msg);
+                        }
+                    }
+                    return false;
+                }
 
                 // Cache-only request: TSV absent, context_key present.
                 if tsv_opt.is_none() {
@@ -1469,9 +1509,10 @@ fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io:
 
 /// Reads prefix line and optional TSV candidate payload from the text protocol stream.
 ///
-/// Returns `(prefix, None)` when `END` follows the prefix line directly
-/// (no TSV candidates), which signals a daemon cache lookup attempt.
-/// Returns `(prefix, Some(tsv))` when TSV candidates are present.
+/// Returns `(prefix, None)` when `END` follows the prefix line directly and
+/// `(prefix, Some(tsv))` when TSV candidates are present. The request header's
+/// `candidates_present` flag distinguishes an explicit empty candidate set from
+/// a cache-only request; this parser only reports the payload shape.
 fn read_prefix_and_candidates(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
@@ -2623,6 +2664,35 @@ mod tests {
     }
 
     #[test]
+    fn handle_text_render_empty_tsv_includes_command_abbreviation() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "gpo".to_string(),
+            expansion: "git push origin HEAD".to_string(),
+            description: String::new(),
+        }];
+        server.store_active_popup(
+            "popup-1",
+            "g".to_string(),
+            "go\tcommand\tcommand\n".to_string(),
+        );
+
+        let output = run_text_request(
+            &mut server,
+            text_request_input(
+                "render 5 2 80 24 popup_key=popup-1 command_position=1 candidates_present=1",
+                "gpo",
+                None,
+            ),
+        );
+
+        let (_, tty) = read_text_ok(&output);
+        assert!(tty.contains("gpo"), "tty was: {tty:?}");
+        assert!(tty.contains("git push origin HEAD"), "tty was: {tty:?}");
+        assert!(!tty.contains("go"), "tty was: {tty:?}");
+    }
+
+    #[test]
     fn handle_complete_confirm_uses_command_override_for_empty_kind_in_command_position() {
         let mut server = test_server();
         server.config.suffixes = server.config.suffixes.clone().with_override("command", "!");
@@ -2898,7 +2968,7 @@ mod tests {
         let output = run_text_request(
             &mut server,
             text_request_input(
-                "render 5 2 80 24 context_key=ctx-1 popup_key=popup-1",
+                "render 5 2 80 24 context_key=ctx-1 popup_key=popup-1 command_position=1",
                 "st",
                 None,
             ),

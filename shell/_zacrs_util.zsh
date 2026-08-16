@@ -53,6 +53,13 @@ _zacrs_is_cmd_pos() {
     return 1
 }
 
+# Render command-position requests even when compsys produced no candidates.
+# The Rust side may still contribute configured abbreviations.
+# Args: $1=candidates $2=buffer $3=prefix
+_zacrs_should_render_candidates() {
+    [[ -n "$1" ]] || _zacrs_is_cmd_pos "$2" "$3"
+}
+
 # Infer the shell command kind for a bare command-position token.
 # Sets REPLY to one of: alias, builtin, function, command.
 _zacrs_command_kind() {

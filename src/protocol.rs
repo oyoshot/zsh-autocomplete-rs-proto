@@ -56,6 +56,7 @@ pub struct TextRenderRequest {
     pub context_key: Option<String>,
     pub popup_key: Option<String>,
     pub command_position: bool,
+    pub candidates_present: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,6 +402,7 @@ impl TextRequest {
                 let mut context_key = None;
                 let mut popup_key = None;
                 let mut command_position = false;
+                let mut candidates_present = false;
                 for token in rest {
                     if let Some(value) = token.strip_prefix("selected=") {
                         selected = value.parse().ok();
@@ -410,6 +412,8 @@ impl TextRequest {
                         popup_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("command_position=") {
                         command_position = value == "1";
+                    } else if let Some(value) = token.strip_prefix("candidates_present=") {
+                        candidates_present = value == "1";
                     }
                 }
                 Some(Self::Render(TextRenderRequest {
@@ -421,6 +425,7 @@ impl TextRequest {
                     context_key,
                     popup_key,
                     command_position,
+                    candidates_present,
                 }))
             }
             [
@@ -1006,7 +1011,7 @@ mod tests {
     #[test]
     fn text_render_request_header_parses_popup_key() {
         let parsed = TextRequest::parse_header(
-            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup command_position=1",
+            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup command_position=1 candidates_present=1",
         )
         .unwrap();
         assert_eq!(
@@ -1020,6 +1025,7 @@ mod tests {
                 context_key: Some("ctx".to_string()),
                 popup_key: Some("popup".to_string()),
                 command_position: true,
+                candidates_present: true,
             })
         );
     }
