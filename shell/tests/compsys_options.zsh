@@ -37,4 +37,20 @@ assert_file_flag 0 'value after combined suffix option containing f' -Qs -foo ca
 assert_file_flag 0 'candidate after option terminator' - -foo
 assert_file_flag 0 'candidate after double option terminator' -- -foo
 
+assert_path_kind() {
+    local expected=$1 path=$2 description=$3
+    _zacrs_path_candidate_kind "$path"
+    if [[ "$REPLY" != "$expected" ]]; then
+        print -u2 -r -- "not ok: ${description} (expected=${expected}, actual=${REPLY})"
+        (( ++failures ))
+    else
+        print -r -- "ok: ${description}"
+    fi
+}
+
+assert_path_kind directory "$test_dir" 'directory candidate keeps directory kind'
+assert_path_kind file "$0" 'file candidate keeps file kind'
+HOME="$test_dir" assert_path_kind directory '~/' 'home-relative directory candidate keeps directory kind'
+HOME="$test_dir" assert_path_kind file '~/compsys_options.zsh' 'home-relative file candidate keeps file kind'
+
 (( failures == 0 ))
