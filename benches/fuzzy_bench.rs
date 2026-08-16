@@ -1,7 +1,9 @@
 mod helpers;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use zsh_autocomplete_rs::app::App;
+use zsh_autocomplete_rs::candidate::Candidate;
+use zsh_autocomplete_rs::config::Abbreviation;
 use zsh_autocomplete_rs::fuzzy::FuzzyMatcher;
 
 fn filter_scaling(c: &mut Criterion) {
@@ -126,6 +128,45 @@ fn command_typo_rescue(c: &mut Criterion) {
     group.finish();
 }
 
+fn abbreviation_injection_and_filter(c: &mut Criterion) {
+    let native_candidates = helpers::generate_candidates(1_000);
+    let mut group = c.benchmark_group("abbreviation_injection_and_filter");
+
+    for abbreviation_count in [0, 100, 1_000] {
+        let abbreviations: Vec<_> = (0..abbreviation_count)
+            .map(|index| Abbreviation {
+                trigger: format!("abbr-{index}"),
+                expansion: format!("command-{index} --option '{{{{cursor}}}}'"),
+                description: format!("user abbreviation {index}"),
+            })
+            .collect();
+        let mut matcher = FuzzyMatcher::new();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(abbreviation_count),
+            &abbreviations,
+            |b, abbreviations| {
+                b.iter_batched(
+                    || native_candidates.clone(),
+                    |mut candidates| {
+                        candidates.extend(abbreviations.iter().map(|abbr| {
+                            Candidate::abbreviation(
+                                abbr.trigger.clone(),
+                                abbr.expansion.clone(),
+                                abbr.description.clone(),
+                            )
+                        }));
+                        matcher.filter(&candidates, "abbr")
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn app_backspace_sequence(c: &mut Criterion) {
     let candidates = helpers::generate_candidates(1_000);
     let mut group = c.benchmark_group("app_backspace_sequence");
@@ -164,6 +205,7 @@ criterion_group!(
     filter_unicode_scaling,
     filter_sequence,
     command_typo_rescue,
+    abbreviation_injection_and_filter,
     app_backspace_sequence
 );
 criterion_main!(benches);

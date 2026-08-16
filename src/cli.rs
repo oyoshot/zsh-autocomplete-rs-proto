@@ -67,6 +67,9 @@ pub enum Command {
         #[arg(long, default_value_t = 0)]
         cursor_col: u16,
 
+        #[arg(long, default_value_t = false)]
+        command_position: bool,
+
         /// Pre-select the N-th filtered candidate (0-indexed)
         #[arg(long)]
         selected: Option<usize>,

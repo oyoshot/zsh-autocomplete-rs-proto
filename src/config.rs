@@ -1,6 +1,6 @@
 use crossterm::style::Color;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -15,6 +15,7 @@ pub struct Config {
     pub auto_insert_unambiguous: bool,
     pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
+    pub abbreviations: Vec<Abbreviation>,
     theme_raw: ThemeRaw,
 }
 
@@ -25,6 +26,7 @@ impl Default for Config {
             auto_insert_unambiguous: true,
             suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
+            abbreviations: Vec::new(),
             theme_raw: ThemeRaw::default(),
         }
     }
@@ -59,6 +61,31 @@ struct ConfigFile {
     completion: CompletionRaw,
     #[serde(default)]
     suffix: SuffixRaw,
+    #[serde(default)]
+    abbreviations: HashMap<String, String>,
+    #[serde(default, rename = "abbreviation")]
+    abbreviation: Vec<AbbreviationRaw>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Abbreviation {
+    pub trigger: String,
+    pub expansion: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AbbreviationRaw {
+    trigger: String,
+    expansion: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_abbreviation_scope")]
+    scope: String,
+}
+
+fn default_abbreviation_scope() -> String {
+    "command".to_string()
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -222,6 +249,34 @@ impl Default for Theme {
 }
 
 impl Config {
+    fn abbreviations_from_file(file: &ConfigFile) -> Vec<Abbreviation> {
+        let mut by_trigger: BTreeMap<_, _> = file
+            .abbreviations
+            .iter()
+            .map(|(trigger, expansion)| Abbreviation {
+                trigger: trigger.clone(),
+                expansion: expansion.clone(),
+                description: String::new(),
+            })
+            .map(|abbr| (abbr.trigger.clone(), abbr))
+            .collect();
+        for abbr in file
+            .abbreviation
+            .iter()
+            .filter(|abbr| abbr.scope == "command")
+        {
+            by_trigger.insert(
+                abbr.trigger.clone(),
+                Abbreviation {
+                    trigger: abbr.trigger.clone(),
+                    expansion: abbr.expansion.clone(),
+                    description: abbr.description.clone(),
+                },
+            );
+        }
+        by_trigger.into_values().collect()
+    }
+
     pub fn load() -> Self {
         let Some(path) = config_path() else {
             return Config::default();
@@ -230,11 +285,13 @@ impl Config {
             return Config::default();
         };
         let file: ConfigFile = toml::from_str(&content).unwrap_or_default();
+        let abbreviations = Self::abbreviations_from_file(&file);
         Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
+            abbreviations,
             theme_raw: file.theme,
         }
     }
@@ -494,6 +551,39 @@ mod tests {
         assert!(
             file.completion.auto_insert_unambiguous,
             "fallback default must be true"
+        );
+    }
+
+    #[test]
+    fn abbreviations_parse_shorthand_and_detailed_forms() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+[abbreviations]
+gs = "git status"
+
+[[abbreviation]]
+trigger = "gcm"
+expansion = "git commit -m '{{cursor}}'"
+description = "commit with a message"
+scope = "command"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Config::abbreviations_from_file(&file),
+            vec![
+                Abbreviation {
+                    trigger: "gcm".into(),
+                    expansion: "git commit -m '{{cursor}}'".into(),
+                    description: "commit with a message".into(),
+                },
+                Abbreviation {
+                    trigger: "gs".into(),
+                    expansion: "git status".into(),
+                    description: String::new(),
+                },
+            ]
         );
     }
 

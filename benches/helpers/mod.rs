@@ -143,6 +143,8 @@ pub fn generate_candidates(count: usize) -> Vec<Candidate> {
             text,
             description,
             kind,
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
@@ -170,6 +172,8 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
             text,
             description,
             kind,
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
@@ -181,21 +185,29 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             text: "claude".to_string(),
             description: "claude command".to_string(),
             kind: command_kind(rescue),
+            insert_text: None,
+            cursor_offset: None,
         },
         Candidate {
             text: "clang-include-fixer".to_string(),
             description: "clang include fixer".to_string(),
             kind: command_kind(rescue),
+            insert_text: None,
+            cursor_offset: None,
         },
         Candidate {
             text: "clang-include-cleaner".to_string(),
             description: "clang include cleaner".to_string(),
             kind: command_kind(rescue),
+            insert_text: None,
+            cursor_offset: None,
         },
         Candidate {
             text: "cargo-install-update".to_string(),
             description: "cargo install update".to_string(),
             kind: command_kind(rescue),
+            insert_text: None,
+            cursor_offset: None,
         },
     ];
 
@@ -210,6 +222,8 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             text,
             description: format!("{} command", base),
             kind: command_kind(rescue),
+            insert_text: None,
+            cursor_offset: None,
         });
     }
 
@@ -243,6 +257,8 @@ pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate
             text,
             description: String::new(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
@@ -293,6 +309,8 @@ pub fn generate_cjk_candidates(count: usize) -> Vec<Candidate> {
             text,
             description,
             kind,
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
@@ -311,6 +329,8 @@ pub fn generate_no_description_candidates(count: usize) -> Vec<Candidate> {
             text,
             description: String::new(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
@@ -335,6 +355,8 @@ pub fn generate_long_description_candidates(count: usize) -> Vec<Candidate> {
             text,
             description,
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         });
     }
     candidates
