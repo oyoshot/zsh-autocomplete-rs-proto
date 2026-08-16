@@ -1330,12 +1330,15 @@ impl DaemonServer {
                                 Some(c) => {
                                     let _ = write_apply_result(
                                         writer,
-                                        &ApplyResult::dismiss_with_space(
-                                            c.text_for_dismiss_with_space(
-                                                &self.config.suffixes,
-                                                command_position,
-                                            ),
-                                        ),
+                                        &ApplyResult {
+                                            cursor_offset: c.cursor_offset,
+                                            ..ApplyResult::dismiss_with_space(
+                                                c.text_for_dismiss_with_space(
+                                                    &self.config.suffixes,
+                                                    command_position,
+                                                ),
+                                            )
+                                        },
                                     );
                                 }
                                 None => {
@@ -1791,7 +1794,7 @@ mod tests {
         let mut reader = BufReader::new(Cursor::new(bytes));
         let mut done = String::new();
         reader.read_line(&mut done).unwrap();
-        TextCompleteResult::read_from(&mut reader, done.trim_end()).unwrap()
+        TextCompleteResult::read_from(&mut reader, done.trim_end_matches(['\r', '\n'])).unwrap()
     }
 
     fn test_server() -> DaemonServer {
@@ -2546,6 +2549,45 @@ mod tests {
         assert_eq!(result.cursor_offset, Some(15));
         assert!(result.execute);
         assert!(!result.chain);
+    }
+
+    #[test]
+    fn handle_complete_space_expands_abbreviation_and_preserves_cursor_offset() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "gcm".to_string(),
+            expansion: "git commit -m '{{cursor}}'".to_string(),
+            description: "commit with a message".to_string(),
+        }];
+
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gcm".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "cargo\tcommand\tcommand\n",
+            &[SessionMessage::Key(b" ")],
+        );
+
+        let _ = read_frame(&mut reader);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        let result = read_text_complete_result(&bytes);
+        assert_eq!(result.code, 2);
+        assert_eq!(result.text, "git commit -m '' ");
+        assert_eq!(result.cursor_offset, Some(15));
+        assert!(!result.execute);
+        assert!(result.chain);
     }
 
     #[test]
