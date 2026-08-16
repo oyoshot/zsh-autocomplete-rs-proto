@@ -581,9 +581,9 @@ impl DaemonServer {
                         Err(()) => return false,
                     };
 
-                // A non-empty command-position prefix can be completed solely by
-                // configured abbreviations.  In that case the shell intentionally
-                // sends no TSV lines; do not mistake it for a popup-cache lookup.
+                // An explicit empty candidate set can still be completed from
+                // configured abbreviations. Do not conflate it with a cache-only
+                // request, which also has no TSV lines but leaves this flag unset.
                 if tsv_opt.is_none() && candidates_present {
                     let response = self.handle_render(
                         RenderParams {
@@ -1509,9 +1509,10 @@ fn drain_key_payload<R: std::io::Read>(reader: &mut R, byte_count: usize) -> io:
 
 /// Reads prefix line and optional TSV candidate payload from the text protocol stream.
 ///
-/// Returns `(prefix, None)` when `END` follows the prefix line directly
-/// (no TSV candidates), which signals a daemon cache lookup attempt.
-/// Returns `(prefix, Some(tsv))` when TSV candidates are present.
+/// Returns `(prefix, None)` when `END` follows the prefix line directly and
+/// `(prefix, Some(tsv))` when TSV candidates are present. The request header's
+/// `candidates_present` flag distinguishes an explicit empty candidate set from
+/// a cache-only request; this parser only reports the payload shape.
 fn read_prefix_and_candidates(
     reader: &mut impl BufRead,
     writer: &mut impl Write,

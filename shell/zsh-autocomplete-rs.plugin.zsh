@@ -172,8 +172,8 @@ _zacrs_parse_render_header() {
 
 # Connect to daemon, send a render request, and parse the response header.
 # Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional) $7=command-position (0|1) $8=candidates-present (0|1)
-# When $4 (candidates) is empty and $6 (context_key) is non-empty the request is
-# a cache-only attempt: no TSV is sent and the daemon resolves from its own cache.
+# When candidates are empty, $8 distinguishes an explicit empty candidate set
+# from a cache-only request. Cache-first and resize callers leave $8 unset.
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
 # On EMPTY     (return 1): fd already closed.
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
