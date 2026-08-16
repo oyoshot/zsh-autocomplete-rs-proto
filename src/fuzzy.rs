@@ -335,8 +335,9 @@ fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
-    a.kind_priority()
-        .cmp(&b.kind_priority())
+    b.is_user_defined()
+        .cmp(&a.is_user_defined())
+        .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.text.cmp(&b.text))
 }
@@ -344,6 +345,7 @@ fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
 fn compare_scored_candidates(a: &Candidate, a_score: u32, b: &Candidate, b_score: u32) -> Ordering {
     b_score
         .cmp(&a_score)
+        .then_with(|| b.is_user_defined().cmp(&a.is_user_defined()))
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
         .then_with(|| a.text.cmp(&b.text))
@@ -631,6 +633,32 @@ mod tests {
         let results = m.filter(&candidates, "gi");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
         assert_eq!(texts[0], "git", "git should be first: {texts:?}");
+    }
+
+    #[test]
+    fn user_defined_abbreviation_wins_equal_scored_match() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = vec![
+            Candidate::parse_line("gs\tcommand\tcommand"),
+            Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
+        ];
+
+        let results = m.filter(&candidates, "gs");
+
+        assert_eq!(results[0].candidate.kind, "abbreviation");
+    }
+
+    #[test]
+    fn user_defined_abbreviations_lead_empty_query() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = vec![
+            Candidate::parse_line("git\tcommand\tcommand"),
+            Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
+        ];
+
+        let results = m.filter(&candidates, "");
+
+        assert_eq!(results[0].candidate.kind, "abbreviation");
     }
 
     #[test]

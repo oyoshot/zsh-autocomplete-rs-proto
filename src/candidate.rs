@@ -30,6 +30,10 @@ impl Candidate {
         self.kind.ends_with("_rescue")
     }
 
+    pub fn is_user_defined(&self) -> bool {
+        self.base_kind() == "abbreviation"
+    }
+
     pub fn text_with_suffix(&self, suffixes: &SuffixConfig) -> String {
         let Some(suffix) = suffixes.suffix_for_kind(self.base_kind()) else {
             return self.text.clone();
