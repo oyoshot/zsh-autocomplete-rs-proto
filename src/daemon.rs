@@ -573,6 +573,7 @@ impl DaemonServer {
                 context_key,
                 popup_key,
                 command_position,
+                candidates_present,
             }) => {
                 let (mut prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
@@ -583,7 +584,7 @@ impl DaemonServer {
                 // A non-empty command-position prefix can be completed solely by
                 // configured abbreviations.  In that case the shell intentionally
                 // sends no TSV lines; do not mistake it for a popup-cache lookup.
-                if tsv_opt.is_none() && command_position && !prefix.is_empty() {
+                if tsv_opt.is_none() && candidates_present {
                     let response = self.handle_render(
                         RenderParams {
                             prefix: prefix.clone(),
@@ -2678,7 +2679,7 @@ mod tests {
         let output = run_text_request(
             &mut server,
             text_request_input(
-                "render 5 2 80 24 popup_key=popup-1 command_position=1",
+                "render 5 2 80 24 popup_key=popup-1 command_position=1 candidates_present=1",
                 "gpo",
                 None,
             ),
@@ -2966,7 +2967,7 @@ mod tests {
         let output = run_text_request(
             &mut server,
             text_request_input(
-                "render 5 2 80 24 context_key=ctx-1 popup_key=popup-1",
+                "render 5 2 80 24 context_key=ctx-1 popup_key=popup-1 command_position=1",
                 "st",
                 None,
             ),
