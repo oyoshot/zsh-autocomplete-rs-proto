@@ -1,6 +1,6 @@
 use zsh_autocomplete_rs::app::App;
 use zsh_autocomplete_rs::candidate::Candidate;
-use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
+use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction, Shell};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::protocol::TextCompleteResult;
 use zsh_autocomplete_rs::{client, config, daemon, protocol, tty, ui};
@@ -10,6 +10,32 @@ use std::io::{self, BufRead, BufWriter, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process;
 use std::thread;
+
+const ZSH_INIT_PARTS: &[&[u8]] = &[
+    b"typeset -g _zacrs_embedded_init=1\n",
+    include_bytes!("../shell/_zacrs_util.zsh"),
+    include_bytes!("../shell/_zacrs_gather.zsh"),
+    include_bytes!("../shell/_zacrs_compsys.zsh"),
+    include_bytes!("../shell/_zacrs_protocol.zsh"),
+    include_bytes!("../shell/zsh-autocomplete-rs.plugin.zsh"),
+    b"unset _zacrs_embedded_init\n",
+];
+
+fn run_init(shell: Shell) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    match shell {
+        Shell::Zsh => {
+            for part in ZSH_INIT_PARTS {
+                writer.write_all(part)?;
+                if !part.ends_with(b"\n") {
+                    writer.write_all(b"\n")?;
+                }
+            }
+        }
+    }
+    writer.flush()
+}
 
 fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
@@ -252,6 +278,13 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
 fn main() {
     let cli = Cli::parse();
     match cli.command {
+        Command::Init { shell } => match run_init(shell) {
+            Ok(()) => process::exit(0),
+            Err(e) => {
+                eprintln!("init error: {}", e);
+                process::exit(1);
+            }
+        },
         Command::Complete {
             prefix,
             cursor_row,
