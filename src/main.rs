@@ -144,8 +144,8 @@ fn run_render(
     cursor_row: u16,
     cursor_col: u16,
     selected: Option<usize>,
-    theme: &config::Theme,
-    auto_insert_unambiguous: bool,
+    command_position: bool,
+    config: &config::Config,
 ) -> io::Result<i32> {
     // Read raw stdin before trying daemon (we need it for both paths)
     let raw_stdin: Vec<u8> = {
@@ -155,9 +155,14 @@ fn run_render(
     };
 
     // Try daemon first
-    if let Ok(resp) =
-        client::try_daemon_render(&prefix, cursor_row, cursor_col, selected, &raw_stdin)
-    {
+    if let Ok(resp) = client::try_daemon_render(
+        &prefix,
+        cursor_row,
+        cursor_col,
+        selected,
+        command_position,
+        &raw_stdin,
+    ) {
         let mut tty = tty::open_tty_write()?;
         tty.write_all(&resp.tty_bytes)?;
         tty.flush()?;
@@ -168,12 +173,21 @@ fn run_render(
     }
 
     // Fallback: direct execution
-    let candidates: Vec<Candidate> = std::str::from_utf8(&raw_stdin)
+    let mut candidates: Vec<Candidate> = std::str::from_utf8(&raw_stdin)
         .unwrap_or("")
         .lines()
         .filter(|line| !line.is_empty())
         .map(Candidate::parse_line)
         .collect();
+    if command_position {
+        candidates.extend(config.abbreviations.iter().map(|abbr| {
+            Candidate::abbreviation(
+                abbr.trigger.clone(),
+                abbr.expansion.clone(),
+                abbr.description.clone(),
+            )
+        }));
+    }
 
     if candidates.is_empty() {
         return Ok(1);
@@ -184,7 +198,7 @@ fn run_render(
         return Ok(1);
     }
 
-    if !auto_insert_unambiguous {
+    if !config.auto_insert_unambiguous {
         app.reset_filter_to_prefix();
     }
 
@@ -199,7 +213,7 @@ fn run_render(
         app.set_selected(idx);
     }
 
-    ui::render::draw_popup_only(&mut tty, &app, theme)?;
+    ui::render::draw_popup_only(&mut tty, &app, &config.theme())?;
 
     let popup = ui::popup::Popup::compute(&app);
     let candidates_tsv = std::str::from_utf8(&raw_stdin).unwrap_or("");
@@ -287,17 +301,16 @@ fn main() {
             cursor_row,
             cursor_col,
             selected,
+            command_position,
         } => {
             let cfg = config::Config::load();
-            let auto_insert_unambiguous = cfg.auto_insert_unambiguous;
-            let theme = cfg.theme();
             match run_render(
                 prefix,
                 cursor_row,
                 cursor_col,
                 selected,
-                &theme,
-                auto_insert_unambiguous,
+                command_position,
+                &cfg,
             ) {
                 Ok(code) => process::exit(code),
                 Err(e) => {

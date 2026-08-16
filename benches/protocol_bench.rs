@@ -30,6 +30,7 @@ fn make_render_request(candidate_count: usize) -> Request {
         term_rows: 24,
         candidates_tsv: tsv,
         selected: Some(0),
+        command_position: false,
     }
 }
 

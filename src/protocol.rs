@@ -25,6 +25,7 @@ pub enum Request {
         candidates_tsv: Vec<u8>,
         /// Pre-select the N-th filtered candidate before rendering.
         selected: Option<u16>,
+        command_position: bool,
     },
     Clear {
         popup_row: u16,
@@ -54,6 +55,7 @@ pub struct TextRenderRequest {
     pub selected: Option<usize>,
     pub context_key: Option<String>,
     pub popup_key: Option<String>,
+    pub command_position: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +105,7 @@ pub struct TextCompleteResult {
     pub chain: bool,
     pub execute: bool,
     pub restore_text: String,
+    pub cursor_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +171,7 @@ impl Request {
                 term_rows,
                 candidates_tsv,
                 selected,
+                command_position,
             } => {
                 payload.push(CMD_RENDER);
                 let prefix_bytes = prefix.as_bytes();
@@ -178,7 +182,8 @@ impl Request {
                 write_u16(&mut payload, *term_cols);
                 write_u16(&mut payload, *term_rows);
                 // Flags byte: bit 0 = has_selected
-                let flags: u8 = if selected.is_some() { 0x01 } else { 0x00 };
+                let flags: u8 = if selected.is_some() { 0x01 } else { 0x00 }
+                    | if *command_position { 0x02 } else { 0x00 };
                 payload.push(flags);
                 if let Some(sel) = selected {
                     write_u16(&mut payload, *sel);
@@ -257,6 +262,7 @@ impl Request {
                 } else {
                     None
                 };
+                let command_position = flags & 0x02 != 0;
                 let candidates_tsv = cursor.to_vec();
                 Ok(Request::Render {
                     prefix,
@@ -266,6 +272,7 @@ impl Request {
                     term_rows,
                     candidates_tsv,
                     selected,
+                    command_position,
                 })
             }
             CMD_CLEAR => {
@@ -393,6 +400,7 @@ impl TextRequest {
                 let mut selected = None;
                 let mut context_key = None;
                 let mut popup_key = None;
+                let mut command_position = false;
                 for token in rest {
                     if let Some(value) = token.strip_prefix("selected=") {
                         selected = value.parse().ok();
@@ -400,6 +408,8 @@ impl TextRequest {
                         context_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("popup_key=") {
                         popup_key = Some(value.to_string());
+                    } else if let Some(value) = token.strip_prefix("command_position=") {
+                        command_position = value == "1";
                     }
                 }
                 Some(Self::Render(TextRenderRequest {
@@ -410,6 +420,7 @@ impl TextRequest {
                     selected,
                     context_key,
                     popup_key,
+                    command_position,
                 }))
             }
             [
@@ -593,11 +604,18 @@ impl TextFrameHeader {
 impl TextCompleteResult {
     pub fn write_to(&self, mut writer: impl Write) -> io::Result<()> {
         writeln!(writer, "DONE {} {}", self.code, self.text)?;
-        writeln!(
+        write!(
             writer,
-            "APPLY chain={} execute={} restore_hex={}",
+            "APPLY chain={} execute={}",
             if self.chain { 1 } else { 0 },
             if self.execute { 1 } else { 0 },
+        )?;
+        if let Some(cursor_offset) = self.cursor_offset {
+            write!(writer, " cursor_offset={cursor_offset}")?;
+        }
+        writeln!(
+            writer,
+            " restore_hex={}",
             encode_hex_bytes(self.restore_text.as_bytes())
         )?;
         writer.flush()
@@ -641,11 +659,14 @@ impl TextCompleteResult {
 
         let mut chain = false;
         let mut execute = false;
+        let mut cursor_offset = None;
         for token in flag_fields.split_whitespace() {
             if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
             } else if let Some(value) = token.strip_prefix("execute=") {
                 execute = value == "1";
+            } else if let Some(value) = token.strip_prefix("cursor_offset=") {
+                cursor_offset = value.parse().ok();
             }
         }
 
@@ -655,6 +676,7 @@ impl TextCompleteResult {
             chain,
             execute,
             restore_text,
+            cursor_offset,
         })
     }
 }
@@ -712,6 +734,7 @@ mod tests {
             term_rows: 24,
             candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
             selected: None,
+            command_position: false,
         };
         let bytes = req.serialize();
         let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
@@ -724,6 +747,7 @@ mod tests {
                 term_rows,
                 candidates_tsv,
                 selected,
+                command_position,
             } => {
                 assert_eq!(prefix, "gi");
                 assert_eq!(cursor_row, 5);
@@ -732,6 +756,7 @@ mod tests {
                 assert_eq!(term_rows, 24);
                 assert!(candidates_tsv.starts_with(b"git\t"));
                 assert_eq!(selected, None);
+                assert!(!command_position);
             }
             _ => panic!("expected Render"),
         }
@@ -747,6 +772,7 @@ mod tests {
             term_rows: 24,
             candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
             selected: Some(1),
+            command_position: true,
         };
         let bytes = req.serialize();
         let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
@@ -754,9 +780,11 @@ mod tests {
             Request::Render {
                 selected,
                 candidates_tsv,
+                command_position,
                 ..
             } => {
                 assert_eq!(selected, Some(1));
+                assert!(command_position);
                 assert!(candidates_tsv.starts_with(b"git\t"));
             }
             _ => panic!("expected Render"),
@@ -964,7 +992,7 @@ mod tests {
     #[test]
     fn text_render_request_header_parses_popup_key() {
         let parsed = TextRequest::parse_header(
-            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup",
+            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup command_position=1",
         )
         .unwrap();
         assert_eq!(
@@ -977,6 +1005,7 @@ mod tests {
                 selected: Some(1),
                 context_key: Some("ctx".to_string()),
                 popup_key: Some("popup".to_string()),
+                command_position: true,
             })
         );
     }
@@ -1019,6 +1048,7 @@ mod tests {
             chain: true,
             execute: false,
             restore_text: "cargo ".to_string(),
+            cursor_offset: None,
         };
 
         let mut buf = Vec::new();
@@ -1043,6 +1073,7 @@ mod tests {
             chain: false,
             execute: false,
             restore_text: "--foo=chain=1 execute=0".to_string(),
+            cursor_offset: None,
         };
 
         let mut buf = Vec::new();

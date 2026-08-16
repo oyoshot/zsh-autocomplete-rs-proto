@@ -133,6 +133,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
             text: "cargo-build".to_string(),
             description: "compile the current package".to_string(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("ascii_with_desc"),
@@ -148,6 +150,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
             text: "cargo-build".to_string(),
             description: String::new(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("ascii_no_desc"),
@@ -163,6 +167,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
             text: "ファイル一覧表示".to_string(),
             description: "ディレクトリの内容を表示するコマンド".to_string(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("cjk_with_desc"),
@@ -178,6 +184,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
             text: "ファイル一覧表示".to_string(),
             description: String::new(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("cjk_no_desc"),
@@ -193,6 +201,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
             text: "git-ブランチ一覧".to_string(),
             description: "list all branches ブランチ表示".to_string(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("mixed_with_desc"),
@@ -210,6 +220,8 @@ fn bench_layout_candidate(c: &mut Criterion) {
                           and optimizations applied across the entire workspace"
                 .to_string(),
             kind: "command".to_string(),
+            insert_text: None,
+            cursor_offset: None,
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("long_desc_truncation"),

@@ -5,6 +5,8 @@ pub struct Candidate {
     pub text: String,
     pub description: String,
     pub kind: String,
+    pub insert_text: Option<String>,
+    pub cursor_offset: Option<usize>,
 }
 
 impl Candidate {
@@ -52,6 +54,9 @@ impl Candidate {
         suffixes: &SuffixConfig,
         is_command_position: bool,
     ) -> String {
+        if let Some(insert_text) = &self.insert_text {
+            return insert_text.clone();
+        }
         if is_command_position
             && self.kind.is_empty()
             && !self.text.ends_with('/')
@@ -89,6 +94,35 @@ impl Candidate {
             text,
             description,
             kind,
+            insert_text: None,
+            cursor_offset: None,
+        }
+    }
+
+    pub fn abbreviation(trigger: String, expansion: String, description: String) -> Self {
+        const CURSOR_MARKER: &str = "{{cursor}}";
+        let (insert_text, cursor_offset) = match expansion.find(CURSOR_MARKER) {
+            Some(offset) => (
+                expansion.replacen(CURSOR_MARKER, "", 1),
+                Some(expansion[..offset].chars().count()),
+            ),
+            None => (expansion, None),
+        };
+        let expansion_preview = insert_text
+            .replace('\r', "\\r")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t");
+        let description = if description.is_empty() {
+            expansion_preview
+        } else {
+            format!("{expansion_preview} — {description}")
+        };
+        Self {
+            text: trigger,
+            description,
+            kind: "abbreviation".to_string(),
+            insert_text: Some(insert_text),
+            cursor_offset,
         }
     }
 }
@@ -127,6 +161,41 @@ mod tests {
         assert_eq!(c.text, "src/");
         assert_eq!(c.description, "directory");
         assert_eq!(c.kind, "directory");
+    }
+
+    #[test]
+    fn abbreviation_separates_trigger_from_insert_text() {
+        let c = Candidate::abbreviation(
+            "gcm".to_string(),
+            "git commit -m '{{cursor}}'".to_string(),
+            "commit with a message".to_string(),
+        );
+        assert_eq!(c.text, "gcm");
+        assert_eq!(c.insert_text.as_deref(), Some("git commit -m ''"));
+        assert_eq!(c.cursor_offset, Some(15));
+        assert_eq!(c.description, "git commit -m '' — commit with a message");
+        assert_eq!(c.kind, "abbreviation");
+    }
+
+    #[test]
+    fn abbreviation_uses_expansion_as_description_when_label_is_absent() {
+        let c = Candidate::abbreviation("gs".into(), "git status".into(), String::new());
+        assert_eq!(c.description, "git status");
+    }
+
+    #[test]
+    fn abbreviation_escapes_control_whitespace_in_description() {
+        let c = Candidate::abbreviation("multi".into(), "printf 'a\tb\n'".into(), String::new());
+        assert_eq!(c.description, "printf 'a\\tb\\n'");
+    }
+
+    #[test]
+    fn abbreviation_dismiss_with_space_expands_and_appends_space() {
+        let c = Candidate::abbreviation("gs".into(), "git status".into(), String::new());
+        assert_eq!(
+            c.text_for_dismiss_with_space(&SuffixConfig::default(), true),
+            "git status "
+        );
     }
 
     #[test]

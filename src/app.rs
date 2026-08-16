@@ -363,6 +363,8 @@ mod tests {
                 text: s.to_string(),
                 description: String::new(),
                 kind: String::new(),
+                insert_text: None,
+                cursor_offset: None,
             })
             .collect()
     }

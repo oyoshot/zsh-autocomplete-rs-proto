@@ -428,6 +428,8 @@ mod tests {
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),
+            insert_text: None,
+            cursor_offset: None,
         };
         let layout = layout_candidate(&c, 20);
         assert_eq!(layout.text, "git");
@@ -441,6 +443,8 @@ mod tests {
             text: "git".to_string(),
             description: "command".to_string(),
             kind: String::new(),
+            insert_text: None,
+            cursor_offset: None,
         };
         let layout = layout_candidate(&c, 20);
         assert_eq!(layout.text, "git");
@@ -457,11 +461,15 @@ mod tests {
                 text: "git".to_string(),
                 description: "command".to_string(),
                 kind: "command".to_string(),
+                insert_text: None,
+                cursor_offset: None,
             },
             Candidate {
                 text: "grep".to_string(),
                 description: "command".to_string(),
                 kind: "command".to_string(),
+                insert_text: None,
+                cursor_offset: None,
             },
         ];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
@@ -479,6 +487,8 @@ mod tests {
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),
+            insert_text: None,
+            cursor_offset: None,
         }];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
 
@@ -493,6 +503,8 @@ mod tests {
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),
+            insert_text: None,
+            cursor_offset: None,
         }];
         let app = App::new_with_term_size(candidates, "".to_string(), 4, 8, 0, 0);
 

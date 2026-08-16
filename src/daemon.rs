@@ -29,6 +29,7 @@ struct ApplyResult {
     chain: bool,
     execute: bool,
     restore_text: String,
+    cursor_offset: Option<usize>,
 }
 
 impl ApplyResult {
@@ -39,6 +40,7 @@ impl ApplyResult {
             code: 0,
             execute: false,
             restore_text: String::new(),
+            cursor_offset: None,
         }
     }
 
@@ -49,6 +51,7 @@ impl ApplyResult {
             code: 0,
             execute: true,
             restore_text: String::new(),
+            cursor_offset: None,
         }
     }
 
@@ -59,6 +62,7 @@ impl ApplyResult {
             chain: false,
             execute: false,
             restore_text: String::new(),
+            cursor_offset: None,
         }
     }
 
@@ -69,6 +73,7 @@ impl ApplyResult {
             code: 2,
             execute: false,
             restore_text: String::new(),
+            cursor_offset: None,
         }
     }
 }
@@ -94,6 +99,7 @@ fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Res
         chain: result.chain,
         execute: result.execute,
         restore_text: result.restore_text.clone(),
+        cursor_offset: result.cursor_offset,
     }
     .write_to(writer)
 }
@@ -105,6 +111,7 @@ struct RenderParams {
     term_cols: u16,
     term_rows: u16,
     selected: Option<usize>,
+    command_position: bool,
 }
 
 struct CompleteParams {
@@ -426,6 +433,7 @@ impl DaemonServer {
                 term_rows,
                 candidates_tsv,
                 selected,
+                command_position,
             } => {
                 let _span = info_span!(
                     "render",
@@ -447,6 +455,7 @@ impl DaemonServer {
                         term_cols,
                         term_rows,
                         selected: selected.map(usize::from),
+                        command_position,
                     },
                     &candidates_tsv,
                 );
@@ -563,6 +572,7 @@ impl DaemonServer {
                 selected,
                 context_key,
                 popup_key,
+                command_position,
             }) => {
                 let (mut prefix, tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
@@ -603,6 +613,7 @@ impl DaemonServer {
                                 term_cols,
                                 term_rows,
                                 selected,
+                                command_position,
                             },
                             cached_tsv.as_bytes(),
                         );
@@ -650,6 +661,7 @@ impl DaemonServer {
                                     term_cols,
                                     term_rows,
                                     selected,
+                                    command_position,
                                 },
                                 cached_tsv.as_bytes(),
                             );
@@ -717,6 +729,7 @@ impl DaemonServer {
                         term_cols,
                         term_rows,
                         selected,
+                        command_position,
                     },
                     tsv.as_bytes(),
                 );
@@ -945,6 +958,7 @@ impl DaemonServer {
             term_cols,
             term_rows,
             selected,
+            command_position,
         } = params;
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
@@ -954,11 +968,21 @@ impl DaemonServer {
             }
         };
 
-        let candidates: Vec<Candidate> = tsv_str
+        let mut candidates: Vec<Candidate> = tsv_str
             .lines()
             .filter(|line| !line.is_empty())
             .map(Candidate::parse_line)
             .collect();
+
+        if command_position {
+            candidates.extend(self.config.abbreviations.iter().map(|abbr| {
+                Candidate::abbreviation(
+                    abbr.trigger.clone(),
+                    abbr.expansion.clone(),
+                    abbr.description.clone(),
+                )
+            }));
+        }
 
         if candidates.is_empty() {
             debug!("render request had no candidates");
@@ -1053,12 +1077,23 @@ impl DaemonServer {
         term_cols: u16,
         term_rows: u16,
         tsv: &str,
+        command_position: bool,
     ) -> Option<(App, Vec<u8>)> {
-        let candidates: Vec<Candidate> = tsv
+        let mut candidates: Vec<Candidate> = tsv
             .lines()
             .filter(|line| !line.is_empty())
             .map(Candidate::parse_line)
             .collect();
+
+        if command_position {
+            candidates.extend(self.config.abbreviations.iter().map(|abbr| {
+                Candidate::abbreviation(
+                    abbr.trigger.clone(),
+                    abbr.expansion.clone(),
+                    abbr.description.clone(),
+                )
+            }));
+        }
 
         if candidates.is_empty() {
             let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
@@ -1116,7 +1151,14 @@ impl DaemonServer {
         } = params;
 
         let (mut app, scroll_bytes) = match self.setup_session(
-            writer, prefix, cursor_row, cursor_col, term_cols, term_rows, tsv,
+            writer,
+            prefix,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            tsv,
+            command_position,
         ) {
             Some(v) => v,
             None => return,
@@ -1132,10 +1174,13 @@ impl DaemonServer {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
-                    &ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
-                        &self.config.suffixes,
-                        command_position,
-                    )),
+                    &ApplyResult {
+                        cursor_offset: candidate.cursor_offset,
+                        ..ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
+                            &self.config.suffixes,
+                            command_position,
+                        ))
+                    },
                 );
             } else {
                 let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
@@ -1188,6 +1233,7 @@ impl DaemonServer {
                                 chain: false,
                                 execute: false,
                                 restore_text: app.filter_text.clone(),
+                                cursor_offset: None,
                             },
                         );
                         break;
@@ -1259,12 +1305,15 @@ impl DaemonServer {
                                 Some(c) => {
                                     let _ = write_apply_result(
                                         writer,
-                                        &ApplyResult::confirm(
-                                            c.text_with_suffix_for_command_position(
-                                                &self.config.suffixes,
-                                                command_position,
-                                            ),
-                                        ),
+                                        &ApplyResult {
+                                            cursor_offset: c.cursor_offset,
+                                            ..ApplyResult::confirm(
+                                                c.text_with_suffix_for_command_position(
+                                                    &self.config.suffixes,
+                                                    command_position,
+                                                ),
+                                            )
+                                        },
                                     );
                                 }
                                 None => {
@@ -1324,6 +1373,7 @@ impl DaemonServer {
                                     chain: false,
                                     execute: false,
                                     restore_text: app.filter_text.clone(),
+                                    cursor_offset: None,
                                 },
                             );
                             break;
@@ -1824,6 +1874,7 @@ mod tests {
                 term_cols: 80,
                 term_rows: 24,
                 selected: None,
+                command_position: false,
             },
             b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
         );
@@ -1846,6 +1897,7 @@ mod tests {
                 term_cols: 80,
                 term_rows: 24,
                 selected: None,
+                command_position: false,
             },
             b"git\tcommand\tcommand\n",
         );
@@ -1875,6 +1927,7 @@ mod tests {
                     term_cols: 80,
                     term_rows: 24,
                     selected: None,
+                    command_position: false,
                 },
                 b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
             );
@@ -1903,6 +1956,8 @@ mod tests {
                 text: "git-log".to_string(),
                 description: String::new(),
                 kind: "command".to_string(),
+                insert_text: None,
+                cursor_offset: None,
             }],
             "g".to_string(),
             5,
@@ -2453,6 +2508,76 @@ mod tests {
         assert_eq!(lines.next(), Some("DONE 0 cargo!"));
         assert_eq!(lines.next(), Some("APPLY chain=0 execute=0 restore_hex="));
         assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn handle_complete_confirm_expands_and_executes_command_abbreviation() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "gcm".to_string(),
+            expansion: "git commit -m '{{cursor}}'".to_string(),
+            description: "commit with a message".to_string(),
+        }];
+
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "gcm".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "cargo\tcommand\tcommand\n",
+            &[SessionMessage::Key(b"\r")],
+        );
+
+        let _ = read_frame(&mut reader);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        let result = read_text_complete_result(&bytes);
+        assert_eq!(result.text, "git commit -m ''");
+        assert_eq!(result.cursor_offset, Some(15));
+        assert!(result.execute);
+        assert!(!result.chain);
+    }
+
+    #[test]
+    fn handle_render_includes_abbreviation_at_command_position() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "gs".to_string(),
+            expansion: "git status".to_string(),
+            description: "working tree status".to_string(),
+        }];
+
+        let response = server.handle_render(
+            RenderParams {
+                prefix: "gs".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+                command_position: true,
+            },
+            b"cargo\tcommand\tcommand\n",
+        );
+
+        match response {
+            crate::protocol::Response::Success { tty_bytes, .. } => {
+                let rendered = String::from_utf8_lossy(&tty_bytes);
+                assert!(rendered.contains("gs"));
+                assert!(rendered.contains("git status"));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
     }
 
     #[test]
