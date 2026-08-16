@@ -60,6 +60,20 @@ _zacrs_compadd_has_file_flag() {
     return 1
 }
 
+_zacrs_path_candidate_kind() {
+    local _path="$1"
+    case "$_path" in
+        '~') _path="$HOME" ;;
+        '~/'*) _path="${HOME}${_path[2,-1]}" ;;
+    esac
+
+    if [[ -d "$_path" ]]; then
+        REPLY="directory"
+    else
+        REPLY="file"
+    fi
+}
+
 _zacrs_compsys_func() {
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
@@ -131,7 +145,8 @@ _zacrs_compsys_func() {
                 local _text="${_full_prefix}${_m}${_vis_suffix}"
                 local _kind=""
                 if (( _is_file )); then
-                    [[ -d "${_full_prefix}${_m}" ]] && _kind="directory" || _kind="file"
+                    _zacrs_path_candidate_kind "${_full_prefix}${_m}"
+                    _kind="$REPLY"
                 elif [[ "$_text" == */ ]]; then
                     _kind="directory"
                 elif (( _zacrs_cmd_pos )) && [[ "$_text" != */* ]] && _zacrs_command_kind "$_m"; then

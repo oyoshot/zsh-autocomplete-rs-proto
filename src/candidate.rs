@@ -162,6 +162,22 @@ mod tests {
     }
 
     #[test]
+    fn text_with_suffix_file_keeps_path_and_appends_file_suffix() {
+        let c = Candidate::parse_line("notes.txt\t\tfile");
+        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "notes.txt ");
+    }
+
+    #[test]
+    fn path_kinds_keep_file_and_directory_suffixes_distinct() {
+        let directory = Candidate::parse_line("src\t\tdirectory");
+        let file = Candidate::parse_line("src/main.rs\t\tfile");
+        let suffixes = SuffixConfig::default();
+
+        assert_eq!(directory.text_with_suffix(&suffixes), "src/");
+        assert_eq!(file.text_with_suffix(&suffixes), "src/main.rs ");
+    }
+
+    #[test]
     fn text_with_suffix_command_rescue_uses_command_suffix() {
         let c = Candidate::parse_line("git\t\tcommand_rescue");
         let command = Candidate::parse_line("git\t\tcommand");
