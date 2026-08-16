@@ -212,11 +212,15 @@ fn should_match_candidate(
     max_typos: usize,
     smart_case: bool,
 ) -> bool {
-    if rescue_only
-        && (!candidate.is_typo_rescue()
-            || normalized_text.chars().count().abs_diff(query_len) > max_typos)
-    {
-        return false;
+    if rescue_only {
+        if candidate.is_user_defined() {
+            // User abbreviations remain eligible when command typo rescue is
+            // active; they are injected independently of the rescue source.
+        } else if !candidate.is_typo_rescue()
+            || normalized_text.chars().count().abs_diff(query_len) > max_typos
+        {
+            return false;
+        }
     }
 
     if smart_case && !case_sensitive_subsequence_matches(normalized_query, normalized_text) {
@@ -646,6 +650,21 @@ mod tests {
         let results = m.filter(&candidates, "gs");
 
         assert_eq!(results[0].candidate.kind, "abbreviation");
+    }
+
+    #[test]
+    fn user_defined_abbreviation_remains_visible_with_typo_rescue_candidates() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = vec![
+            Candidate::parse_line("go\tcommand\tcommand_rescue"),
+            Candidate::parse_line("gpg\tcommand\tcommand_rescue"),
+            Candidate::abbreviation("gpo".into(), "git push origin HEAD".into(), String::new()),
+        ];
+
+        let results = m.filter(&candidates, "gpo");
+
+        assert_eq!(results[0].candidate.kind, "abbreviation");
+        assert_eq!(results[0].candidate.text, "gpo");
     }
 
     #[test]
