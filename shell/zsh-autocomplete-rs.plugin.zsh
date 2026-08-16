@@ -11,6 +11,7 @@ _zacrs_dir="${0:A:h}"
 source "${_zacrs_dir}/_zacrs_util.zsh"
 source "${_zacrs_dir}/_zacrs_gather.zsh"
 source "${_zacrs_dir}/_zacrs_compsys.zsh"
+source "${_zacrs_dir}/_zacrs_protocol.zsh"
 
 # Internal state
 typeset -g _zacrs_prev_lbuffer=""
@@ -353,43 +354,6 @@ _zacrs_clear_popup() {
 }
 
 # === Apply completion result to LBUFFER ===
-
-_zacrs_decode_hex_to_REPLY() {
-    local hex="$1"
-    REPLY=""
-    [[ -z "$hex" ]] && return 0
-
-    local i
-    for (( i = 1; i <= ${#hex}; i += 2 )); do
-        REPLY+=$(printf '%b' "\\x${hex[i,i+1]}")
-    done
-}
-
-_zacrs_parse_apply_line() {
-    local apply_line="$1"
-    local metadata="$apply_line"
-    chain=0
-    execute=0
-    restore_text=""
-
-    if [[ "$metadata" == *" restore_hex="* ]]; then
-        local restore_hex="${metadata#* restore_hex=}"
-        metadata="${metadata%% restore_hex=*}"
-        _zacrs_decode_hex_to_REPLY "$restore_hex"
-        restore_text="$REPLY"
-    elif [[ "$metadata" == *" restore="* ]]; then
-        restore_text="${metadata#* restore=}"
-        metadata="${metadata%% restore=*}"
-    fi
-
-    local token
-    cursor_offset=""
-    for token in ${(s: :)metadata}; do
-        [[ "$token" == "chain=1" ]] && chain=1
-        [[ "$token" == "execute=1" ]] && execute=1
-        [[ "$token" == cursor_offset=<-> ]] && cursor_offset="${token#cursor_offset=}"
-    done
-}
 
 _zacrs_read_done_response() {
     local fd="$1" header="$2"

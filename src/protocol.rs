@@ -603,7 +603,12 @@ impl TextFrameHeader {
 
 impl TextCompleteResult {
     pub fn write_to(&self, mut writer: impl Write) -> io::Result<()> {
-        writeln!(writer, "DONE {} {}", self.code, self.text)?;
+        let encode_text = self.text.contains(['\r', '\n']);
+        if encode_text {
+            writeln!(writer, "DONE {}", self.code)?;
+        } else {
+            writeln!(writer, "DONE {} {}", self.code, self.text)?;
+        }
         write!(
             writer,
             "APPLY chain={} execute={}",
@@ -612,6 +617,13 @@ impl TextCompleteResult {
         )?;
         if let Some(cursor_offset) = self.cursor_offset {
             write!(writer, " cursor_offset={cursor_offset}")?;
+        }
+        if encode_text {
+            write!(
+                writer,
+                " text_hex={}",
+                encode_hex_bytes(self.text.as_bytes())
+            )?;
         }
         writeln!(
             writer,
@@ -634,7 +646,7 @@ impl TextCompleteResult {
             .next()
             .and_then(|value| value.parse().ok())
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing DONE code"))?;
-        let text = parts.next().unwrap_or_default().to_string();
+        let mut text = parts.next().unwrap_or_default().to_string();
 
         let mut apply = String::new();
         reader.read_line(&mut apply)?;
@@ -650,7 +662,7 @@ impl TextCompleteResult {
         let apply_fields = apply.strip_prefix("APPLY ").unwrap_or_default();
         let (flag_fields, restore_text) =
             if let Some((prefix, value)) = apply_fields.split_once(" restore_hex=") {
-                (prefix, decode_restore_text_hex(value)?)
+                (prefix, decode_text_hex(value, "restore_hex")?)
             } else if let Some((prefix, value)) = apply_fields.split_once(" restore=") {
                 (prefix, value.to_string())
             } else {
@@ -667,6 +679,8 @@ impl TextCompleteResult {
                 execute = value == "1";
             } else if let Some(value) = token.strip_prefix("cursor_offset=") {
                 cursor_offset = value.parse().ok();
+            } else if let Some(value) = token.strip_prefix("text_hex=") {
+                text = decode_text_hex(value, "text_hex")?;
             }
         }
 
@@ -681,15 +695,15 @@ impl TextCompleteResult {
     }
 }
 
-fn decode_restore_text_hex(hex: &str) -> io::Result<String> {
+fn decode_text_hex(hex: &str, field: &str) -> io::Result<String> {
     if hex.is_empty() {
         return Ok(String::new());
     }
 
     let bytes = decode_hex_bytes(hex)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {field}")))?;
     String::from_utf8(bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid restore_hex utf-8"))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {field} utf-8")))
 }
 
 pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) -> io::Result<()> {
@@ -1059,6 +1073,33 @@ mod tests {
         let apply = format!("{}\n", lines.next().unwrap());
         let mut reader = io::BufReader::new(apply.as_bytes());
 
+        assert_eq!(
+            TextCompleteResult::read_from(&mut reader, done).unwrap(),
+            result
+        );
+    }
+
+    #[test]
+    fn text_complete_result_roundtrip_preserves_multiline_text() {
+        let result = TextCompleteResult {
+            code: 0,
+            text: "printf 'first\nsecond'\n".to_string(),
+            chain: false,
+            execute: true,
+            restore_text: String::new(),
+            cursor_offset: Some(7),
+        };
+
+        let mut buf = Vec::new();
+        result.write_to(&mut buf).unwrap();
+        let payload = String::from_utf8(buf).unwrap();
+        let mut lines = payload.lines();
+        let done = lines.next().unwrap();
+        let apply = format!("{}\n", lines.next().unwrap());
+        let mut reader = io::BufReader::new(apply.as_bytes());
+
+        assert_eq!(done, "DONE 0");
+        assert!(apply.contains(" text_hex="));
         assert_eq!(
             TextCompleteResult::read_from(&mut reader, done).unwrap(),
             result
