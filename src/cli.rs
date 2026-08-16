@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "zsh-autocomplete-rs")]
@@ -9,6 +9,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Print shell initialization code
+    Init {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     /// Popup session — Tab で起動
     Complete {
         #[arg(long, default_value = "", allow_hyphen_values = true)]
@@ -92,9 +97,21 @@ pub enum Command {
     },
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Shell {
+    Zsh,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_accepts_zsh() {
+        let cli = Cli::parse_from(["zsh-autocomplete-rs", "init", "zsh"]);
+
+        assert!(matches!(cli.command, Command::Init { shell: Shell::Zsh }));
+    }
 
     #[test]
     fn complete_accepts_shift_tab_hex() {
