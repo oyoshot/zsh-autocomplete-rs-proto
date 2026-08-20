@@ -192,9 +192,11 @@ _zacrs_compsys_func() {
             # candidate set in full. Native insertion/list output is suppressed
             # after _main_complete returns.
             if (( ${#_zacrs_cap} > 0 )); then
-                local -a _zacrs_state_matches=( "${_zacrs_cap[1,101]}" )
+                local -a _zacrs_state_matches=( "${(@)_zacrs_cap[1,101]}" )
                 builtin compadd -QU - "${_zacrs_state_matches[@]}"
+                return 0
             fi
+            return 1
         else
             _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
             # Probe calls explicitly request their own output arrays and must
