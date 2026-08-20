@@ -93,4 +93,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh
       - run: cargo test
       - run: zsh shell/tests/compsys_options.zsh
+      - run: zsh shell/tests/compsys_state.zsh
       - run: zsh shell/tests/protocol.zsh
