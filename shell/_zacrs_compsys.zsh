@@ -156,9 +156,12 @@ _zacrs_compsys_func() {
             done
         else
             _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
+            # Probe calls explicitly request their own output arrays and must
+            # retain the original compadd behavior. Regular calls are captured
+            # above only: zacrs renders its own popup and suppresses compsys'
+            # insertion and list output after completion returns.
+            builtin compadd "$@"
         fi
-
-        builtin compadd "$@"
     }
 
     # Call the completion system entry point
