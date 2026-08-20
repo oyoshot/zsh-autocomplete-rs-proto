@@ -38,6 +38,27 @@ assert_file_flag 0 'value after combined suffix option containing f' -Qs -foo ca
 assert_file_flag 0 'candidate after option terminator' - -foo
 assert_file_flag 0 'candidate after double option terminator' -- -foo
 
+assert_array_output_flag() {
+    local expected=$1 description=$2
+    shift 2
+
+    local actual=0
+    _zacrs_compadd_has_array_output_flag "$@" && actual=1
+    if (( actual != expected )); then
+        print -u2 -r -- "not ok: ${description} (expected=${expected}, actual=${actual})"
+        (( ++failures ))
+    else
+        print -r -- "ok: ${description}"
+    fi
+}
+
+assert_array_output_flag 1 'standalone capture output flag' -O matches candidate
+assert_array_output_flag 1 'combined capture output flag' -QO matches candidate
+assert_array_output_flag 1 'standalone display output flag' -D displays candidate
+assert_array_output_flag 1 'combined display output flag' -QD displays candidate
+assert_array_output_flag 0 'output flag after option terminator is a candidate' - -O
+assert_array_output_flag 0 'option value containing O is not an output flag' -P -Output candidate
+
 assert_path_kind() {
     local expected=$1 path=$2 description=$3
     _zacrs_path_candidate_kind "$path"

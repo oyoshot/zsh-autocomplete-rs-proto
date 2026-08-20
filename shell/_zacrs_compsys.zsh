@@ -60,6 +60,37 @@ _zacrs_compadd_has_file_flag() {
     return 1
 }
 
+_zacrs_compadd_has_array_output_flag() {
+    local _arg _chars _char
+    local -i _idx _expect_value=0
+
+    for _arg in "$@"; do
+        if (( _expect_value )); then
+            _expect_value=0
+            continue
+        fi
+        [[ "$_arg" == "-" || "$_arg" == "--" ]] && break
+        [[ "$_arg" == -?* ]] || continue
+
+        _chars="${_arg[2,-1]}"
+        for (( _idx = 1; _idx <= ${#_chars}; _idx++ )); do
+            _char="${_chars[_idx]}"
+            case "$_char" in
+                [OD]) return 0 ;;
+                [akqQenUfl12C]) ;;
+                [diIAVJXxPSpsWFMrRE])
+                    (( _idx == ${#_chars} )) && _expect_value=1
+                    break
+                    ;;
+                o) break ;;
+                *) break ;;
+            esac
+        done
+    done
+
+    return 1
+}
+
 _zacrs_path_candidate_kind() {
     local _path="$1"
     case "$_path" in
@@ -97,6 +128,7 @@ _zacrs_compsys_func() {
         local _a _skip=0 _xdesc="" _vis_prefix="" _vis_suffix="" _hidden_prefix="" _is_file=0 _disp_array_name=""
         local _prev="" _is_option_value=0 _prev_flags=""
         _zacrs_compadd_has_file_flag "$@" && _is_file=1
+        _zacrs_compadd_has_array_output_flag "$@" && _skip=1
         for _a in "$@"; do
             _is_option_value=0
             if (( ${#_prev} >= 2 )); then
@@ -110,7 +142,6 @@ _zacrs_compsys_func() {
             else
                 [[ "$_a" == "-" || "$_a" == "--" ]] && break
             fi
-            [[ "$_a" == "-O" || "$_a" == "-D" ]] && { _skip=1; break; }
             [[ "$_prev" == "-P" ]] && _vis_prefix="$_a"
             [[ "$_prev" == "-p" ]] && _hidden_prefix="$_a"
             [[ "$_prev" == "-S" ]] && _vis_suffix="$_a"
@@ -154,6 +185,16 @@ _zacrs_compsys_func() {
                 fi
                 _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
             done
+
+            # Completion helpers use compstate[nmatches] to decide whether a
+            # source succeeded and whether to try alternatives. Preserve zero,
+            # single, and many-match behavior without re-adding a pathological
+            # candidate set in full. Native insertion/list output is suppressed
+            # after _main_complete returns.
+            if (( ${#_zacrs_cap} > 0 )); then
+                local -a _zacrs_state_matches=( "${_zacrs_cap[1,101]}" )
+                builtin compadd -QU - "${_zacrs_state_matches[@]}"
+            fi
         else
             _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
             # Probe calls explicitly request their own output arrays and must
