@@ -56,8 +56,11 @@ assert_array_output_flag 1 'standalone capture output flag' -O matches candidate
 assert_array_output_flag 1 'combined capture output flag' -QO matches candidate
 assert_array_output_flag 1 'standalone display output flag' -D displays candidate
 assert_array_output_flag 1 'combined display output flag' -QD displays candidate
+assert_array_output_flag 1 'standalone transformed output flag' -A matches candidate
+assert_array_output_flag 1 'combined transformed output flag' -QA matches candidate
 assert_array_output_flag 0 'output flag after option terminator is a candidate' - -O
 assert_array_output_flag 0 'option value containing O is not an output flag' -P -Output candidate
+assert_array_output_flag 0 'option value containing A is not an output flag' -P -Array candidate
 
 assert_path_kind() {
     local expected=$1 path=$2 description=$3

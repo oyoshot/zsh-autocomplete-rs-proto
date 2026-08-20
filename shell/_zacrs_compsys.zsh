@@ -76,9 +76,9 @@ _zacrs_compadd_has_array_output_flag() {
         for (( _idx = 1; _idx <= ${#_chars}; _idx++ )); do
             _char="${_chars[_idx]}"
             case "$_char" in
-                [OD]) return 0 ;;
+                [OAD]) return 0 ;;
                 [akqQenUfl12C]) ;;
-                [diIAVJXxPSpsWFMrRE])
+                [diIVJXxPSpsWFMrRE])
                     (( _idx == ${#_chars} )) && _expect_value=1
                     break
                     ;;
