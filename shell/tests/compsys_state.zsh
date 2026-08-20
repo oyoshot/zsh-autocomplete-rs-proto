@@ -43,9 +43,17 @@ RPROMPT=""
 
 run_case() {
     local case_name=$1 expected=$2
+    local saved_zdotdir=${ZDOTDIR-}
+    local -i had_zdotdir=$+ZDOTDIR
     : > "$ZACRS_STATE_MARKER"
     export ZACRS_STATE_CASE=$case_name
-    ZDOTDIR="$tmp_dir" zpty -b zacrs_compsys_state zsh -d
+    export ZDOTDIR="$tmp_dir"
+    zpty -b zacrs_compsys_state zsh -d
+    if (( had_zdotdir )); then
+        export ZDOTDIR=$saved_zdotdir
+    else
+        unset ZDOTDIR
+    fi
 
     local output="" chunk="" i
     for (( i = 0; i < 200; i++ )); do
@@ -55,6 +63,7 @@ run_case() {
     done
     if [[ "$output" != *"READY> "* ]]; then
         print -u2 -r -- "not ok: child zsh did not become ready for $case_name"
+        print -u2 -r -- "pty: ${(qqq)output}"
         return 1
     fi
 
