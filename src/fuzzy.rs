@@ -2,7 +2,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
 use any_ascii::any_ascii_char;
-use frizbee::{Config as MatchConfig, Matcher};
+use frizbee::{Config as MatchConfig, Matcher, SortStrategy, UnicodeMatching};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
@@ -33,7 +33,8 @@ impl FuzzyMatcher {
     pub fn new() -> Self {
         let config = MatchConfig {
             max_typos: Some(0),
-            sort: false,
+            sort: SortStrategy::IndexAsc,
+            unicode: UnicodeMatching::Ignore,
             ..MatchConfig::default()
         };
         Self {
@@ -47,12 +48,12 @@ impl FuzzyMatcher {
     fn ensure_matcher(&mut self, query: &str, max_typos: u16) {
         if self.last_max_typos != max_typos {
             self.config.max_typos = Some(max_typos);
-            self.matcher.set_config(&self.config);
+            self.matcher.set_config(self.config.clone());
             self.last_max_typos = max_typos;
         }
 
         if self.last_query != query {
-            self.matcher.set_needle(query);
+            self.matcher.set_pattern(query);
             self.last_query.clear();
             self.last_query.push_str(query);
         }
