@@ -5,9 +5,9 @@ The configuration file is read from `$XDG_CONFIG_HOME/zacrs/config.toml`, or
 
 ## Abbreviations
 
-Static abbreviations are portable completion candidates. They are offered only
-at command position, and their expansion is inserted literally without running
-shell evaluation while candidates are being gathered or displayed.
+Static abbreviations are portable completion candidates offered at any command
+line position. Expansions are inserted literally without running shell
+evaluation while candidates are being gathered or displayed.
 
 For simple entries, use the `[abbreviations]` table:
 
@@ -23,8 +23,18 @@ For a description or explicit cursor placement, use `[[abbreviation]]`:
 trigger = "gcm"
 expansion = "git commit -m '{{cursor}}'"
 description = "commit with a message"
-scope = "command"
 ```
+
+Shell fragments can use the same format:
+
+```toml
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
+description = "discard stdout"
+```
+
+Typing `cargo test null<Tab>` can then replace `null` with `>/dev/null`.
 
 `{{cursor}}` is removed during insertion and places the cursor at that position.
 Only one cursor marker is supported per expansion.

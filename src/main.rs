@@ -205,15 +205,13 @@ fn run_render(
         .filter(|line| !line.is_empty())
         .map(Candidate::parse_line)
         .collect();
-    if command_position {
-        candidates.extend(config.abbreviations.iter().map(|abbr| {
-            Candidate::abbreviation(
-                abbr.trigger.clone(),
-                abbr.expansion.clone(),
-                abbr.description.clone(),
-            )
-        }));
-    }
+    candidates.extend(config.abbreviations.iter().map(|abbr| {
+        Candidate::abbreviation(
+            abbr.trigger.clone(),
+            abbr.expansion.clone(),
+            abbr.description.clone(),
+        )
+    }));
 
     if candidates.is_empty() {
         return Ok(1);

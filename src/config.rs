@@ -80,12 +80,6 @@ struct AbbreviationRaw {
     expansion: String,
     #[serde(default)]
     description: String,
-    #[serde(default = "default_abbreviation_scope")]
-    scope: String,
-}
-
-fn default_abbreviation_scope() -> String {
-    "command".to_string()
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -260,11 +254,7 @@ impl Config {
             })
             .map(|abbr| (abbr.trigger.clone(), abbr))
             .collect();
-        for abbr in file
-            .abbreviation
-            .iter()
-            .filter(|abbr| abbr.scope == "command")
-        {
+        for abbr in &file.abbreviation {
             by_trigger.insert(
                 abbr.trigger.clone(),
                 Abbreviation {
@@ -565,7 +555,10 @@ gs = "git status"
 trigger = "gcm"
 expansion = "git commit -m '{{cursor}}'"
 description = "commit with a message"
-scope = "command"
+
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
 "#,
         )
         .unwrap();
@@ -581,6 +574,11 @@ scope = "command"
                 Abbreviation {
                     trigger: "gs".into(),
                     expansion: "git status".into(),
+                    description: String::new(),
+                },
+                Abbreviation {
+                    trigger: "null".into(),
+                    expansion: ">/dev/null".into(),
                     description: String::new(),
                 },
             ]
