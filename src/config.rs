@@ -72,6 +72,21 @@ pub struct Abbreviation {
     pub trigger: String,
     pub expansion: String,
     pub description: String,
+    pub scope: AbbreviationScope,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AbbreviationScope {
+    #[default]
+    Command,
+    Any,
+}
+
+impl Abbreviation {
+    pub fn is_available_at(&self, command_position: bool) -> bool {
+        command_position || self.scope == AbbreviationScope::Any
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +95,8 @@ struct AbbreviationRaw {
     expansion: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    scope: AbbreviationScope,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -251,6 +268,7 @@ impl Config {
                 trigger: trigger.clone(),
                 expansion: expansion.clone(),
                 description: String::new(),
+                scope: AbbreviationScope::Command,
             })
             .map(|abbr| (abbr.trigger.clone(), abbr))
             .collect();
@@ -261,6 +279,7 @@ impl Config {
                     trigger: abbr.trigger.clone(),
                     expansion: abbr.expansion.clone(),
                     description: abbr.description.clone(),
+                    scope: abbr.scope,
                 },
             );
         }
@@ -559,6 +578,7 @@ description = "commit with a message"
 [[abbreviation]]
 trigger = "null"
 expansion = ">/dev/null"
+scope = "any"
 "#,
         )
         .unwrap();
@@ -570,16 +590,19 @@ expansion = ">/dev/null"
                     trigger: "gcm".into(),
                     expansion: "git commit -m '{{cursor}}'".into(),
                     description: "commit with a message".into(),
+                    scope: AbbreviationScope::Command,
                 },
                 Abbreviation {
                     trigger: "gs".into(),
                     expansion: "git status".into(),
                     description: String::new(),
+                    scope: AbbreviationScope::Command,
                 },
                 Abbreviation {
                     trigger: "null".into(),
                     expansion: ">/dev/null".into(),
                     description: String::new(),
+                    scope: AbbreviationScope::Any,
                 },
             ]
         );

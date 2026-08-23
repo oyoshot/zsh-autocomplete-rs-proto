@@ -5,9 +5,9 @@ The configuration file is read from `$XDG_CONFIG_HOME/zacrs/config.toml`, or
 
 ## Abbreviations
 
-Static abbreviations are portable completion candidates offered at any command
-line position. Expansions are inserted literally without running shell
-evaluation while candidates are being gathered or displayed.
+Static abbreviations are portable completion candidates. By default they are
+offered only at command position. Expansions are inserted literally without
+running shell evaluation while candidates are being gathered or displayed.
 
 For simple entries, use the `[abbreviations]` table:
 
@@ -32,9 +32,13 @@ Shell fragments can use the same format:
 trigger = "null"
 expansion = ">/dev/null"
 description = "discard stdout"
+scope = "any"
 ```
 
-Typing `cargo test null<Tab>` can then replace `null` with `>/dev/null`.
+`scope = "any"` also offers the abbreviation at argument positions. Typing
+`cargo test <Tab>` can then show `null`, and `cargo test null<Tab>` can replace
+`null` with `>/dev/null`. The supported scopes are `command` (the default) and
+`any`.
 
 `{{cursor}}` is removed during insertion and places the cursor at that position.
 Only one cursor marker is supported per expansion.

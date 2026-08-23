@@ -1026,13 +1026,19 @@ impl DaemonServer {
             .map(Candidate::parse_line)
             .collect();
 
-        candidates.extend(self.config.abbreviations.iter().map(|abbr| {
-            Candidate::abbreviation(
-                abbr.trigger.clone(),
-                abbr.expansion.clone(),
-                abbr.description.clone(),
-            )
-        }));
+        candidates.extend(
+            self.config
+                .abbreviations
+                .iter()
+                .filter(|abbr| abbr.is_available_at(command_position))
+                .map(|abbr| {
+                    Candidate::abbreviation(
+                        abbr.trigger.clone(),
+                        abbr.expansion.clone(),
+                        abbr.description.clone(),
+                    )
+                }),
+        );
 
         if candidates.is_empty() {
             debug!("render request had no candidates");
@@ -1127,7 +1133,7 @@ impl DaemonServer {
         term_cols: u16,
         term_rows: u16,
         tsv: &str,
-        _command_position: bool,
+        command_position: bool,
     ) -> Option<(App, Vec<u8>)> {
         let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
         let mut candidates: Vec<Candidate> = tsv
@@ -1136,13 +1142,19 @@ impl DaemonServer {
             .map(Candidate::parse_line)
             .collect();
 
-        candidates.extend(self.config.abbreviations.iter().map(|abbr| {
-            Candidate::abbreviation(
-                abbr.trigger.clone(),
-                abbr.expansion.clone(),
-                abbr.description.clone(),
-            )
-        }));
+        candidates.extend(
+            self.config
+                .abbreviations
+                .iter()
+                .filter(|abbr| abbr.is_available_at(command_position))
+                .map(|abbr| {
+                    Candidate::abbreviation(
+                        abbr.trigger.clone(),
+                        abbr.expansion.clone(),
+                        abbr.description.clone(),
+                    )
+                }),
+        );
 
         if candidates.is_empty() {
             let _ = write_apply_result(writer, &ApplyResult::no_candidates());
@@ -2575,6 +2587,7 @@ mod tests {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
+            scope: crate::config::AbbreviationScope::Command,
         }];
 
         let mut reader = run_complete_session(
@@ -2613,6 +2626,7 @@ mod tests {
             trigger: "null".to_string(),
             expansion: ">/dev/null".to_string(),
             description: "discard stdout".to_string(),
+            scope: crate::config::AbbreviationScope::Any,
         }];
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut writer = Vec::new();
@@ -2676,6 +2690,7 @@ mod tests {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
+            scope: crate::config::AbbreviationScope::Command,
         }];
 
         let mut reader = run_complete_session(
@@ -2715,6 +2730,7 @@ mod tests {
             trigger: "gs".to_string(),
             expansion: "git status".to_string(),
             description: "working tree status".to_string(),
+            scope: crate::config::AbbreviationScope::Command,
         }];
 
         let response = server.handle_render(
@@ -2743,15 +2759,24 @@ mod tests {
     #[test]
     fn handle_render_includes_abbreviation_at_argument_position() {
         let mut server = test_server();
-        server.config.abbreviations = vec![crate::config::Abbreviation {
-            trigger: "null".to_string(),
-            expansion: ">/dev/null".to_string(),
-            description: "discard stdout".to_string(),
-        }];
+        server.config.abbreviations = vec![
+            crate::config::Abbreviation {
+                trigger: "null".to_string(),
+                expansion: ">/dev/null".to_string(),
+                description: "discard stdout".to_string(),
+                scope: crate::config::AbbreviationScope::Any,
+            },
+            crate::config::Abbreviation {
+                trigger: "gs".to_string(),
+                expansion: "git status".to_string(),
+                description: String::new(),
+                scope: crate::config::AbbreviationScope::Command,
+            },
+        ];
 
         let response = server.handle_render(
             RenderParams {
-                prefix: "null".to_string(),
+                prefix: String::new(),
                 cursor_row: 5,
                 cursor_col: 12,
                 term_cols: 80,
@@ -2767,6 +2792,7 @@ mod tests {
                 let rendered = String::from_utf8_lossy(&tty_bytes);
                 assert!(rendered.contains("null"));
                 assert!(rendered.contains(">/dev/null"));
+                assert!(!rendered.contains("git status"));
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -2779,6 +2805,7 @@ mod tests {
             trigger: "gpo".to_string(),
             expansion: "git push origin HEAD".to_string(),
             description: String::new(),
+            scope: crate::config::AbbreviationScope::Command,
         }];
         server.store_active_popup(
             "popup-1",
