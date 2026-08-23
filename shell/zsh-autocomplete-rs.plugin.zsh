@@ -752,7 +752,7 @@ _zacrs_complete_popup() {
     if (( ! reuse_visible )); then
         _zacrs_clear_popup
     fi
-    _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col" || {
+    _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col" 1 || {
         _zacrs_clear_popup
         zle expand-or-complete
     }
