@@ -465,7 +465,7 @@ _zacrs_apply() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}"
+    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}" candidates_present="${9:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
     _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
@@ -490,6 +490,7 @@ _zacrs_invoke_daemon() {
     )
     (( is_cmd_pos )) && complete_args+=(--command-position)
     (( accept_single )) && complete_args+=(--accept-single)
+    (( candidates_present )) && complete_args+=(--candidates-present)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
@@ -642,7 +643,7 @@ _zacrs_apply_single_candidate() {
     _zacrs_clear_popup
     local cursor_row=0 cursor_col=0
     if (( _zacrs_daemon_available )); then
-        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" 1 && return
+        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" 1 1 && return
     fi
     _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 1 && return
 
@@ -720,7 +721,7 @@ _zacrs_complete_popup() {
     # Try daemon path first, fall back to subprocess
     if (( _zacrs_daemon_available )); then
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-            "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1
+            "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 "$(( ! reuse_visible ))"
         local daemon_rc=$?
         if (( daemon_rc == 0 )); then
             return
@@ -730,11 +731,6 @@ _zacrs_complete_popup() {
             return
         elif (( daemon_rc == 2 )); then
             _zacrs_collect_candidates
-            if [[ -z "$candidates_str" ]]; then
-                _zacrs_clear_popup
-                zle expand-or-complete
-                return
-            fi
             local -a _cands_retry
             _cands_retry=( ${(f)candidates_str} )
             _cands_retry=( ${_cands_retry:#} )
@@ -743,7 +739,7 @@ _zacrs_complete_popup() {
                 return
             fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-                "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 && return
+                "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1 && return
         fi
     fi
     if [[ -z "$candidates_str" ]]; then

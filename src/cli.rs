@@ -37,6 +37,9 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         accept_single: bool,
 
+        #[arg(long, default_value_t = false)]
+        candidates_present: bool,
+
         #[arg(long)]
         stale_hex: Option<String>,
 
@@ -123,6 +126,7 @@ mod tests {
             "--daemon",
             "--command-position",
             "--accept-single",
+            "--candidates-present",
             "--stale-hex",
             "1b5b44",
             "--reuse-token",
@@ -141,6 +145,7 @@ mod tests {
                 daemon,
                 command_position,
                 accept_single,
+                candidates_present,
                 stale_hex,
                 reuse_token,
                 context_key,
@@ -153,6 +158,7 @@ mod tests {
                 assert!(daemon);
                 assert!(command_position);
                 assert!(accept_single);
+                assert!(candidates_present);
                 assert_eq!(stale_hex.as_deref(), Some("1b5b44"));
                 assert_eq!(reuse_token.as_deref(), Some("123"));
                 assert_eq!(context_key.as_deref(), Some("ctx"));

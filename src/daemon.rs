@@ -815,6 +815,7 @@ impl DaemonServer {
                 prev_popup,
                 command_position,
                 accept_single,
+                candidates_present,
                 reuse_token,
                 shift_tab_sequence,
                 context_key,
@@ -829,47 +830,51 @@ impl DaemonServer {
                 // Cache-only request: resolve TSV from cache or report miss.
                 let tsv = match tsv_opt {
                     None => {
-                        if context_key.is_none() {
-                            if let Some(ref key) = popup_key {
-                                match self.get_active_popup(key) {
-                                    Some(active_popup) => {
-                                        debug!(
-                                            popup_key = key.as_str(),
-                                            "complete popup cache hit"
-                                        );
-                                        prefix = active_popup.prefix;
-                                        active_popup.tsv
+                        if candidates_present {
+                            String::new()
+                        } else {
+                            if context_key.is_none() {
+                                if let Some(ref key) = popup_key {
+                                    match self.get_active_popup(key) {
+                                        Some(active_popup) => {
+                                            debug!(
+                                                popup_key = key.as_str(),
+                                                "complete popup cache hit"
+                                            );
+                                            prefix = active_popup.prefix;
+                                            active_popup.tsv
+                                        }
+                                        None => {
+                                            debug!(
+                                                popup_key = key.as_str(),
+                                                "complete popup cache miss"
+                                            );
+                                            let _ = writeln!(writer, "CACHE_MISS");
+                                            let _ = writer.flush();
+                                            return false;
+                                        }
+                                    }
+                                } else {
+                                    let _ = write_apply_result(
+                                        &mut writer,
+                                        &ApplyResult::cancel(String::new()),
+                                    );
+                                    return false;
+                                }
+                            } else {
+                                // context_key is Some here (we checked is_none() above)
+                                let key = context_key.as_deref().unwrap();
+                                match self.get_cached_tsv(key, &prefix) {
+                                    Some(cached) => {
+                                        debug!(context_key = key, "complete cache hit");
+                                        cached
                                     }
                                     None => {
-                                        debug!(
-                                            popup_key = key.as_str(),
-                                            "complete popup cache miss"
-                                        );
+                                        debug!(context_key = key, "complete cache miss");
                                         let _ = writeln!(writer, "CACHE_MISS");
                                         let _ = writer.flush();
                                         return false;
                                     }
-                                }
-                            } else {
-                                let _ = write_apply_result(
-                                    &mut writer,
-                                    &ApplyResult::cancel(String::new()),
-                                );
-                                return false;
-                            }
-                        } else {
-                            // context_key is Some here (we checked is_none() above)
-                            let key = context_key.as_deref().unwrap();
-                            match self.get_cached_tsv(key, &prefix) {
-                                Some(cached) => {
-                                    debug!(context_key = key, "complete cache hit");
-                                    cached
-                                }
-                                None => {
-                                    debug!(context_key = key, "complete cache miss");
-                                    let _ = writeln!(writer, "CACHE_MISS");
-                                    let _ = writer.flush();
-                                    return false;
                                 }
                             }
                         }
@@ -3143,6 +3148,7 @@ mod tests {
             prev_popup: None,
             command_position: false,
             accept_single: true,
+            candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),
             shift_tab_sequence: None,
             context_key: Some("ctx-1".to_string()),
@@ -3179,6 +3185,7 @@ mod tests {
             prev_popup: None,
             command_position: false,
             accept_single: true,
+            candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),
             shift_tab_sequence: None,
             context_key: None,
