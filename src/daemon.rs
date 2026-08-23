@@ -2587,7 +2587,7 @@ mod tests {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
-            scope: crate::config::AbbreviationScope::Command,
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let mut reader = run_complete_session(
@@ -2626,7 +2626,9 @@ mod tests {
             trigger: "null".to_string(),
             expansion: ">/dev/null".to_string(),
             description: "discard stdout".to_string(),
-            scope: crate::config::AbbreviationScope::Any,
+            when: crate::config::AbbreviationWhen {
+                position: crate::config::AbbreviationPosition::Any,
+            },
         }];
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut writer = Vec::new();
@@ -2690,7 +2692,7 @@ mod tests {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
-            scope: crate::config::AbbreviationScope::Command,
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let mut reader = run_complete_session(
@@ -2730,7 +2732,7 @@ mod tests {
             trigger: "gs".to_string(),
             expansion: "git status".to_string(),
             description: "working tree status".to_string(),
-            scope: crate::config::AbbreviationScope::Command,
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let response = server.handle_render(
@@ -2764,13 +2766,15 @@ mod tests {
                 trigger: "null".to_string(),
                 expansion: ">/dev/null".to_string(),
                 description: "discard stdout".to_string(),
-                scope: crate::config::AbbreviationScope::Any,
+                when: crate::config::AbbreviationWhen {
+                    position: crate::config::AbbreviationPosition::Any,
+                },
             },
             crate::config::Abbreviation {
                 trigger: "gs".to_string(),
                 expansion: "git status".to_string(),
                 description: String::new(),
-                scope: crate::config::AbbreviationScope::Command,
+                when: crate::config::AbbreviationWhen::default(),
             },
         ];
 
@@ -2805,7 +2809,7 @@ mod tests {
             trigger: "gpo".to_string(),
             expansion: "git push origin HEAD".to_string(),
             description: String::new(),
-            scope: crate::config::AbbreviationScope::Command,
+            when: crate::config::AbbreviationWhen::default(),
         }];
         server.store_active_popup(
             "popup-1",

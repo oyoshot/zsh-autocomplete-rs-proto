@@ -72,20 +72,26 @@ pub struct Abbreviation {
     pub trigger: String,
     pub expansion: String,
     pub description: String,
-    pub scope: AbbreviationScope,
+    pub when: AbbreviationWhen,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum AbbreviationScope {
+pub enum AbbreviationPosition {
     #[default]
     Command,
     Any,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+pub struct AbbreviationWhen {
+    #[serde(default)]
+    pub position: AbbreviationPosition,
+}
+
 impl Abbreviation {
     pub fn is_available_at(&self, command_position: bool) -> bool {
-        command_position || self.scope == AbbreviationScope::Any
+        command_position || self.when.position == AbbreviationPosition::Any
     }
 }
 
@@ -96,7 +102,7 @@ struct AbbreviationRaw {
     #[serde(default)]
     description: String,
     #[serde(default)]
-    scope: AbbreviationScope,
+    when: AbbreviationWhen,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -268,7 +274,7 @@ impl Config {
                 trigger: trigger.clone(),
                 expansion: expansion.clone(),
                 description: String::new(),
-                scope: AbbreviationScope::Command,
+                when: AbbreviationWhen::default(),
             })
             .map(|abbr| (abbr.trigger.clone(), abbr))
             .collect();
@@ -279,7 +285,7 @@ impl Config {
                     trigger: abbr.trigger.clone(),
                     expansion: abbr.expansion.clone(),
                     description: abbr.description.clone(),
-                    scope: abbr.scope,
+                    when: abbr.when,
                 },
             );
         }
@@ -578,7 +584,7 @@ description = "commit with a message"
 [[abbreviation]]
 trigger = "null"
 expansion = ">/dev/null"
-scope = "any"
+when.position = "any"
 "#,
         )
         .unwrap();
@@ -590,19 +596,21 @@ scope = "any"
                     trigger: "gcm".into(),
                     expansion: "git commit -m '{{cursor}}'".into(),
                     description: "commit with a message".into(),
-                    scope: AbbreviationScope::Command,
+                    when: AbbreviationWhen::default(),
                 },
                 Abbreviation {
                     trigger: "gs".into(),
                     expansion: "git status".into(),
                     description: String::new(),
-                    scope: AbbreviationScope::Command,
+                    when: AbbreviationWhen::default(),
                 },
                 Abbreviation {
                     trigger: "null".into(),
                     expansion: ">/dev/null".into(),
                     description: String::new(),
-                    scope: AbbreviationScope::Any,
+                    when: AbbreviationWhen {
+                        position: AbbreviationPosition::Any,
+                    },
                 },
             ]
         );

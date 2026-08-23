@@ -32,13 +32,13 @@ Shell fragments can use the same format:
 trigger = "null"
 expansion = ">/dev/null"
 description = "discard stdout"
-scope = "any"
+when.position = "any"
 ```
 
-`scope = "any"` also offers the abbreviation at argument positions. Typing
+`when.position = "any"` also offers the abbreviation at argument positions. Typing
 `cargo test <Tab>` can then show `null`, and `cargo test null<Tab>` can replace
-`null` with `>/dev/null`. The supported scopes are `command` (the default) and
-`any`.
+`null` with `>/dev/null`. The supported positions are `command` (the default)
+and `any`.
 
 `{{cursor}}` is removed during insertion and places the cursor at that position.
 Only one cursor marker is supported per expansion.
