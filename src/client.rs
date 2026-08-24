@@ -28,6 +28,7 @@ pub fn try_daemon_render(
     cursor_col: u16,
     selected: Option<usize>,
     command_position: bool,
+    command_context: Option<&str>,
     candidates_raw: &[u8],
 ) -> Result<RenderResponse, DaemonUnavailable> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -41,6 +42,7 @@ pub fn try_daemon_render(
         candidates_tsv: candidates_raw.to_vec(),
         selected: selected.and_then(|s| u16::try_from(s).ok()),
         command_position,
+        command_context: command_context.map(str::to_string),
     };
 
     let response = send_request(&request)?;
@@ -88,6 +90,7 @@ pub fn try_daemon_complete(
     cursor_col: u16,
     candidates_tsv: &str,
     command_position: bool,
+    command_context: Option<&str>,
     accept_single: bool,
     candidates_present: bool,
     shift_tab_sequence: Option<Vec<u8>>,
@@ -113,6 +116,7 @@ pub fn try_daemon_complete(
         term_rows,
         prev_popup,
         command_position,
+        command_context: command_context.map(str::to_string),
         accept_single,
         candidates_present,
         reuse_token: reuse_token.map(str::to_string),

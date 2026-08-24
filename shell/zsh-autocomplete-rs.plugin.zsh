@@ -200,7 +200,7 @@ _zacrs_parse_render_header() {
 }
 
 # Connect to daemon, send a render request, and parse the response header.
-# Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional) $7=command-position (0|1) $8=candidates-present (0|1)
+# Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional) $7=command-position (0|1) $8=candidates-present (0|1) $9=command-context (optional)
 # When candidates are empty, $8 distinguishes an explicit empty candidate set
 # from a cache-only request. Cache-first and resize callers leave $8 unset.
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
@@ -208,7 +208,7 @@ _zacrs_parse_render_header() {
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
 # On ERROR/connect failure (return 2): fd already closed, daemon marked unavailable.
 _zacrs_daemon_send_render() {
-    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}"
+    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}" _command_context="${9:-}"
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
@@ -218,6 +218,7 @@ _zacrs_daemon_send_render() {
     local render_cmd="render $_cr $_cc $COLUMNS $LINES"
     [[ -n "$_ctx_key" ]] && render_cmd+=" context_key=$_ctx_key"
     (( _cmd_pos )) && render_cmd+=" command_position=1"
+    [[ -n "$_command_context" ]] && render_cmd+=" command_context_hex=$(_zacrs_encode_hex_input "$_command_context")"
     (( _cands_present )) && render_cmd+=" candidates_present=1"
     render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
@@ -295,7 +296,11 @@ _zacrs_render() {
     local prefix="$1" prefix_len="$2" candidates_str="$3" from_gather="${4:-0}" selected="${5:-}" context_key="${6:-}"
     local cursor_row=0 cursor_col=0
     local is_cmd_pos=0
-    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
+    local command_context=""
+    if _zacrs_command_context "$LBUFFER"; then
+        command_context="$REPLY"
+        is_cmd_pos=$_zacrs_command_context_is_command
+    fi
     # When the popup is already on screen and the terminal hasn't resized,
     # reuse the previous cursor position instead of querying the terminal.
     # This eliminates the \e[6n round-trip (an extra /dev/tty write + read
@@ -318,7 +323,7 @@ _zacrs_render() {
     # Try zsocket daemon path (no subprocess spawn)
     if (( _zacrs_daemon_available )); then
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
-        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$prefix" "$candidates_str" "$selected" "$context_key" "$is_cmd_pos" 1
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$prefix" "$candidates_str" "$selected" "$context_key" "$is_cmd_pos" 1 "$command_context"
         local _send_rc=$?
         if (( _send_rc == 0 )); then
             local fd=$_zacrs_send_render_fd
@@ -350,6 +355,7 @@ _zacrs_render() {
     local -a render_args
     render_args=(render --prefix "$prefix" --cursor-row "$cursor_row" --cursor-col "$cursor_col")
     (( is_cmd_pos )) && render_args+=(--command-position)
+    [[ -n "$command_context" ]] && render_args+=(--command-context "$command_context")
     [[ -n "$selected" ]] && render_args+=(--selected "$selected")
     local output
     output=$(printf '%s' "$candidates_str" | "$ZACRS_BIN" "${render_args[@]}")
@@ -468,7 +474,11 @@ _zacrs_invoke_daemon() {
     local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}" candidates_present="${9:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
-    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
+    local command_context=""
+    if _zacrs_command_context "$LBUFFER"; then
+        command_context="$REPLY"
+        is_cmd_pos=$_zacrs_command_context_is_command
+    fi
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -489,6 +499,7 @@ _zacrs_invoke_daemon() {
         --popup-key "$$"
     )
     (( is_cmd_pos )) && complete_args+=(--command-position)
+    [[ -n "$command_context" ]] && complete_args+=(--command-context "$command_context")
     (( accept_single )) && complete_args+=(--accept-single)
     (( candidates_present )) && complete_args+=(--candidates-present)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
@@ -539,7 +550,11 @@ _zacrs_invoke() {
     local cursor_row="${4:-}" cursor_col="${5:-}" accept_single="${6:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
-    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
+    local command_context=""
+    if _zacrs_command_context "$LBUFFER"; then
+        command_context="$REPLY"
+        is_cmd_pos=$_zacrs_command_context_is_command
+    fi
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
         _zacrs_get_cursor_pos
@@ -558,6 +573,7 @@ _zacrs_invoke() {
         --rows "$LINES"
     )
     (( is_cmd_pos )) && complete_args+=(--command-position)
+    [[ -n "$command_context" ]] && complete_args+=(--command-context "$command_context")
     (( accept_single )) && complete_args+=(--accept-single)
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
@@ -777,6 +793,11 @@ _zacrs_line_pre_redraw() {
     local prefix prefix_len
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
+    local command_context="" is_cmd_pos=0
+    if _zacrs_command_context "$LBUFFER"; then
+        command_context="$REPLY"
+        is_cmd_pos=$_zacrs_command_context_is_command
+    fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
@@ -798,7 +819,7 @@ _zacrs_line_pre_redraw() {
         fi
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
         # candidates 引数を空にして送信 → デーモンがキャッシュを探す
-        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key"
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key" "$is_cmd_pos" 0 "$command_context"
         local _cache_rc=$?
         if (( _cache_rc == 0 )); then
             # キャッシュヒット: 描画完了
@@ -937,9 +958,12 @@ TRAPWINCH() {
     if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
         && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
-        local _resize_prefix="${LBUFFER##* }" _resize_cmd_pos=0
-        _zacrs_is_cmd_pos "$LBUFFER" "$_resize_prefix" && _resize_cmd_pos=1
-        _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" "" "$_resize_cmd_pos"
+        local _resize_prefix="${LBUFFER##* }" _resize_cmd_pos=0 _resize_context=""
+        if _zacrs_command_context "$LBUFFER"; then
+            _resize_context="$REPLY"
+            _resize_cmd_pos=$_zacrs_command_context_is_command
+        fi
+        _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" "" "$_resize_cmd_pos" 0 "$_resize_context"
         if (( $? == 0 )); then
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len

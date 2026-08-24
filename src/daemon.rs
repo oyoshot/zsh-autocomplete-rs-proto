@@ -123,6 +123,7 @@ struct RenderParams {
     term_rows: u16,
     selected: Option<usize>,
     command_position: bool,
+    command_context: Option<String>,
 }
 
 struct CompleteParams {
@@ -134,6 +135,7 @@ struct CompleteParams {
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
     command_position: bool,
+    command_context: Option<String>,
     accept_single: bool,
     reuse_popup: bool,
     shift_tab_sequence: Option<Vec<u8>>,
@@ -209,6 +211,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     term_cols: u16,
     term_rows: u16,
     command_position: bool,
+    command_context: Option<String>,
     accept_single: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     prev_popup_row: Option<u16>,
@@ -239,6 +242,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         prev_popup_row,
         prev_popup_height,
         command_position,
+        command_context,
         accept_single,
         reuse_popup: false,
         shift_tab_sequence,
@@ -445,6 +449,7 @@ impl DaemonServer {
                 candidates_tsv,
                 selected,
                 command_position,
+                command_context,
             } => {
                 let _span = info_span!(
                     "render",
@@ -467,6 +472,7 @@ impl DaemonServer {
                         term_rows,
                         selected: selected.map(usize::from),
                         command_position,
+                        command_context,
                     },
                     &candidates_tsv,
                 );
@@ -584,6 +590,7 @@ impl DaemonServer {
                 context_key,
                 popup_key,
                 command_position,
+                command_context,
                 candidates_present,
             }) => {
                 let (mut prefix, tsv_opt) =
@@ -605,6 +612,7 @@ impl DaemonServer {
                             term_rows,
                             selected,
                             command_position,
+                            command_context: command_context.clone(),
                         },
                         b"",
                     );
@@ -665,6 +673,7 @@ impl DaemonServer {
                                 term_rows,
                                 selected,
                                 command_position,
+                                command_context: command_context.clone(),
                             },
                             cached_tsv.as_bytes(),
                         );
@@ -713,6 +722,7 @@ impl DaemonServer {
                                     term_rows,
                                     selected,
                                     command_position,
+                                    command_context: command_context.clone(),
                                 },
                                 cached_tsv.as_bytes(),
                             );
@@ -781,6 +791,7 @@ impl DaemonServer {
                         term_rows,
                         selected,
                         command_position,
+                        command_context,
                     },
                     tsv.as_bytes(),
                 );
@@ -814,6 +825,7 @@ impl DaemonServer {
                 term_rows,
                 prev_popup,
                 command_position,
+                command_context,
                 accept_single,
                 candidates_present,
                 reuse_token,
@@ -916,6 +928,7 @@ impl DaemonServer {
                         prev_popup_row: prev_popup.map(|(row, _)| row),
                         prev_popup_height: prev_popup.map(|(_, height)| height),
                         command_position,
+                        command_context,
                         accept_single,
                         reuse_popup: reuse_token.is_some(),
                         shift_tab_sequence,
@@ -1015,8 +1028,8 @@ impl DaemonServer {
             term_rows,
             selected,
             command_position,
+            command_context,
         } = params;
-        let _ = command_position; // Retained in the wire protocol for compatibility.
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
             Err(e) => {
@@ -1035,7 +1048,7 @@ impl DaemonServer {
             self.config
                 .abbreviations
                 .iter()
-                .filter(|abbr| abbr.is_available_at(command_position))
+                .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
                 .map(|abbr| {
                     Candidate::abbreviation(
                         abbr.trigger.clone(),
@@ -1139,6 +1152,7 @@ impl DaemonServer {
         term_rows: u16,
         tsv: &str,
         command_position: bool,
+        command_context: Option<&str>,
     ) -> Option<(App, Vec<u8>)> {
         let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
         let mut candidates: Vec<Candidate> = tsv
@@ -1151,7 +1165,7 @@ impl DaemonServer {
             self.config
                 .abbreviations
                 .iter()
-                .filter(|abbr| abbr.is_available_at(command_position))
+                .filter(|abbr| abbr.is_available_at(command_position, command_context))
                 .map(|abbr| {
                     Candidate::abbreviation(
                         abbr.trigger.clone(),
@@ -1216,6 +1230,7 @@ impl DaemonServer {
             prev_popup_row,
             prev_popup_height,
             command_position,
+            command_context,
             accept_single,
             reuse_popup,
             shift_tab_sequence,
@@ -1230,6 +1245,7 @@ impl DaemonServer {
             term_rows,
             tsv,
             command_position,
+            command_context.as_deref(),
         ) {
             Some(v) => v,
             None => return,
@@ -1900,6 +1916,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -1950,6 +1967,7 @@ mod tests {
                 term_rows: 24,
                 selected: None,
                 command_position: false,
+                command_context: None,
             },
             b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n",
         );
@@ -1973,6 +1991,7 @@ mod tests {
                 term_rows: 24,
                 selected: None,
                 command_position: false,
+                command_context: None,
             },
             b"git\tcommand\tcommand\n",
         );
@@ -2003,6 +2022,7 @@ mod tests {
                     term_rows: 24,
                     selected: None,
                     command_position: false,
+                    command_context: None,
                 },
                 b"git-log\tcommand\tcommand\ngit-status\tcommand\tcommand\n",
             );
@@ -2069,6 +2089,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2098,6 +2119,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2124,6 +2146,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: true,
                 shift_tab_sequence: None,
@@ -2151,6 +2174,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2188,6 +2212,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2221,6 +2246,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2261,6 +2287,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2297,6 +2324,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2335,6 +2363,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2362,6 +2391,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2398,6 +2428,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2440,6 +2471,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2488,6 +2520,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2535,6 +2568,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2571,6 +2605,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: true,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2592,9 +2627,9 @@ mod tests {
             trigger: "null".to_string(),
             expansion: ">/dev/null".to_string(),
             description: "discard stdout".to_string(),
-            when: crate::config::AbbreviationWhen {
-                position: crate::config::AbbreviationPosition::Any,
-            },
+            when: crate::config::AbbreviationWhen::at_position(
+                crate::config::AbbreviationPosition::Any,
+            ),
         }];
 
         let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
@@ -2611,6 +2646,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: true,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2643,6 +2679,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: true,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2668,9 +2705,9 @@ mod tests {
             trigger: "null".to_string(),
             expansion: ">/dev/null".to_string(),
             description: "discard stdout".to_string(),
-            when: crate::config::AbbreviationWhen {
-                position: crate::config::AbbreviationPosition::Any,
-            },
+            when: crate::config::AbbreviationWhen::at_position(
+                crate::config::AbbreviationPosition::Any,
+            ),
         }];
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut writer = Vec::new();
@@ -2687,6 +2724,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: true,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2696,6 +2734,56 @@ mod tests {
 
         let output = String::from_utf8(writer).unwrap();
         assert!(output.starts_with("DONE 0 >/dev/null\n"), "{output}");
+    }
+
+    #[test]
+    fn handle_complete_applies_command_glob_to_abbreviation() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "null".to_string(),
+            expansion: ">/dev/null".to_string(),
+            description: "discard stdout".to_string(),
+            when: crate::config::AbbreviationWhen::with_command_patterns(
+                crate::config::AbbreviationPosition::Argument,
+                vec!["cargo *".to_string()],
+            )
+            .unwrap(),
+        }];
+
+        for (context, expected) in [
+            (Some("cargo test null"), true),
+            (Some("git test null"), false),
+            (None, false),
+        ] {
+            let mut reader = Cursor::new(Vec::<u8>::new());
+            let mut writer = Vec::new();
+            server.handle_complete(
+                &mut reader,
+                &mut writer,
+                CompleteParams {
+                    prefix: "null".to_string(),
+                    cursor_row: 5,
+                    cursor_col: 12,
+                    term_cols: 80,
+                    term_rows: 24,
+                    prev_popup_row: None,
+                    prev_popup_height: None,
+                    command_position: false,
+                    command_context: context.map(str::to_string),
+                    accept_single: true,
+                    reuse_popup: false,
+                    shift_tab_sequence: None,
+                },
+                "",
+            );
+
+            let output = String::from_utf8(writer).unwrap();
+            assert_eq!(
+                output.starts_with("DONE 0 >/dev/null\n"),
+                expected,
+                "{output}"
+            );
+        }
     }
 
     #[test]
@@ -2716,6 +2804,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: true,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2748,6 +2837,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: true,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2786,6 +2876,7 @@ mod tests {
                 term_rows: 24,
                 selected: None,
                 command_position: true,
+                command_context: None,
             },
             b"cargo\tcommand\tcommand\n",
         );
@@ -2808,9 +2899,9 @@ mod tests {
                 trigger: "null".to_string(),
                 expansion: ">/dev/null".to_string(),
                 description: "discard stdout".to_string(),
-                when: crate::config::AbbreviationWhen {
-                    position: crate::config::AbbreviationPosition::Any,
-                },
+                when: crate::config::AbbreviationWhen::at_position(
+                    crate::config::AbbreviationPosition::Any,
+                ),
             },
             crate::config::Abbreviation {
                 trigger: "gs".to_string(),
@@ -2829,6 +2920,7 @@ mod tests {
                 term_rows: 24,
                 selected: None,
                 command_position: false,
+                command_context: None,
             },
             b"--release\toption\toption\n",
         );
@@ -2897,6 +2989,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: true,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2937,6 +3030,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: true,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -2981,6 +3075,7 @@ mod tests {
                 prev_popup_row: None,
                 prev_popup_height: None,
                 command_position: false,
+                command_context: None,
                 accept_single: false,
                 reuse_popup: false,
                 shift_tab_sequence: None,
@@ -3184,6 +3279,7 @@ mod tests {
             term_rows: 24,
             prev_popup: None,
             command_position: false,
+            command_context: None,
             accept_single: true,
             candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),
@@ -3221,6 +3317,7 @@ mod tests {
             term_rows: 24,
             prev_popup: None,
             command_position: false,
+            command_context: None,
             accept_single: true,
             candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),

@@ -5,6 +5,7 @@ const CMD_RENDER: u8 = 0x01;
 const CMD_CLEAR: u8 = 0x02;
 const CMD_PING: u8 = 0x03;
 const CMD_SHUTDOWN: u8 = 0x04;
+const CMD_RENDER_V2: u8 = 0x05;
 
 // Response status bytes
 const STATUS_SUCCESS: u8 = 0x00;
@@ -26,6 +27,7 @@ pub enum Request {
         /// Pre-select the N-th filtered candidate before rendering.
         selected: Option<u16>,
         command_position: bool,
+        command_context: Option<String>,
     },
     Clear {
         popup_row: u16,
@@ -56,6 +58,7 @@ pub struct TextRenderRequest {
     pub context_key: Option<String>,
     pub popup_key: Option<String>,
     pub command_position: bool,
+    pub command_context: Option<String>,
     pub candidates_present: bool,
 }
 
@@ -67,6 +70,7 @@ pub struct TextCompleteRequest {
     pub term_rows: u16,
     pub prev_popup: Option<(u16, u16)>,
     pub command_position: bool,
+    pub command_context: Option<String>,
     pub accept_single: bool,
     pub candidates_present: bool,
     pub reuse_token: Option<String>,
@@ -174,8 +178,9 @@ impl Request {
                 candidates_tsv,
                 selected,
                 command_position,
+                command_context,
             } => {
-                payload.push(CMD_RENDER);
+                payload.push(CMD_RENDER_V2);
                 let prefix_bytes = prefix.as_bytes();
                 write_u16(&mut payload, prefix_bytes.len() as u16);
                 payload.extend_from_slice(prefix_bytes);
@@ -190,6 +195,9 @@ impl Request {
                 if let Some(sel) = selected {
                     write_u16(&mut payload, *sel);
                 }
+                let context = command_context.as_deref().unwrap_or("").as_bytes();
+                write_u32(&mut payload, context.len() as u32);
+                payload.extend_from_slice(context);
                 payload.extend_from_slice(candidates_tsv);
             }
             Request::Clear {
@@ -234,7 +242,7 @@ impl Request {
         let mut cursor = &buf[1..];
 
         match cmd {
-            CMD_RENDER => {
+            CMD_RENDER | CMD_RENDER_V2 => {
                 let prefix_len = read_u16(&mut cursor)? as usize;
                 if cursor.len() < prefix_len {
                     return Err(io::Error::new(
@@ -265,6 +273,27 @@ impl Request {
                     None
                 };
                 let command_position = flags & 0x02 != 0;
+                let command_context = if cmd == CMD_RENDER_V2 {
+                    let context_len = read_u32(&mut cursor)? as usize;
+                    if cursor.len() < context_len {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "command context length exceeds payload",
+                        ));
+                    }
+                    let (context_bytes, rest) = cursor.split_at(context_len);
+                    cursor = rest;
+                    if context_bytes.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            String::from_utf8(context_bytes.to_vec())
+                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                        )
+                    }
+                } else {
+                    None
+                };
                 let candidates_tsv = cursor.to_vec();
                 Ok(Request::Render {
                     prefix,
@@ -275,6 +304,7 @@ impl Request {
                     candidates_tsv,
                     selected,
                     command_position,
+                    command_context,
                 })
             }
             CMD_CLEAR => {
@@ -403,6 +433,7 @@ impl TextRequest {
                 let mut context_key = None;
                 let mut popup_key = None;
                 let mut command_position = false;
+                let mut command_context = None;
                 let mut candidates_present = false;
                 for token in rest {
                     if let Some(value) = token.strip_prefix("selected=") {
@@ -413,6 +444,9 @@ impl TextRequest {
                         popup_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("command_position=") {
                         command_position = value == "1";
+                    } else if let Some(value) = token.strip_prefix("command_context_hex=") {
+                        command_context =
+                            decode_hex_bytes(value).and_then(|bytes| String::from_utf8(bytes).ok());
                     } else if let Some(value) = token.strip_prefix("candidates_present=") {
                         candidates_present = value == "1";
                     }
@@ -426,6 +460,7 @@ impl TextRequest {
                     context_key,
                     popup_key,
                     command_position,
+                    command_context,
                     candidates_present,
                 }))
             }
@@ -440,6 +475,7 @@ impl TextRequest {
                 let mut prev_popup_row = None;
                 let mut prev_popup_height = None;
                 let mut command_position = false;
+                let mut command_context = None;
                 let mut accept_single = false;
                 let mut candidates_present = false;
                 let mut reuse_token = None;
@@ -461,6 +497,9 @@ impl TextRequest {
                         popup_key = Some(value.to_string());
                     } else if let Some(value) = token.strip_prefix("command_position=") {
                         command_position = value == "1";
+                    } else if let Some(value) = token.strip_prefix("command_context_hex=") {
+                        command_context =
+                            decode_hex_bytes(value).and_then(|bytes| String::from_utf8(bytes).ok());
                     } else if let Some(value) = token.strip_prefix("accept_single=") {
                         accept_single = value == "1";
                     } else if let Some(value) = token.strip_prefix("candidates_present=") {
@@ -474,6 +513,7 @@ impl TextRequest {
                     term_rows: parse_u16_token(term_rows)?,
                     prev_popup: prev_popup_row.zip(prev_popup_height),
                     command_position,
+                    command_context,
                     accept_single,
                     candidates_present,
                     reuse_token,
@@ -535,6 +575,12 @@ impl TextCompleteRequest {
         }
         if self.command_position {
             line.push_str(" command_position=1");
+        }
+        if let Some(context) = &self.command_context {
+            line.push_str(&format!(
+                " command_context_hex={}",
+                encode_hex_bytes(context.as_bytes())
+            ));
         }
         if self.accept_single {
             line.push_str(" accept_single=1");
@@ -762,8 +808,10 @@ mod tests {
             candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
             selected: None,
             command_position: false,
+            command_context: Some("cargo test gi".to_string()),
         };
         let bytes = req.serialize();
+        assert_eq!(bytes[4], CMD_RENDER_V2);
         let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
         match parsed {
             Request::Render {
@@ -775,6 +823,7 @@ mod tests {
                 candidates_tsv,
                 selected,
                 command_position,
+                command_context,
             } => {
                 assert_eq!(prefix, "gi");
                 assert_eq!(cursor_row, 5);
@@ -784,6 +833,35 @@ mod tests {
                 assert!(candidates_tsv.starts_with(b"git\t"));
                 assert_eq!(selected, None);
                 assert!(!command_position);
+                assert_eq!(command_context.as_deref(), Some("cargo test gi"));
+            }
+            _ => panic!("expected Render"),
+        }
+    }
+
+    #[test]
+    fn legacy_render_request_keeps_candidate_payload_intact() {
+        let mut payload = vec![CMD_RENDER];
+        write_u16(&mut payload, 2);
+        payload.extend_from_slice(b"gi");
+        write_u16(&mut payload, 5);
+        write_u16(&mut payload, 2);
+        write_u16(&mut payload, 80);
+        write_u16(&mut payload, 24);
+        payload.push(0);
+        payload.extend_from_slice(b"git\tcommand\tcommand\n");
+        let mut bytes = Vec::new();
+        write_u32(&mut bytes, payload.len() as u32);
+        bytes.extend_from_slice(&payload);
+
+        match Request::deserialize(&mut &bytes[..]).unwrap() {
+            Request::Render {
+                command_context,
+                candidates_tsv,
+                ..
+            } => {
+                assert_eq!(command_context, None);
+                assert_eq!(candidates_tsv, b"git\tcommand\tcommand\n");
             }
             _ => panic!("expected Render"),
         }
@@ -800,6 +878,7 @@ mod tests {
             candidates_tsv: b"git\tcommand\tcommand\ngrep\tcommand\tcommand\n".to_vec(),
             selected: Some(1),
             command_position: true,
+            command_context: None,
         };
         let bytes = req.serialize();
         let parsed = Request::deserialize(&mut &bytes[..]).unwrap();
@@ -808,10 +887,12 @@ mod tests {
                 selected,
                 candidates_tsv,
                 command_position,
+                command_context,
                 ..
             } => {
                 assert_eq!(selected, Some(1));
                 assert!(command_position);
+                assert_eq!(command_context, None);
                 assert!(candidates_tsv.starts_with(b"git\t"));
             }
             _ => panic!("expected Render"),
@@ -1005,6 +1086,7 @@ mod tests {
             term_rows: 24,
             prev_popup: Some((6, 12)),
             command_position: true,
+            command_context: Some("cargo test null".to_string()),
             accept_single: true,
             candidates_present: true,
             reuse_token: Some("123".to_string()),
@@ -1034,6 +1116,7 @@ mod tests {
                 context_key: Some("ctx".to_string()),
                 popup_key: Some("popup".to_string()),
                 command_position: true,
+                command_context: None,
                 candidates_present: true,
             })
         );

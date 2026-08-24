@@ -53,6 +53,7 @@ struct CompleteCommand {
     rows: u16,
     daemon_mode: bool,
     command_position: bool,
+    command_context: Option<String>,
     accept_single: bool,
     candidates_present: bool,
     shift_tab_sequence: Option<Vec<u8>>,
@@ -73,6 +74,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         rows,
         daemon_mode,
         command_position,
+        command_context,
         accept_single,
         candidates_present,
         shift_tab_sequence,
@@ -97,6 +99,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             cursor_col,
             &tsv,
             command_position,
+            command_context.as_deref(),
             accept_single,
             candidates_present,
             shift_tab_sequence,
@@ -140,6 +143,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             cols,
             rows,
             command_position,
+            command_context,
             accept_single,
             shift_tab_for_thread,
             prev_popup_row,
@@ -174,6 +178,7 @@ fn run_render(
     cursor_col: u16,
     selected: Option<usize>,
     command_position: bool,
+    command_context: Option<String>,
     config: &config::Config,
 ) -> io::Result<i32> {
     // Read raw stdin before trying daemon (we need it for both paths)
@@ -190,6 +195,7 @@ fn run_render(
         cursor_col,
         selected,
         command_position,
+        command_context.as_deref(),
         &raw_stdin,
     ) {
         let mut tty = tty::open_tty_write()?;
@@ -212,7 +218,7 @@ fn run_render(
         config
             .abbreviations
             .iter()
-            .filter(|abbr| abbr.is_available_at(command_position))
+            .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
             .map(|abbr| {
                 Candidate::abbreviation(
                     abbr.trigger.clone(),
@@ -298,6 +304,7 @@ fn main() {
             cursor_col,
             daemon,
             command_position,
+            command_context,
             accept_single,
             candidates_present,
             shift_tab_hex,
@@ -317,6 +324,7 @@ fn main() {
             rows,
             daemon_mode: daemon,
             command_position,
+            command_context,
             accept_single,
             candidates_present,
             shift_tab_sequence: shift_tab_hex
@@ -344,6 +352,7 @@ fn main() {
             cursor_col,
             selected,
             command_position,
+            command_context,
         } => {
             let cfg = config::Config::load();
             match run_render(
@@ -352,6 +361,7 @@ fn main() {
                 cursor_col,
                 selected,
                 command_position,
+                command_context,
                 &cfg,
             ) {
                 Ok(code) => process::exit(code),

@@ -53,6 +53,37 @@ _zacrs_is_cmd_pos() {
     return 1
 }
 
+# Return the current simple-command context through the cursor, normalized to
+# one space between parsed words. Separators start a new simple command. A
+# trailing blank is preserved so patterns such as "cargo *" match a new
+# argument position before any prefix has been typed.
+# Args: $1=LBUFFER. Sets REPLY and _zacrs_command_context_is_command; returns 1
+# when Zsh cannot tokenize the buffer.
+_zacrs_command_context() {
+    local _buffer="$1"
+    local -a _tokens _segment
+    typeset -g _zacrs_command_context_is_command=0
+    _tokens=( ${(z)_buffer} ) 2>/dev/null || { REPLY=""; return 1; }
+
+    local _token
+    for _token in "${_tokens[@]}"; do
+        if [[ "$_token" == ('|'|'|&'|'||'|'&&'|'&'|';'|$'\n') ]]; then
+            _segment=()
+        else
+            _segment+=("${(Q)_token}")
+        fi
+    done
+
+    REPLY="${(j: :)_segment}"
+    if [[ "$_buffer" == *[[:space:]] ]]; then
+        REPLY+=" "
+        (( ${#_segment} == 0 )) && _zacrs_command_context_is_command=1
+    else
+        (( ${#_segment} <= 1 )) && _zacrs_command_context_is_command=1
+    fi
+    return 0
+}
+
 # Render even when compsys produced no candidates. The Rust side may still
 # contribute configured abbreviations at any command-line position.
 # Args: $1=candidates $2=buffer $3=prefix
