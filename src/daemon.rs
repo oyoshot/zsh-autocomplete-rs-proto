@@ -2586,6 +2586,43 @@ mod tests {
     }
 
     #[test]
+    fn handle_complete_does_not_accept_single_native_candidate_when_abbreviation_matches() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "null".to_string(),
+            expansion: ">/dev/null".to_string(),
+            description: "discard stdout".to_string(),
+            when: crate::config::AbbreviationWhen {
+                position: crate::config::AbbreviationPosition::Any,
+            },
+        }];
+
+        let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "null".to_string(),
+                cursor_row: 5,
+                cursor_col: 12,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "nullable\tfile\tfile\n",
+        );
+
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.starts_with("FRAME "), "{output}");
+    }
+
+    #[test]
     fn handle_complete_confirm_expands_and_executes_abbreviation() {
         let mut server = test_server();
         server.config.abbreviations = vec![crate::config::Abbreviation {

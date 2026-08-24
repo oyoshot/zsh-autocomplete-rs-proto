@@ -636,35 +636,6 @@ _zacrs_collect_candidates() {
     fi
 }
 
-# Handle single-candidate immediate completion.
-# Args: $1=prefix $2=prefix_len $3=candidate_line (tab-separated)
-_zacrs_apply_single_candidate() {
-    local prefix="$1" prefix_len="$2" cand_line="$3"
-    _zacrs_clear_popup
-    local cursor_row=0 cursor_col=0
-    if (( _zacrs_daemon_available )); then
-        _zacrs_invoke_daemon "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 0 "" 1 1 && return
-    fi
-    _zacrs_invoke "$prefix" "$prefix_len" "$cand_line" "$cursor_row" "$cursor_col" 1 && return
-
-    local text="${cand_line%%	*}"
-    local kind="${cand_line##*	}"
-    local is_cmd_pos=0 result_text="$text" chain=0
-    _zacrs_is_cmd_pos "$LBUFFER" "$prefix" && is_cmd_pos=1
-    case "$kind" in
-        directory) [[ "$text" != */ ]] && result_text+="/" ;;
-        command|alias|builtin|function|command_rescue|alias_rescue|builtin_rescue|function_rescue|file) result_text+=" " ;;
-        "")
-            if (( is_cmd_pos )) && [[ "$text" != */ && "$text" != */* ]]; then
-                result_text+=" "
-            fi
-            ;;
-    esac
-    [[ "$result_text" == *[\ /] ]] && chain=1
-    _zacrs_apply "$prefix_len" 0 "$result_text" "$chain" 0
-    zle reset-prompt
-}
-
 # === Popup completion widget ===
 
 _zacrs_complete_popup() {
@@ -706,16 +677,6 @@ _zacrs_complete_popup() {
         _zacrs_collect_candidates
     fi
 
-    local -a cands
-    cands=( ${(f)candidates_str} )
-    cands=( ${cands:#} )
-
-    # 単一候補 → 即補完
-    if [[ -n "$candidates_str" && ${#cands[@]} -eq 1 ]]; then
-        _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${cands[1]}"
-        return
-    fi
-
     _zacrs_suppressed=0
 
     # Try daemon path first, fall back to subprocess
@@ -731,13 +692,6 @@ _zacrs_complete_popup() {
             return
         elif (( daemon_rc == 2 )); then
             _zacrs_collect_candidates
-            local -a _cands_retry
-            _cands_retry=( ${(f)candidates_str} )
-            _cands_retry=( ${_cands_retry:#} )
-            if [[ ${#_cands_retry[@]} -eq 1 ]]; then
-                _zacrs_apply_single_candidate "$prefix" "$prefix_len" "${_cands_retry[1]}"
-                return
-            fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
                 "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1 && return
         fi
