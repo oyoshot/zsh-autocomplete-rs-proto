@@ -91,7 +91,7 @@ assert_render_gate() {
 }
 
 assert_render_gate 1 '' gpo gpo 'command position reaches configured abbreviations without shell candidates'
-assert_render_gate 0 '' 'git gpo' gpo 'argument position still skips an empty candidate request'
+assert_render_gate 1 '' 'git gpo' gpo 'argument position reaches configured abbreviations without shell candidates'
 assert_render_gate 1 $'git\tcommand\tcommand' 'git gpo' gpo 'shell candidates render in argument position'
 
 (( failures == 0 ))

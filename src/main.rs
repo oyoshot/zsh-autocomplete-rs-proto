@@ -54,6 +54,7 @@ struct CompleteCommand {
     daemon_mode: bool,
     command_position: bool,
     accept_single: bool,
+    candidates_present: bool,
     shift_tab_sequence: Option<Vec<u8>>,
     stale_bytes: Vec<u8>,
     reuse_token: Option<String>,
@@ -73,6 +74,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         daemon_mode,
         command_position,
         accept_single,
+        candidates_present,
         shift_tab_sequence,
         stale_bytes,
         reuse_token,
@@ -96,6 +98,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             &tsv,
             command_position,
             accept_single,
+            candidates_present,
             shift_tab_sequence,
             stale_bytes,
             prev_popup_row.zip(prev_popup_height),
@@ -205,15 +208,19 @@ fn run_render(
         .filter(|line| !line.is_empty())
         .map(Candidate::parse_line)
         .collect();
-    if command_position {
-        candidates.extend(config.abbreviations.iter().map(|abbr| {
-            Candidate::abbreviation(
-                abbr.trigger.clone(),
-                abbr.expansion.clone(),
-                abbr.description.clone(),
-            )
-        }));
-    }
+    candidates.extend(
+        config
+            .abbreviations
+            .iter()
+            .filter(|abbr| abbr.is_available_at(command_position))
+            .map(|abbr| {
+                Candidate::abbreviation(
+                    abbr.trigger.clone(),
+                    abbr.expansion.clone(),
+                    abbr.description.clone(),
+                )
+            }),
+    );
 
     if candidates.is_empty() {
         return Ok(1);
@@ -292,6 +299,7 @@ fn main() {
             daemon,
             command_position,
             accept_single,
+            candidates_present,
             shift_tab_hex,
             stale_hex,
             reuse_token,
@@ -310,6 +318,7 @@ fn main() {
             daemon_mode: daemon,
             command_position,
             accept_single,
+            candidates_present,
             shift_tab_sequence: shift_tab_hex
                 .as_deref()
                 .and_then(protocol::decode_hex_bytes),

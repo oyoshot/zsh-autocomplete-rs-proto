@@ -66,6 +66,17 @@ impl ApplyResult {
         }
     }
 
+    fn no_candidates() -> Self {
+        Self {
+            code: 4,
+            text: String::new(),
+            chain: false,
+            execute: false,
+            restore_text: String::new(),
+            cursor_offset: None,
+        }
+    }
+
     fn dismiss_with_space(text: String) -> Self {
         Self {
             chain: should_chain_after_apply(&text),
@@ -804,6 +815,7 @@ impl DaemonServer {
                 prev_popup,
                 command_position,
                 accept_single,
+                candidates_present,
                 reuse_token,
                 shift_tab_sequence,
                 context_key,
@@ -818,47 +830,51 @@ impl DaemonServer {
                 // Cache-only request: resolve TSV from cache or report miss.
                 let tsv = match tsv_opt {
                     None => {
-                        if context_key.is_none() {
-                            if let Some(ref key) = popup_key {
-                                match self.get_active_popup(key) {
-                                    Some(active_popup) => {
-                                        debug!(
-                                            popup_key = key.as_str(),
-                                            "complete popup cache hit"
-                                        );
-                                        prefix = active_popup.prefix;
-                                        active_popup.tsv
+                        if candidates_present {
+                            String::new()
+                        } else {
+                            if context_key.is_none() {
+                                if let Some(ref key) = popup_key {
+                                    match self.get_active_popup(key) {
+                                        Some(active_popup) => {
+                                            debug!(
+                                                popup_key = key.as_str(),
+                                                "complete popup cache hit"
+                                            );
+                                            prefix = active_popup.prefix;
+                                            active_popup.tsv
+                                        }
+                                        None => {
+                                            debug!(
+                                                popup_key = key.as_str(),
+                                                "complete popup cache miss"
+                                            );
+                                            let _ = writeln!(writer, "CACHE_MISS");
+                                            let _ = writer.flush();
+                                            return false;
+                                        }
+                                    }
+                                } else {
+                                    let _ = write_apply_result(
+                                        &mut writer,
+                                        &ApplyResult::cancel(String::new()),
+                                    );
+                                    return false;
+                                }
+                            } else {
+                                // context_key is Some here (we checked is_none() above)
+                                let key = context_key.as_deref().unwrap();
+                                match self.get_cached_tsv(key, &prefix) {
+                                    Some(cached) => {
+                                        debug!(context_key = key, "complete cache hit");
+                                        cached
                                     }
                                     None => {
-                                        debug!(
-                                            popup_key = key.as_str(),
-                                            "complete popup cache miss"
-                                        );
+                                        debug!(context_key = key, "complete cache miss");
                                         let _ = writeln!(writer, "CACHE_MISS");
                                         let _ = writer.flush();
                                         return false;
                                     }
-                                }
-                            } else {
-                                let _ = write_apply_result(
-                                    &mut writer,
-                                    &ApplyResult::cancel(String::new()),
-                                );
-                                return false;
-                            }
-                        } else {
-                            // context_key is Some here (we checked is_none() above)
-                            let key = context_key.as_deref().unwrap();
-                            match self.get_cached_tsv(key, &prefix) {
-                                Some(cached) => {
-                                    debug!(context_key = key, "complete cache hit");
-                                    cached
-                                }
-                                None => {
-                                    debug!(context_key = key, "complete cache miss");
-                                    let _ = writeln!(writer, "CACHE_MISS");
-                                    let _ = writer.flush();
-                                    return false;
                                 }
                             }
                         }
@@ -1000,6 +1016,7 @@ impl DaemonServer {
             selected,
             command_position,
         } = params;
+        let _ = command_position; // Retained in the wire protocol for compatibility.
         let tsv_str = match std::str::from_utf8(candidates_tsv) {
             Ok(s) => s,
             Err(e) => {
@@ -1014,15 +1031,19 @@ impl DaemonServer {
             .map(Candidate::parse_line)
             .collect();
 
-        if command_position {
-            candidates.extend(self.config.abbreviations.iter().map(|abbr| {
-                Candidate::abbreviation(
-                    abbr.trigger.clone(),
-                    abbr.expansion.clone(),
-                    abbr.description.clone(),
-                )
-            }));
-        }
+        candidates.extend(
+            self.config
+                .abbreviations
+                .iter()
+                .filter(|abbr| abbr.is_available_at(command_position))
+                .map(|abbr| {
+                    Candidate::abbreviation(
+                        abbr.trigger.clone(),
+                        abbr.expansion.clone(),
+                        abbr.description.clone(),
+                    )
+                }),
+        );
 
         if candidates.is_empty() {
             debug!("render request had no candidates");
@@ -1106,7 +1127,7 @@ impl DaemonServer {
     ///
     /// Parses candidates, creates `App`, filters, caps viewport, and calls `select_first()`.
     /// Returns `None` if an early exit was needed (empty candidates, no matches, etc.),
-    /// in which case a `DONE 1` response has already been sent.
+    /// in which case a terminal `DONE` response has already been sent.
     #[allow(clippy::too_many_arguments)]
     fn setup_session<W: Write>(
         &mut self,
@@ -1119,24 +1140,29 @@ impl DaemonServer {
         tsv: &str,
         command_position: bool,
     ) -> Option<(App, Vec<u8>)> {
+        let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
         let mut candidates: Vec<Candidate> = tsv
             .lines()
             .filter(|line| !line.is_empty())
             .map(Candidate::parse_line)
             .collect();
 
-        if command_position {
-            candidates.extend(self.config.abbreviations.iter().map(|abbr| {
-                Candidate::abbreviation(
-                    abbr.trigger.clone(),
-                    abbr.expansion.clone(),
-                    abbr.description.clone(),
-                )
-            }));
-        }
+        candidates.extend(
+            self.config
+                .abbreviations
+                .iter()
+                .filter(|abbr| abbr.is_available_at(command_position))
+                .map(|abbr| {
+                    Candidate::abbreviation(
+                        abbr.trigger.clone(),
+                        abbr.expansion.clone(),
+                        abbr.description.clone(),
+                    )
+                }),
+        );
 
         if candidates.is_empty() {
-            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
+            let _ = write_apply_result(writer, &ApplyResult::no_candidates());
             return None;
         }
 
@@ -1153,7 +1179,12 @@ impl DaemonServer {
 
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
-            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
+            let result = if native_candidates_present {
+                ApplyResult::cancel(String::new())
+            } else {
+                ApplyResult::no_candidates()
+            };
+            let _ = write_apply_result(writer, &result);
             return None;
         }
 
@@ -2555,12 +2586,50 @@ mod tests {
     }
 
     #[test]
-    fn handle_complete_confirm_expands_and_executes_command_abbreviation() {
+    fn handle_complete_does_not_accept_single_native_candidate_when_abbreviation_matches() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "null".to_string(),
+            expansion: ">/dev/null".to_string(),
+            description: "discard stdout".to_string(),
+            when: crate::config::AbbreviationWhen {
+                position: crate::config::AbbreviationPosition::Any,
+            },
+        }];
+
+        let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
+        let mut writer = Vec::new();
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "null".to_string(),
+                cursor_row: 5,
+                cursor_col: 12,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "nullable\tfile\tfile\n",
+        );
+
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.starts_with("FRAME "), "{output}");
+    }
+
+    #[test]
+    fn handle_complete_confirm_expands_and_executes_abbreviation() {
         let mut server = test_server();
         server.config.abbreviations = vec![crate::config::Abbreviation {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let mut reader = run_complete_session(
@@ -2593,12 +2662,79 @@ mod tests {
     }
 
     #[test]
+    fn handle_complete_expands_abbreviation_at_argument_position() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![crate::config::Abbreviation {
+            trigger: "null".to_string(),
+            expansion: ">/dev/null".to_string(),
+            description: "discard stdout".to_string(),
+            when: crate::config::AbbreviationWhen {
+                position: crate::config::AbbreviationPosition::Any,
+            },
+        }];
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let mut writer = Vec::new();
+
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "null".to_string(),
+                cursor_row: 5,
+                cursor_col: 12,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "",
+        );
+
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.starts_with("DONE 0 >/dev/null\n"), "{output}");
+    }
+
+    #[test]
+    fn handle_complete_reports_when_no_native_or_abbreviation_candidates_exist() {
+        let mut server = test_server();
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let mut writer = Vec::new();
+
+        server.handle_complete(
+            &mut reader,
+            &mut writer,
+            CompleteParams {
+                prefix: "missing".to_string(),
+                cursor_row: 5,
+                cursor_col: 12,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "",
+        );
+
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.starts_with("DONE 4 \n"), "{output}");
+    }
+
+    #[test]
     fn handle_complete_space_expands_abbreviation_and_preserves_cursor_offset() {
         let mut server = test_server();
         server.config.abbreviations = vec![crate::config::Abbreviation {
             trigger: "gcm".to_string(),
             expansion: "git commit -m '{{cursor}}'".to_string(),
             description: "commit with a message".to_string(),
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let mut reader = run_complete_session(
@@ -2638,6 +2774,7 @@ mod tests {
             trigger: "gs".to_string(),
             expansion: "git status".to_string(),
             description: "working tree status".to_string(),
+            when: crate::config::AbbreviationWhen::default(),
         }];
 
         let response = server.handle_render(
@@ -2664,12 +2801,57 @@ mod tests {
     }
 
     #[test]
-    fn handle_text_render_empty_tsv_includes_command_abbreviation() {
+    fn handle_render_includes_abbreviation_at_argument_position() {
+        let mut server = test_server();
+        server.config.abbreviations = vec![
+            crate::config::Abbreviation {
+                trigger: "null".to_string(),
+                expansion: ">/dev/null".to_string(),
+                description: "discard stdout".to_string(),
+                when: crate::config::AbbreviationWhen {
+                    position: crate::config::AbbreviationPosition::Any,
+                },
+            },
+            crate::config::Abbreviation {
+                trigger: "gs".to_string(),
+                expansion: "git status".to_string(),
+                description: String::new(),
+                when: crate::config::AbbreviationWhen::default(),
+            },
+        ];
+
+        let response = server.handle_render(
+            RenderParams {
+                prefix: String::new(),
+                cursor_row: 5,
+                cursor_col: 12,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+                command_position: false,
+            },
+            b"--release\toption\toption\n",
+        );
+
+        match response {
+            crate::protocol::Response::Success { tty_bytes, .. } => {
+                let rendered = String::from_utf8_lossy(&tty_bytes);
+                assert!(rendered.contains("null"));
+                assert!(rendered.contains(">/dev/null"));
+                assert!(!rendered.contains("git status"));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_text_render_empty_tsv_includes_abbreviation() {
         let mut server = test_server();
         server.config.abbreviations = vec![crate::config::Abbreviation {
             trigger: "gpo".to_string(),
             expansion: "git push origin HEAD".to_string(),
             description: String::new(),
+            when: crate::config::AbbreviationWhen::default(),
         }];
         server.store_active_popup(
             "popup-1",
@@ -3003,6 +3185,7 @@ mod tests {
             prev_popup: None,
             command_position: false,
             accept_single: true,
+            candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),
             shift_tab_sequence: None,
             context_key: Some("ctx-1".to_string()),
@@ -3039,6 +3222,7 @@ mod tests {
             prev_popup: None,
             command_position: false,
             accept_single: true,
+            candidates_present: false,
             reuse_token: Some("reuse-1".to_string()),
             shift_tab_sequence: None,
             context_key: None,

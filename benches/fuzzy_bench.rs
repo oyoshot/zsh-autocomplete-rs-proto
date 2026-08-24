@@ -138,6 +138,7 @@ fn abbreviation_injection_and_filter(c: &mut Criterion) {
                 trigger: format!("abbr-{index}"),
                 expansion: format!("command-{index} --option '{{{{cursor}}}}'"),
                 description: format!("user abbreviation {index}"),
+                when: zsh_autocomplete_rs::config::AbbreviationWhen::default(),
             })
             .collect();
         let mut matcher = FuzzyMatcher::new();
