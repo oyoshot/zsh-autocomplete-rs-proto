@@ -94,4 +94,36 @@ assert_render_gate 1 '' gpo gpo 'command position reaches configured abbreviatio
 assert_render_gate 1 '' 'git gpo' gpo 'argument position reaches configured abbreviations without shell candidates'
 assert_render_gate 1 $'git\tcommand\tcommand' 'git gpo' gpo 'shell candidates render in argument position'
 
+assert_command_context() {
+    local expected=$1 buffer=$2 description=$3
+    local actual=""
+    if _zacrs_command_context "$buffer"; then
+        actual="$REPLY"
+    fi
+    if [[ "$actual" != "$expected" ]]; then
+        print -u2 -r -- "not ok: ${description} (expected=${expected}, actual=${actual})"
+        (( ++failures ))
+    else
+        print -r -- "ok: ${description}"
+    fi
+}
+
+assert_command_context 'cargo test nu' 'cargo    test  nu' 'command context normalizes spaces'
+assert_command_context 'cargo test nu' 'echo ok | cargo test nu' 'command context starts after pipe'
+assert_command_context 'cargo null' 'sleep 1 & cargo null' 'command context starts after background separator'
+assert_command_context 'cargo null' 'echo ok |& cargo null' 'command context starts after stderr pipe'
+assert_command_context 'git add ' 'cd repo && git add ' 'command context preserves a new argument slot'
+assert_command_context 'printf %s | nu' "printf '%s' '|' nu" 'quoted separator stays in command context'
+
+_zacrs_command_context 'sleep 1 & cargo'
+(( _zacrs_command_context_is_command == 1 )) || {
+    print -u2 -r -- 'not ok: first word after background separator is command position'
+    (( ++failures ))
+}
+_zacrs_command_context 'echo ok |& cargo'
+(( _zacrs_command_context_is_command == 1 )) || {
+    print -u2 -r -- 'not ok: first word after stderr pipe is command position'
+    (( ++failures ))
+}
+
 (( failures == 0 ))

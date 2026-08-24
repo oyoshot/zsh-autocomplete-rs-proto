@@ -1,10 +1,15 @@
 use crossterm::style::Color;
+use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
 use crate::input::Action;
+
+const MAX_COMMAND_GLOB_PATTERNS: usize = 256;
+const MAX_COMMAND_GLOB_BYTES: usize = 1024;
+const MAX_COMMAND_CONTEXT_BYTES: usize = 16 * 1024;
 
 fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("zacrs").join("config.toml"))
@@ -67,7 +72,7 @@ struct ConfigFile {
     abbreviation: Vec<AbbreviationRaw>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Abbreviation {
     pub trigger: String,
     pub expansion: String,
@@ -75,23 +80,147 @@ pub struct Abbreviation {
     pub when: AbbreviationWhen,
 }
 
+impl PartialEq for Abbreviation {
+    fn eq(&self, other: &Self) -> bool {
+        self.trigger == other.trigger
+            && self.expansion == other.expansion
+            && self.description == other.description
+            && self.when == other.when
+    }
+}
+
+impl Eq for Abbreviation {}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AbbreviationPosition {
     #[default]
     Command,
+    Argument,
     Any,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct AbbreviationWhen {
-    #[serde(default)]
     pub position: AbbreviationPosition,
+    command_patterns: Vec<String>,
+    command_matchers: Vec<GlobMatcher>,
 }
 
 impl Abbreviation {
-    pub fn is_available_at(&self, command_position: bool) -> bool {
-        command_position || self.when.position == AbbreviationPosition::Any
+    pub fn is_available_at(&self, command_position: bool, command_context: Option<&str>) -> bool {
+        let position_matches = match self.when.position {
+            AbbreviationPosition::Command => command_position,
+            AbbreviationPosition::Argument => !command_position,
+            AbbreviationPosition::Any => true,
+        };
+        if !position_matches {
+            return false;
+        }
+        self.when.matches_command(command_context)
+    }
+}
+
+impl PartialEq for AbbreviationWhen {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position && self.command_patterns == other.command_patterns
+    }
+}
+
+impl Eq for AbbreviationWhen {}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AbbreviationWhenRaw {
+    #[serde(default)]
+    position: AbbreviationPosition,
+    command: Option<OneOrMany>,
+}
+
+impl<'de> Deserialize<'de> for AbbreviationWhen {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = AbbreviationWhenRaw::deserialize(deserializer)?;
+        let command_was_set = raw.command.is_some();
+        let command_patterns = match raw.command {
+            None => Vec::new(),
+            Some(OneOrMany::One(pattern)) => vec![pattern],
+            Some(OneOrMany::Many(patterns)) => patterns,
+        };
+        if command_patterns.is_empty() && command_was_set {
+            return Err(serde::de::Error::custom(
+                "when.command must contain at least one glob",
+            ));
+        }
+        if command_patterns.len() > MAX_COMMAND_GLOB_PATTERNS {
+            return Err(serde::de::Error::custom(format!(
+                "when.command accepts at most {MAX_COMMAND_GLOB_PATTERNS} globs"
+            )));
+        }
+        if let Some(pattern) = command_patterns
+            .iter()
+            .find(|pattern| pattern.len() > MAX_COMMAND_GLOB_BYTES)
+        {
+            return Err(serde::de::Error::custom(format!(
+                "when.command glob exceeds {MAX_COMMAND_GLOB_BYTES} bytes: {pattern}"
+            )));
+        }
+        let command_matchers = command_patterns
+            .iter()
+            .map(|pattern| {
+                Glob::new(pattern)
+                    .map(|glob| glob.compile_matcher())
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            position: raw.position,
+            command_patterns,
+            command_matchers,
+        })
+    }
+}
+
+impl AbbreviationWhen {
+    pub fn at_position(position: AbbreviationPosition) -> Self {
+        Self {
+            position,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_command_patterns(
+        position: AbbreviationPosition,
+        command_patterns: Vec<String>,
+    ) -> Result<Self, globset::Error> {
+        let command_matchers = command_patterns
+            .iter()
+            .map(|pattern| Glob::new(pattern).map(|glob| glob.compile_matcher()))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            position,
+            command_patterns,
+            command_matchers,
+        })
+    }
+
+    fn matches_command(&self, command_context: Option<&str>) -> bool {
+        self.command_matchers.is_empty()
+            || command_context.is_some_and(|context| {
+                context.len() <= MAX_COMMAND_CONTEXT_BYTES
+                    && self
+                        .command_matchers
+                        .iter()
+                        .any(|matcher| matcher.is_match(context))
+            })
     }
 }
 
@@ -285,7 +414,7 @@ impl Config {
                     trigger: abbr.trigger.clone(),
                     expansion: abbr.expansion.clone(),
                     description: abbr.description.clone(),
-                    when: abbr.when,
+                    when: abbr.when.clone(),
                 },
             );
         }
@@ -610,10 +739,65 @@ when.position = "any"
                     description: String::new(),
                     when: AbbreviationWhen {
                         position: AbbreviationPosition::Any,
+                        ..Default::default()
                     },
                 },
             ]
         );
+    }
+
+    #[test]
+    fn abbreviation_when_command_accepts_one_or_many_globs() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
+when.position = "argument"
+when.command = ["cargo *", "git add *"]
+"#,
+        )
+        .unwrap();
+        let abbreviations = Config::abbreviations_from_file(&file);
+        let abbreviation = &abbreviations[0];
+
+        assert!(abbreviation.is_available_at(false, Some("cargo test null")));
+        assert!(abbreviation.is_available_at(false, Some("git add src null")));
+        assert!(!abbreviation.is_available_at(false, Some("git commit null")));
+        assert!(!abbreviation.is_available_at(true, Some("cargo test null")));
+        assert!(!abbreviation.is_available_at(false, None));
+    }
+
+    #[test]
+    fn abbreviation_when_command_glob_is_anchored() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
+when.position = "argument"
+when.command = "cargo *"
+"#,
+        )
+        .unwrap();
+        let abbreviation = &Config::abbreviations_from_file(&file)[0];
+
+        assert!(abbreviation.is_available_at(false, Some("cargo null")));
+        assert!(!abbreviation.is_available_at(false, Some("sudo cargo null")));
+    }
+
+    #[test]
+    fn abbreviation_when_rejects_invalid_command_glob() {
+        let parsed = toml::from_str::<ConfigFile>(
+            r#"
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
+when.command = "["
+"#,
+        );
+
+        assert!(parsed.is_err());
     }
 
     #[test]

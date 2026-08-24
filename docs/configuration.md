@@ -38,7 +38,27 @@ when.position = "any"
 `when.position = "any"` also offers the abbreviation at argument positions. Typing
 `cargo test <Tab>` can then show `null`, and `cargo test null<Tab>` can replace
 `null` with `>/dev/null`. The supported positions are `command` (the default)
-and `any`.
+`argument`, and `any`.
+
+Use `when.command` to restrict an abbreviation to the current simple-command
+context. It accepts one glob or a list of alternative globs:
+
+```toml
+[[abbreviation]]
+trigger = "null"
+expansion = ">/dev/null"
+description = "discard stdout"
+when.position = "argument"
+when.command = ["cargo *", "cross *", "git add *"]
+```
+
+The shell normalizes parsed words to one space and matches only the simple
+command containing the cursor, so `echo ok | cargo test null` is matched as
+`cargo test null`. Matching is case-sensitive and anchored to the entire
+context. Patterns support `*`, `?`, and character classes such as `[abc]`.
+They are compiled when configuration is loaded and are never expanded or
+executed by the shell. Position and command conditions are combined with AND;
+entries in the command list are combined with OR.
 
 `{{cursor}}` is removed during insertion and places the cursor at that position.
 Only one cursor marker is supported per expansion.

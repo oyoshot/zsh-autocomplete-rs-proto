@@ -34,6 +34,9 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         command_position: bool,
 
+        #[arg(long)]
+        command_context: Option<String>,
+
         #[arg(long, default_value_t = false)]
         accept_single: bool,
 
@@ -77,6 +80,9 @@ pub enum Command {
 
         #[arg(long, default_value_t = false)]
         command_position: bool,
+
+        #[arg(long)]
+        command_context: Option<String>,
 
         /// Pre-select the N-th filtered candidate (0-indexed)
         #[arg(long)]

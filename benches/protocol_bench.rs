@@ -31,6 +31,7 @@ fn make_render_request(candidate_count: usize) -> Request {
         candidates_tsv: tsv,
         selected: Some(0),
         command_position: false,
+        command_context: None,
     }
 }
 

@@ -28,6 +28,7 @@ dirs = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 termwiz = "0.23"
+globset = "0.4"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -62,6 +63,10 @@ harness = false
 
 [[bench]]
 name = "rendering_bench"
+harness = false
+
+[[bench]]
+name = "abbr_when_bench"
 harness = false
 
 [profile.release]
