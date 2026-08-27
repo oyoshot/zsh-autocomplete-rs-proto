@@ -208,12 +208,8 @@ fn run_render(
     }
 
     // Fallback: direct execution
-    let mut candidates: Vec<Candidate> = std::str::from_utf8(&raw_stdin)
-        .unwrap_or("")
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(Candidate::parse_line)
-        .collect();
+    let mut candidates =
+        Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
     candidates.extend(
         config
             .abbreviations

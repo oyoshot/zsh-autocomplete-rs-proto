@@ -1038,11 +1038,7 @@ impl DaemonServer {
             }
         };
 
-        let mut candidates: Vec<Candidate> = tsv_str
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(Candidate::parse_line)
-            .collect();
+        let mut candidates = Candidate::parse_lines_dedup(tsv_str);
 
         candidates.extend(
             self.config
@@ -1155,11 +1151,7 @@ impl DaemonServer {
         command_context: Option<&str>,
     ) -> Option<(App, Vec<u8>)> {
         let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
-        let mut candidates: Vec<Candidate> = tsv
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(Candidate::parse_line)
-            .collect();
+        let mut candidates = Candidate::parse_lines_dedup(tsv);
 
         candidates.extend(
             self.config

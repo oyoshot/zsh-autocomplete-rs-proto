@@ -1,4 +1,5 @@
 use crate::config::SuffixConfig;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Candidate {
@@ -103,6 +104,27 @@ impl Candidate {
         }
     }
 
+    pub fn parse_lines_dedup(input: &str) -> Vec<Self> {
+        let mut candidates: Vec<Self> = Vec::new();
+        let mut indices_by_identity: HashMap<(String, String), usize> = HashMap::new();
+
+        for line in input.lines().filter(|line| !line.is_empty()) {
+            let candidate = Self::parse_line(line);
+            let identity = (candidate.text.clone(), candidate.kind.clone());
+            if let Some(&index) = indices_by_identity.get(&identity) {
+                let existing = &mut candidates[index];
+                if existing.description.is_empty() {
+                    existing.description = candidate.description;
+                }
+            } else {
+                indices_by_identity.insert(identity, candidates.len());
+                candidates.push(candidate);
+            }
+        }
+
+        candidates
+    }
+
     pub fn abbreviation(trigger: String, expansion: String, description: String) -> Self {
         const CURSOR_MARKER: &str = "{{cursor}}";
         let (insert_text, cursor_offset) = match expansion.find(CURSOR_MARKER) {
@@ -165,6 +187,44 @@ mod tests {
         assert_eq!(c.text, "src/");
         assert_eq!(c.description, "directory");
         assert_eq!(c.kind, "directory");
+    }
+
+    #[test]
+    fn parse_lines_dedup_keeps_first_occurrence_order() {
+        let candidates = Candidate::parse_lines_dedup(
+            "src/main.rs\tmodified\tfile\nCargo.toml\tmodified\tfile\nsrc/main.rs\tuntracked\tfile\n",
+        );
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].text, "src/main.rs");
+        assert_eq!(candidates[0].description, "modified");
+        assert_eq!(candidates[1].text, "Cargo.toml");
+    }
+
+    #[test]
+    fn parse_lines_dedup_fills_missing_metadata_from_duplicate() {
+        let candidates =
+            Candidate::parse_lines_dedup("src/main.rs\t\tfile\nsrc/main.rs\tmodified\tfile\n");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].description, "modified");
+        assert_eq!(candidates[0].kind, "file");
+    }
+
+    #[test]
+    fn parse_lines_dedup_preserves_different_insertion_semantics() {
+        let candidates =
+            Candidate::parse_lines_dedup("foo\tdirectory\tdirectory\nfoo\tcommand\tcommand\n");
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0].text_with_suffix(&SuffixConfig::default()),
+            "foo/"
+        );
+        assert_eq!(
+            candidates[1].text_with_suffix(&SuffixConfig::default()),
+            "foo "
+        );
     }
 
     #[test]
