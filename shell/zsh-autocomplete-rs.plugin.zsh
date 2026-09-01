@@ -54,6 +54,10 @@ typeset -gi _zacrs_self_insert_wrapped=0
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
 
+_zacrs_invalidate_candidate_cache() {
+    (( ++_zacrs_candidate_cache_generation ))
+}
+
 # Render header parse results (set by _zacrs_parse_render_header)
 typeset -gi _zacrs_parsed_tty_len=0
 # Daemon send helper (set by _zacrs_daemon_send_render on OK)
@@ -881,7 +885,6 @@ _zacrs_accept_line() {
     _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
-    (( ++_zacrs_candidate_cache_generation ))
     zle reset-prompt
     zle .accept-line
 }
@@ -962,3 +965,7 @@ bindkey '^I' _zacrs_complete_popup
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
+
+# Invalidate daemon candidates before commands accepted by any ZLE widget.
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _zacrs_invalidate_candidate_cache

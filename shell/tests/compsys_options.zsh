@@ -147,6 +147,6 @@ assert_context_key '' 'git' 'command position has no candidate cache key'
 assert_context_key \
     "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20" \
     'git add:foo%bar baz' \
-    'candidate cache key includes edit generation and encoded context'
+    'candidate cache key includes command generation and encoded context'
 
 (( failures == 0 ))
