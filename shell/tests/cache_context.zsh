@@ -31,7 +31,8 @@ PROMPT="READY> "
 RPROMPT=""
 ' > "$tmp_dir/.zshrc"
 
-ZDOTDIR="$tmp_dir" zpty -b zacrs_cache_context zsh -d
+export ZDOTDIR="$tmp_dir"
+zpty -b zacrs_cache_context zsh -d
 
 wait_for_prompt() {
     local output="" chunk="" i
