@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use crate::app::App;
 use crate::candidate::Candidate;
-use crate::config::{Config, KeyBindings, Theme};
+use crate::config::{Config, KeyBindings, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
@@ -1691,7 +1691,7 @@ fn init_tracing() {
 }
 
 fn config_file_mtime() -> Option<SystemTime> {
-    let path = dirs::config_dir()?.join("zacrs").join("config.toml");
+    let path = config_path()?;
     fs::metadata(path).ok()?.modified().ok()
 }
 
