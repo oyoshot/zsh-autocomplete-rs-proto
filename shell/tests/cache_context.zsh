@@ -2,69 +2,37 @@
 
 set -eu
 
-zmodload zsh/zpty
-zmodload zsh/zselect
-
 typeset test_dir="${0:A:h}"
-typeset tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zacrs-cache-context.XXXXXX")"
-trap 'zpty -d 2>/dev/null || true; rm -rf -- "$tmp_dir"' EXIT
 
-mkdir -p "$tmp_dir/runtime"
-export XDG_RUNTIME_DIR="$tmp_dir/runtime"
-export ZACRS_CACHE_CONTEXT_PLUGIN="${test_dir:h}/zsh-autocomplete-rs.plugin.zsh"
-export ZACRS_CACHE_CONTEXT_MARKER="$tmp_dir/marker"
-
-print -r -- '
+# The behavior under test is the cache generation changed by the accept-line
+# wrapper. Stub shell integration so the test does not depend on a terminal or
+# contact an already-running daemon.
+zle() { :; }
+bindkey() { :; }
+zmodload() { return 1; }
+autoload() { :; }
+add-zle-hook-widget() { :; }
 ZACRS_BIN=false
-source "$ZACRS_CACHE_CONTEXT_PLUGIN"
+source "${test_dir:h}/zsh-autocomplete-rs.plugin.zsh" || true
+_zacrs_clear_popup() { :; }
 
-# Keep this test focused on the line-init cache generation. The redraw path is
-# covered separately and would otherwise try to query a terminal cursor.
-_zacrs_line_pre_redraw() { :; }
+LBUFFER='git add '
+_zacrs_current_context_key
+typeset first_key="$REPLY"
 
-record_context_key() {
-    _zacrs_current_context_key
-    print -r -- "$REPLY" >> "$ZACRS_CACHE_CONTEXT_MARKER"
-    BUFFER=":"
-    zle accept-line
-}
-zle -N record_context_key
-bindkey -M emacs "^T" record_context_key
-bindkey -M viins "^T" record_context_key
+_zacrs_accept_line
 
-PROMPT="READY> "
-RPROMPT=""
-' > "$tmp_dir/.zshrc"
+LBUFFER='git add '
+_zacrs_current_context_key
+typeset second_key="$REPLY"
 
-export ZDOTDIR="$tmp_dir"
-zpty -b zacrs_cache_context zsh -d
-
-wait_for_line_count() {
-    local path=$1 expected=$2 description=$3
-    local i
-    local -a lines
-    for (( i = 0; i < 200; i++ )); do
-        [[ -f "$path" ]] && lines=("${(@f)$(<"$path")}")
-        (( ${#lines} >= expected )) && return 0
-        zselect -t 1 || true
-    done
-    print -u2 -r -- "not ok: timed out waiting for $description $expected"
-    return 1
-}
-
-zpty -w -n zacrs_cache_context $'git add \x14git add \x14'
-wait_for_line_count "$ZACRS_CACHE_CONTEXT_MARKER" 2 'context key'
-
-typeset -a keys
-keys=("${(@f)$(<"$ZACRS_CACHE_CONTEXT_MARKER")}")
-
-if [[ "${keys[1]}" == "${keys[2]}" ]]; then
-    print -u2 -r -- "not ok: command boundary reused candidate cache key (${keys[1]})"
+if [[ "$first_key" == "$second_key" ]]; then
+    print -u2 -r -- "not ok: command boundary reused candidate cache key ($first_key)"
     return 1
 fi
 
-typeset first_context="${keys[1]#*:*:}"
-typeset second_context="${keys[2]#*:*:}"
+typeset first_context="${first_key#*:*:}"
+typeset second_context="${second_key#*:*:}"
 if [[ "$first_context" != "$second_context" ]]; then
     print -u2 -r -- "not ok: stable PWD/lbase context changed"
     return 1
