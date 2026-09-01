@@ -43,9 +43,9 @@ _zacrs_get_cursor_pos() {
 }
 
 # Build the daemon candidate-cache key for the current argument position.
-# The shell-managed generation scopes reuse to one ZLE editing session:
-# candidate sources may change after a command runs even when PID, PWD, and the
-# command line base stay equal.
+# The shell-managed generation scopes reuse to one accepted command line:
+# candidate sources may change after a command runs even when PID, PWD, and
+# the command line base stay equal.
 # Sets REPLY to an empty string at command position.
 _zacrs_current_context_key() {
     REPLY=""

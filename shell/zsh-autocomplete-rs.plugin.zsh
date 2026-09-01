@@ -95,10 +95,6 @@ _zacrs_end_popup_session() {
     _zacrs_ignore_next_winch=0
 }
 
-_zacrs_begin_line() {
-    (( ++_zacrs_candidate_cache_generation ))
-}
-
 _zacrs_record_popup_snapshot() {
     local prefix_len="$1"
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
@@ -885,6 +881,7 @@ _zacrs_accept_line() {
     _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
+    (( ++_zacrs_candidate_cache_generation ))
     zle reset-prompt
     zle .accept-line
 }
@@ -962,8 +959,6 @@ zle -N _zacrs_complete_popup
 # Default: Tab enters the Rust-owned popup session.
 bindkey '^I' _zacrs_complete_popup
 
-# Scope candidate-cache reuse to the current ZLE editing session, then register
-# the auto-trigger hook without rebinding ordinary input keys.
+# Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-add-zle-hook-widget line-init _zacrs_begin_line
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw

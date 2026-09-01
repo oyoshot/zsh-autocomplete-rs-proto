@@ -25,7 +25,7 @@ record_context_key() {
     _zacrs_current_context_key
     print -r -- "$REPLY" >> "$ZACRS_CACHE_CONTEXT_MARKER"
     BUFFER=":"
-    zle .accept-line
+    zle accept-line
 }
 zle -N record_context_key
 bindkey -M emacs "^T" record_context_key
