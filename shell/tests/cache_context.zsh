@@ -13,7 +13,6 @@ mkdir -p "$tmp_dir/runtime"
 export XDG_RUNTIME_DIR="$tmp_dir/runtime"
 export ZACRS_CACHE_CONTEXT_PLUGIN="${test_dir:h}/zsh-autocomplete-rs.plugin.zsh"
 export ZACRS_CACHE_CONTEXT_MARKER="$tmp_dir/marker"
-export ZACRS_CACHE_CONTEXT_READY="$tmp_dir/ready"
 
 print -r -- '
 ZACRS_BIN=false
@@ -32,11 +31,6 @@ record_context_key() {
 zle -N record_context_key
 bindkey -M emacs "^T" record_context_key
 bindkey -M viins "^T" record_context_key
-
-record_line_ready() {
-    print -r -- ready >> "$ZACRS_CACHE_CONTEXT_READY"
-}
-zle -N zle-line-init record_line_ready
 
 PROMPT="READY> "
 RPROMPT=""
@@ -58,11 +52,7 @@ wait_for_line_count() {
     return 1
 }
 
-wait_for_line_count "$ZACRS_CACHE_CONTEXT_READY" 1 'ready marker'
-zpty -w -n zacrs_cache_context $'git add \x14'
-wait_for_line_count "$ZACRS_CACHE_CONTEXT_MARKER" 1 'context key'
-wait_for_line_count "$ZACRS_CACHE_CONTEXT_READY" 2 'ready marker'
-zpty -w -n zacrs_cache_context $'git add \x14'
+zpty -w -n zacrs_cache_context $'git add \x14git add \x14'
 wait_for_line_count "$ZACRS_CACHE_CONTEXT_MARKER" 2 'context key'
 
 typeset -a keys
