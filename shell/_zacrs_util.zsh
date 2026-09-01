@@ -42,6 +42,30 @@ _zacrs_get_cursor_pos() {
     _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
 }
 
+# Build the daemon candidate-cache key for the current argument position.
+# The shell-managed generation scopes reuse to one ZLE editing session:
+# candidate sources may change after a command runs even when PID, PWD, and the
+# command line base stay equal.
+# Sets REPLY to an empty string at command position.
+_zacrs_current_context_key() {
+    REPLY=""
+    local lbase=""
+    if [[ "$LBUFFER" == *" "* ]]; then
+        lbase="${LBUFFER% *} "
+    fi
+    [[ -z "$lbase" ]] && return 0
+
+    local _ctx_lbase="$lbase"
+    _ctx_lbase="${_ctx_lbase//\%/%25}"
+    _ctx_lbase="${_ctx_lbase//:/%3A}"
+    _ctx_lbase="${_ctx_lbase// /%20}"
+    local _ctx_pwd="$PWD"
+    _ctx_pwd="${_ctx_pwd//\%/%25}"
+    _ctx_pwd="${_ctx_pwd//:/%3A}"
+    _ctx_pwd="${_ctx_pwd// /%20}"
+    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_pwd}:${_ctx_lbase}"
+}
+
 # Check if the last word in buffer is in command position
 # (first word, or immediately after | || && ;)
 # Args: $1=buffer $2=prefix (last word)
