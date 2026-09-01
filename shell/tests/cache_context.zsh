@@ -22,10 +22,14 @@ source "$ZACRS_CACHE_CONTEXT_PLUGIN"
 _zacrs_line_pre_redraw() { :; }
 
 record_context_key() {
-    LBUFFER="git add "
     _zacrs_current_context_key
     print -r -- "$REPLY" >> "$ZACRS_CACHE_CONTEXT_MARKER"
+    BUFFER=":"
+    zle .accept-line
 }
+zle -N record_context_key
+bindkey -M emacs "^T" record_context_key
+bindkey -M viins "^T" record_context_key
 
 PROMPT="READY> "
 RPROMPT=""
@@ -60,10 +64,10 @@ wait_for_line_count() {
 }
 
 wait_for_prompt
-zpty -w zacrs_cache_context 'record_context_key'
+zpty -w -n zacrs_cache_context $'git add \x14'
 wait_for_line_count 1
 wait_for_prompt
-zpty -w zacrs_cache_context 'record_context_key'
+zpty -w -n zacrs_cache_context $'git add \x14'
 wait_for_line_count 2
 
 typeset -a keys
