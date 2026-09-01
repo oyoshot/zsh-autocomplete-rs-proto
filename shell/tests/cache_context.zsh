@@ -33,6 +33,18 @@ RPROMPT=""
 
 ZDOTDIR="$tmp_dir" zpty -b zacrs_cache_context zsh -d
 
+wait_for_prompt() {
+    local output="" chunk="" i
+    for (( i = 0; i < 400; i++ )); do
+        zpty -r -t zacrs_cache_context chunk 2>/dev/null && output+="$chunk"
+        [[ "$output" == *"READY> "* ]] && return 0
+        sleep 0.01
+    done
+    print -u2 -r -- "not ok: child zsh did not become ready"
+    print -u2 -r -- "pty: ${(qqq)output}"
+    return 1
+}
+
 wait_for_line_count() {
     local expected=$1
     local i actual=0
@@ -46,8 +58,10 @@ wait_for_line_count() {
     return 1
 }
 
+wait_for_prompt
 zpty -w zacrs_cache_context 'record_context_key'
 wait_for_line_count 1
+wait_for_prompt
 zpty -w zacrs_cache_context 'record_context_key'
 wait_for_line_count 2
 
