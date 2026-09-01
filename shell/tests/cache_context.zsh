@@ -3,6 +3,7 @@
 set -eu
 
 zmodload zsh/zpty
+zmodload zsh/zselect
 
 typeset test_dir="${0:A:h}"
 typeset tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zacrs-cache-context.XXXXXX")"
@@ -12,6 +13,7 @@ mkdir -p "$tmp_dir/runtime"
 export XDG_RUNTIME_DIR="$tmp_dir/runtime"
 export ZACRS_CACHE_CONTEXT_PLUGIN="${test_dir:h}/zsh-autocomplete-rs.plugin.zsh"
 export ZACRS_CACHE_CONTEXT_MARKER="$tmp_dir/marker"
+export ZACRS_CACHE_CONTEXT_READY="$tmp_dir/ready"
 
 print -r -- '
 ZACRS_BIN=false
@@ -31,6 +33,11 @@ zle -N record_context_key
 bindkey -M emacs "^T" record_context_key
 bindkey -M viins "^T" record_context_key
 
+record_line_ready() {
+    print -r -- ready >> "$ZACRS_CACHE_CONTEXT_READY"
+}
+zle -N zle-line-init record_line_ready
+
 PROMPT="READY> "
 RPROMPT=""
 ' > "$tmp_dir/.zshrc"
@@ -38,37 +45,25 @@ RPROMPT=""
 export ZDOTDIR="$tmp_dir"
 zpty -b zacrs_cache_context zsh -d
 
-wait_for_prompt() {
-    local output="" chunk="" i
-    for (( i = 0; i < 400; i++ )); do
-        zpty -r -t zacrs_cache_context chunk 2>/dev/null && output+="$chunk"
-        [[ "$output" == *"READY> "* ]] && return 0
-        sleep 0.01
-    done
-    print -u2 -r -- "not ok: child zsh did not become ready"
-    print -u2 -r -- "pty: ${(qqq)output}"
-    return 1
-}
-
 wait_for_line_count() {
-    local expected=$1
-    local i actual=0
+    local path=$1 expected=$2 description=$3
+    local i
+    local -a lines
     for (( i = 0; i < 200; i++ )); do
-        [[ -f "$ZACRS_CACHE_CONTEXT_MARKER" ]] \
-            && actual=$(wc -l < "$ZACRS_CACHE_CONTEXT_MARKER")
-        (( actual >= expected )) && return 0
-        sleep 0.01
+        [[ -f "$path" ]] && lines=("${(@f)$(<"$path")}")
+        (( ${#lines} >= expected )) && return 0
+        zselect -t 1 || true
     done
-    print -u2 -r -- "not ok: timed out waiting for $expected context keys"
+    print -u2 -r -- "not ok: timed out waiting for $description $expected"
     return 1
 }
 
-wait_for_prompt
+wait_for_line_count "$ZACRS_CACHE_CONTEXT_READY" 1 'ready marker'
 zpty -w -n zacrs_cache_context $'git add \x14'
-wait_for_line_count 1
-wait_for_prompt
+wait_for_line_count "$ZACRS_CACHE_CONTEXT_MARKER" 1 'context key'
+wait_for_line_count "$ZACRS_CACHE_CONTEXT_READY" 2 'ready marker'
 zpty -w -n zacrs_cache_context $'git add \x14'
-wait_for_line_count 2
+wait_for_line_count "$ZACRS_CACHE_CONTEXT_MARKER" 2 'context key'
 
 typeset -a keys
 keys=("${(@f)$(<"$ZACRS_CACHE_CONTEXT_MARKER")}")
