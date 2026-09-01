@@ -2,6 +2,7 @@ use crossterm::style::Color;
 use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -11,8 +12,21 @@ const MAX_COMMAND_GLOB_PATTERNS: usize = 256;
 const MAX_COMMAND_GLOB_BYTES: usize = 1024;
 const MAX_COMMAND_CONTEXT_BYTES: usize = 16 * 1024;
 
-fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("zacrs").join("config.toml"))
+fn config_path_from(
+    xdg_config_home: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    xdg_config_home
+        .filter(|path| path.is_absolute())
+        .or_else(|| home_dir.map(|home| home.join(".config")))
+        .map(|dir| dir.join("zacrs").join("config.toml"))
+}
+
+pub(crate) fn config_path() -> Option<PathBuf> {
+    config_path_from(
+        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        dirs::home_dir(),
+    )
 }
 
 pub struct Config {
@@ -491,6 +505,41 @@ impl Config {
 mod tests {
     use super::*;
     use crate::input::Action;
+
+    #[test]
+    fn config_path_prefers_absolute_xdg_config_home() {
+        assert_eq!(
+            config_path_from(
+                Some(PathBuf::from("/custom/config")),
+                Some(PathBuf::from("/home/alice")),
+            ),
+            Some(PathBuf::from("/custom/config/zacrs/config.toml"))
+        );
+    }
+
+    #[test]
+    fn config_path_defaults_to_dot_config_under_home() {
+        assert_eq!(
+            config_path_from(None, Some(PathBuf::from("/home/alice"))),
+            Some(PathBuf::from("/home/alice/.config/zacrs/config.toml"))
+        );
+    }
+
+    #[test]
+    fn config_path_ignores_relative_xdg_config_home() {
+        assert_eq!(
+            config_path_from(
+                Some(PathBuf::from("relative/config")),
+                Some(PathBuf::from("/home/alice")),
+            ),
+            Some(PathBuf::from("/home/alice/.config/zacrs/config.toml"))
+        );
+    }
+
+    #[test]
+    fn config_path_is_none_without_xdg_config_home_or_home() {
+        assert_eq!(config_path_from(None, None), None);
+    }
 
     // --- parse_action ---
 
