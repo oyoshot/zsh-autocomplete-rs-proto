@@ -26,7 +26,7 @@ jobs:
         with:
           shared-key: ci-build
       - name: Run benchmarks
-        run: cargo bench --bench fuzzy_bench --bench text_processing_bench -- --output-format bencher | tee output.txt
+        run: cargo bench --bench fuzzy_bench --bench text_processing_bench -- --noplot --output-format bencher | tee output.txt
 
       - name: Store benchmark result (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
