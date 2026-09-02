@@ -26,6 +26,8 @@ jobs:
         with:
           shared-key: bench-build
       - name: Run benchmarks
+        env:
+          CRITERION_HOME: ${{ runner.temp }}/criterion
         run: cargo bench --bench fuzzy_bench --bench text_processing_bench -- --noplot --output-format bencher | tee output.txt
 
       - name: Store benchmark result (main)
