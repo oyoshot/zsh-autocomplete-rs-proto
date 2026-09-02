@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-build
+          shared-key: bench-build
       - name: Run benchmarks
         run: cargo bench --bench fuzzy_bench --bench text_processing_bench -- --noplot --output-format bencher | tee output.txt
 
