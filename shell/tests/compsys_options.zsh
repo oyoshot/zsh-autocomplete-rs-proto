@@ -126,4 +126,27 @@ _zacrs_command_context 'echo ok |& cargo'
     (( ++failures ))
 }
 
+assert_context_key() {
+    local expected=$1 buffer=$2 description=$3
+    LBUFFER="$buffer"
+    _zacrs_current_context_key
+    if [[ "$REPLY" != "$expected" ]]; then
+        print -u2 -r -- "not ok: ${description} (expected=${(qqq)expected}, actual=${(qqq)REPLY})"
+        (( ++failures ))
+    else
+        print -r -- "ok: ${description}"
+    fi
+}
+
+typeset encoded_pwd="$PWD"
+encoded_pwd="${encoded_pwd//\%/%25}"
+encoded_pwd="${encoded_pwd//:/%3A}"
+encoded_pwd="${encoded_pwd// /%20}"
+typeset -gi _zacrs_candidate_cache_generation=42
+assert_context_key '' 'git' 'command position has no candidate cache key'
+assert_context_key \
+    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20" \
+    'git add:foo%bar baz' \
+    'candidate cache key includes command generation and encoded context'
+
 (( failures == 0 ))

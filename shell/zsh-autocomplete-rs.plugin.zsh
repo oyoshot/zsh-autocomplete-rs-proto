@@ -50,6 +50,13 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
+# Preserve the counter across plugin reloads so old daemon entries cannot
+# collide with a newly sourced copy in the same shell process.
+typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
+
+_zacrs_invalidate_candidate_cache() {
+    (( ++_zacrs_candidate_cache_generation ))
+}
 
 # Render header parse results (set by _zacrs_parse_render_header)
 typeset -gi _zacrs_parsed_tty_len=0
@@ -90,25 +97,6 @@ _zacrs_defer_redraw() {
 _zacrs_end_popup_session() {
     _zacrs_popup_session_active=0
     _zacrs_ignore_next_winch=0
-}
-
-_zacrs_current_context_key() {
-    REPLY=""
-    local lbase=""
-    if [[ "$LBUFFER" == *" "* ]]; then
-        lbase="${LBUFFER% *} "
-    fi
-    [[ -z "$lbase" ]] && return 0
-
-    local _ctx_lbase="$lbase"
-    _ctx_lbase="${_ctx_lbase//%/%25}"
-    _ctx_lbase="${_ctx_lbase//:/%3A}"
-    _ctx_lbase="${_ctx_lbase// /%20}"
-    local _ctx_pwd="$PWD"
-    _ctx_pwd="${_ctx_pwd//%/%25}"
-    _ctx_pwd="${_ctx_pwd//:/%3A}"
-    _ctx_pwd="${_ctx_pwd// /%20}"
-    REPLY="${$}:${_ctx_pwd}:${_ctx_lbase}"
 }
 
 _zacrs_record_popup_snapshot() {
@@ -659,22 +647,8 @@ _zacrs_complete_popup() {
     local cursor_row="" cursor_col=""
     local reuse_visible=0
     local naive_prefix="${LBUFFER##* }"
-    local lbase=""
-    if [[ "$LBUFFER" == *" "* ]]; then
-        lbase="${LBUFFER% *} "
-    fi
-    local context_key=""
-    if [[ -n "$lbase" ]]; then
-        local _ctx_lbase="$lbase"
-        _ctx_lbase="${_ctx_lbase//%/%25}"
-        _ctx_lbase="${_ctx_lbase//:/%3A}"
-        _ctx_lbase="${_ctx_lbase// /%20}"
-        local _ctx_pwd="$PWD"
-        _ctx_pwd="${_ctx_pwd//%/%25}"
-        _ctx_pwd="${_ctx_pwd//:/%3A}"
-        _ctx_pwd="${_ctx_pwd// /%20}"
-        context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
-    fi
+    _zacrs_current_context_key
+    local context_key="$REPLY"
 
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
@@ -766,27 +740,10 @@ _zacrs_line_pre_redraw() {
         fi
     fi
 
-    # lbase 計算: 最後のスペースより前の部分（コマンド＋引数の文脈）
-    local lbase
-    if [[ "$LBUFFER" == *" "* ]]; then
-        lbase="${LBUFFER% *} "
-    else
-        lbase=""
-    fi
-    # context_key は引数位置で設定する。候補キャッシュ自体の安全性は
-    # daemon 側が cached_prefix/current_prefix を比較して判定する。
-    local context_key=""
-    if [[ -n "$lbase" ]]; then
-        local _ctx_lbase="$lbase"
-        _ctx_lbase="${_ctx_lbase//%/%25}"
-        _ctx_lbase="${_ctx_lbase//:/%3A}"
-        _ctx_lbase="${_ctx_lbase// /%20}"
-        local _ctx_pwd="$PWD"
-        _ctx_pwd="${_ctx_pwd//%/%25}"
-        _ctx_pwd="${_ctx_pwd//:/%3A}"
-        _ctx_pwd="${_ctx_pwd// /%20}"
-        context_key="${$}:${_ctx_pwd}:${_ctx_lbase}"
-    fi
+    # context_key は引数位置で設定する。ZLE 編集セッションの世代により
+    # コマンド実行後の外部状態変化を古い候補キャッシュへ持ち越さない。
+    _zacrs_current_context_key
+    local context_key="$REPLY"
 
     # 候補収集変数
     local candidates_str="" from_gather=0
@@ -1005,6 +962,10 @@ zle -N _zacrs_complete_popup
 # Default: Tab enters the Rust-owned popup session.
 bindkey '^I' _zacrs_complete_popup
 
-# Register line-pre-redraw hook (auto-trigger without key rebinding)
+# Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
+
+# Invalidate daemon candidates before commands accepted by any ZLE widget.
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _zacrs_invalidate_candidate_cache
