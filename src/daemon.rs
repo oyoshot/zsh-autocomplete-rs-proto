@@ -916,25 +916,54 @@ impl DaemonServer {
                 use std::time::Duration;
                 stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
 
-                self.handle_complete(
-                    reader,
-                    &mut writer,
-                    CompleteParams {
-                        prefix,
-                        cursor_row,
-                        cursor_col,
-                        term_cols,
-                        term_rows,
-                        prev_popup_row: prev_popup.map(|(row, _)| row),
-                        prev_popup_height: prev_popup.map(|(_, height)| height),
-                        command_position,
-                        command_context,
-                        accept_single,
-                        reuse_popup: reuse_token.is_some(),
-                        shift_tab_sequence,
-                    },
-                    &tsv,
-                );
+                // The accept loop must not wait for keys from this pane. Preserve
+                // bytes already prefetched by BufReader when handing off the socket.
+                let session_stream = match stream.try_clone() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        warn!(%error, "failed to clone complete connection");
+                        return false;
+                    }
+                };
+                let buffered = reader.buffer().to_vec();
+                let mut session = DaemonServer {
+                    config: self.config.clone(),
+                    theme: self.theme.clone(),
+                    key_bindings: self.key_bindings.clone(),
+                    config_mtime: self.config_mtime,
+                    socket_path: self.socket_path.clone(),
+                    fuzzy: None,
+                    candidate_cache: HashMap::new(),
+                    candidate_cache_order: Vec::new(),
+                    active_popups: HashMap::new(),
+                    active_popup_order: Vec::new(),
+                };
+                let params = CompleteParams {
+                    prefix,
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    prev_popup_row: prev_popup.map(|(row, _)| row),
+                    prev_popup_height: prev_popup.map(|(_, height)| height),
+                    command_position,
+                    command_context,
+                    accept_single,
+                    reuse_popup: reuse_token.is_some(),
+                    shift_tab_sequence,
+                };
+                if let Err(error) = std::thread::Builder::new()
+                    .name("zacrs-complete".into())
+                    .spawn(move || {
+                        use std::io::Read;
+                        let mut reader =
+                            BufReader::new(io::Cursor::new(buffered).chain(&session_stream));
+                        let mut writer = io::BufWriter::new(&session_stream);
+                        session.handle_complete(&mut reader, &mut writer, params, &tsv);
+                    })
+                {
+                    warn!(%error, "failed to start complete session");
+                }
                 false
             }
             TextRequest::Clear(TextClearRequest {
@@ -1853,6 +1882,70 @@ mod tests {
         let mut output = Vec::new();
         client_stream.read_to_end(&mut output).unwrap();
         output
+    }
+
+    #[test]
+    fn idle_complete_does_not_block_another_pane_or_control_requests() {
+        use crate::protocol::{Request, Response};
+        use std::time::Duration;
+
+        let mut server = DaemonServer::new(PathBuf::new());
+        server.config = Config::default();
+        server.key_bindings = server.config.key_bindings();
+        let mut clients = Vec::new();
+        let mut connections = Vec::new();
+        for _ in 0..4 {
+            let (client, connection) = UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            clients.push(client);
+            connections.push(connection);
+        }
+        let worker = std::thread::spawn(move || {
+            for (index, connection) in connections.into_iter().enumerate() {
+                assert_eq!(server.handle_connection(connection), index == 3);
+            }
+        });
+
+        // Leave both panes waiting for input after their initial frame.
+        for client in &mut clients[..2] {
+            client
+                .write_all(&text_request_input(
+                    "complete 5 2 80 24",
+                    "",
+                    Some("alpha\t\nbeta\t\n"),
+                ))
+                .unwrap();
+            let mut reader = BufReader::new(client);
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            assert!(header.starts_with("FRAME "), "{header}");
+            let length: usize = header.split_whitespace().last().unwrap().parse().unwrap();
+            let mut frame = vec![0; length];
+            reader.read_exact(&mut frame).unwrap();
+        }
+        clients[2].write_all(&Request::Ping.serialize()).unwrap();
+        assert!(Response::deserialize(&mut BufReader::new(&clients[2])).is_ok());
+        clients[3]
+            .write_all(&Request::Shutdown.serialize())
+            .unwrap();
+        assert!(Response::deserialize(&mut BufReader::new(&clients[3])).is_ok());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn complete_handoff_preserves_prefetched_key_bytes() {
+        let mut server = DaemonServer::new(PathBuf::new());
+        server.config = Config::default();
+        server.key_bindings = server.config.key_bindings();
+        let mut input = text_request_input("complete 5 2 80 24", "al", Some("alpha\t\nbeta\t\n"));
+        input.extend_from_slice(b"KEY 1\n\r");
+        let output = run_text_request(&mut server, input);
+        let mut reader = BufReader::new(Cursor::new(output));
+        let _ = read_frame(&mut reader);
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 0 alpha"), "{done}");
     }
 
     fn read_text_ok(bytes: &[u8]) -> (String, String) {

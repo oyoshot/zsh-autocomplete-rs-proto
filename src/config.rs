@@ -29,6 +29,7 @@ pub(crate) fn config_path() -> Option<PathBuf> {
     )
 }
 
+#[derive(Clone)]
 pub struct Config {
     pub max_visible: usize,
     pub auto_insert_unambiguous: bool,
@@ -248,7 +249,7 @@ struct AbbreviationRaw {
     when: AbbreviationWhen,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct KeybindingsRaw {
     pub tab: Option<String>,
     #[serde(rename = "shift-tab")]
@@ -257,7 +258,7 @@ pub struct KeybindingsRaw {
     pub space: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 struct ThemeRaw {
     border: Option<String>,
     #[serde(rename = "selected-fg")]
@@ -386,6 +387,7 @@ pub(crate) fn parse_color(s: &str) -> Option<Color> {
     }
 }
 
+#[derive(Clone)]
 pub struct Theme {
     pub border: Option<Color>,
     pub selected_fg: Option<Color>,
