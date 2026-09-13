@@ -1,0 +1,108 @@
+#!/bin/sh
+
+# This script uses POSIX sh; starting the environment needs no host Rust or Zsh.
+set -eu
+
+profile=debug
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --release) profile=release; shift ;;
+        --) shift; break ;;
+        -h|--help)
+            printf 'Usage: dev/shell [--release] [-- Zsh arguments]\n'
+            exit 0 ;;
+        *) printf 'Unknown option: %s (use -- before Zsh arguments)\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+[ "$(uname -s)" = Linux ] || {
+    printf 'This disposable environment currently supports Linux hosts only. See docs/development.md for macOS checks.\n' >&2
+    exit 1
+}
+tty=false
+if [ -t 0 ] && [ -t 1 ]; then
+    tty=true
+elif [ "$#" -eq 0 ]; then
+    printf "An interactive terminal is required; scripted checks can use -- -c '...'\n" >&2
+    exit 1
+fi
+
+script_dir=${0%/*}
+if [ "$script_dir" = "$0" ]; then
+    script_dir=.
+fi
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd -P)
+case "$repo_root" in
+    *,*) printf 'The checkout path must not contain a comma (container --mount syntax).\n' >&2; exit 1 ;;
+esac
+
+if [ -n "${CONTAINER_ENGINE:-}" ]; then
+    engine=$CONTAINER_ENGINE
+elif command -v podman >/dev/null 2>&1; then
+    engine=podman
+elif command -v docker >/dev/null 2>&1; then
+    engine=docker
+else
+    printf 'Install Podman or Docker, or set CONTAINER_ENGINE to its executable.\n' >&2
+    exit 1
+fi
+
+launcher_root=$(mktemp -d "${TMPDIR:-/tmp}/zacrs-launcher.XXXXXX")
+image_file=$launcher_root/image-id
+terminfo_file=$launcher_root/terminfo/entry
+mkdir "$launcher_root/terminfo"
+# Docker does not map the caller's UID to the image user. Make only this
+# generated terminal description traversable/readable across that boundary.
+chmod 755 "$launcher_root" "$launcher_root/terminfo"
+trap 'rm -rf -- "$launcher_root"' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+printf '==> building Linux/zsh environment with %s\n' "$engine"
+"$engine" build --file "$repo_root/dev/Containerfile" --iidfile "$image_file" \
+    --tag localhost/zacrs-integration:dev "$repo_root/dev"
+image=$(cat "$image_file")
+digest=${image#sha256:}
+case "$digest" in
+    ''|*[!0-9a-fA-F]*) printf 'Invalid container image ID.\n' >&2; exit 1 ;;
+esac
+[ "${#digest}" -eq 64 ] || { printf 'Invalid container image ID.\n' >&2; exit 1; }
+
+# Both Docker and Podman identify bind-mounted worktrees as /src. Give each
+# canonical checkout path its own target cache so Cargo cannot reuse a root
+# crate artifact produced from another worktree with coincident mtimes.
+checkout_digest=$(printf '%s' "$repo_root" | \
+    "$engine" run --rm --interactive --entrypoint sha256sum "$image")
+checkout_digest=${checkout_digest%% *}
+case "$checkout_digest" in
+    ''|*[!0-9a-fA-F]*) printf 'Invalid checkout cache ID.\n' >&2; exit 1 ;;
+esac
+[ "${#checkout_digest}" -eq 64 ] || { printf 'Invalid checkout cache ID.\n' >&2; exit 1; }
+if command -v infocmp >/dev/null 2>&1; then
+    infocmp -x "${TERM:-xterm-256color}" > "$terminfo_file" 2>/dev/null || :
+    chmod 644 "$terminfo_file"
+fi
+
+# Image and checkout IDs separate artifacts by userland, toolchain and worktree.
+set -- \
+    --mount "type=bind,source=$repo_root,destination=/src,readonly" \
+    --mount "type=bind,source=$launcher_root/terminfo,destination=/opt/zacrs/host-terminfo,readonly" \
+    --mount "type=volume,source=zacrs-target-$digest-$checkout_digest,destination=/var/cache/zacrs/target" \
+    --mount type=volume,source=zacrs-cargo-registry,destination=/home/dev/.cargo/registry \
+    --mount type=volume,source=zacrs-cargo-git,destination=/home/dev/.cargo/git \
+    --env "TERM=${TERM:-xterm-256color}" \
+    "$image" "$profile" "$@"
+if [ "${COLORTERM+x}" = x ]; then
+    set -- --env "COLORTERM=$COLORTERM" "$@"
+fi
+if [ "${engine##*/}" = podman ]; then
+    set -- --userns=keep-id:uid=1000,gid=1000 "$@"
+fi
+if [ "$tty" = true ]; then
+    set -- --tty "$@"
+fi
+# Keep the launcher alive while the terminfo bind mount is in use. The runtime
+# receives the same foreground-terminal signals and owns container cleanup.
+"$engine" run --rm --init --interactive --detach-keys= \
+    --security-opt label=disable \
+    --label=dev.zacrs.manual=true "$@"
