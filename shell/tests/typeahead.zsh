@@ -15,8 +15,7 @@ export ZACRS_TYPEAHEAD_TRACE="$tmp_dir/trace"
 
 print -r -- '
 ZACRS_BIN=false
-exec {trace_fd}> "$ZACRS_TYPEAHEAD_TRACE"
-XTRACEFD=$trace_fd
+exec 2> "$ZACRS_TYPEAHEAD_TRACE"
 setopt xtrace
 source "$ZACRS_TYPEAHEAD_PLUGIN"
 
