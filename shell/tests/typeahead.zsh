@@ -4,6 +4,10 @@ set -eu
 
 zmodload zsh/zpty
 
+# This test exercises redraw hooks in a terminal editor. CI may advertise a
+# dumb terminal, whose reduced redraw behavior differs between Zsh builds.
+export TERM=xterm-256color
+
 typeset test_dir="${0:A:h}"
 typeset plugin_path="${test_dir:h}/zsh-autocomplete-rs.plugin.zsh"
 typeset tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zacrs-typeahead.XXXXXX")"
@@ -11,12 +15,9 @@ trap 'zpty -d 2>/dev/null || true; rm -rf -- "$tmp_dir"' EXIT
 
 export ZACRS_TYPEAHEAD_PLUGIN="$plugin_path"
 export ZACRS_TYPEAHEAD_MARKER="$tmp_dir/marker"
-export ZACRS_TYPEAHEAD_TRACE="$tmp_dir/trace"
 
 print -r -- '
 ZACRS_BIN=false
-exec 2> "$ZACRS_TYPEAHEAD_TRACE"
-setopt xtrace
 source "$ZACRS_TYPEAHEAD_PLUGIN"
 
 # Keep the test focused on ZLE batching. Candidate generation, cursor queries,
@@ -70,7 +71,6 @@ wait_for_marker() {
     done
     print -u2 -r -- "not ok: timed out waiting for ${(qqq)expected}"
     [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] && sed 's/^/marker: /' "$ZACRS_TYPEAHEAD_MARKER" >&2
-    tail -100 "$ZACRS_TYPEAHEAD_TRACE" >&2
     local chunk=""
     while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
         print -u2 -r -- "pty: ${(qqq)chunk}"
