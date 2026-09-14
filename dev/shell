@@ -15,10 +15,6 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ "$(uname -s)" = Linux ] || {
-    printf 'This disposable environment currently supports Linux hosts only. See docs/development.md for macOS checks.\n' >&2
-    exit 1
-}
 tty=false
 if [ -t 0 ] && [ -t 1 ]; then
     tty=true

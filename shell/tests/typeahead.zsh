@@ -45,6 +45,13 @@ probe() {
     print -r -- "probe:ok" >> "$ZACRS_TYPEAHEAD_MARKER"
 }
 
+# A printed prompt can precede ZLE entering raw mode on the PTY.
+# Wait for the editor itself before sending a batch of input.
+_zacrs_test_line_init() {
+    print -r -- "editor:ready" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+add-zle-hook-widget line-init _zacrs_test_line_init
+
 PROMPT="READY> "
 RPROMPT=""
 ' > "$tmp_dir/.zshrc"
@@ -60,6 +67,10 @@ wait_for_marker() {
     done
     print -u2 -r -- "not ok: timed out waiting for ${(qqq)expected}"
     [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] && sed 's/^/marker: /' "$ZACRS_TYPEAHEAD_MARKER" >&2
+    local chunk=""
+    while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
+        print -u2 -r -- "pty: ${(qqq)chunk}"
+    done
     return 1
 }
 
@@ -71,7 +82,10 @@ start_shell() {
     for (( i = 0; i < 200; i++ )); do
         local chunk=""
         zpty -r -t zacrs_typeahead chunk 2>/dev/null && output+="$chunk"
-        [[ "$output" == *"READY> "* ]] && return 0
+        if [[ "$output" == *"READY> "* ]]; then
+            wait_for_marker "editor:ready"
+            return $?
+        fi
         sleep 0.01
     done
     print -u2 -r -- "not ok: child zsh did not become ready"

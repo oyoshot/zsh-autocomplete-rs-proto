@@ -2,7 +2,7 @@
 
 ## Start a manual session
 
-On Linux, with Podman or Docker installed:
+With a running Podman or Docker engine:
 
 ```sh
 dev/shell
@@ -12,6 +12,10 @@ This builds the current checkout in a Debian 13 / Rust 1.98.0 container and open
 Zsh as a non-root user. Zsh loads the built binary through
 `zsh-autocomplete-rs init zsh`, which starts the session's daemon. The host needs
 no Rust or Zsh installation. The first run downloads the image and dependencies.
+
+On macOS, start Docker Desktop or a Podman machine first. The engine must be able
+to mount the checkout and the host temporary directory. The container runs Linux
+on either host; testing the macOS binary still requires native macOS checks.
 
 Podman is selected when available. Use `CONTAINER_ENGINE=docker dev/shell` to
 select Docker, or `dev/shell --release` for a release build. With Docker, the
@@ -86,7 +90,7 @@ CARGO_TARGET_DIR=target cargo clippy --all-targets --all-features -- -D warnings
 `shell/tests/run.sh` runs shell regression tests with temporary application
 directories. CI runs these checks on Linux and macOS.
 
-`dev/shell` currently supports Linux hosts only and exercises one glibc userland.
+`dev/shell` exercises one Linux/glibc userland.
 Containers share the host kernel and relay the terminal through a PTY, so macOS,
 kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
