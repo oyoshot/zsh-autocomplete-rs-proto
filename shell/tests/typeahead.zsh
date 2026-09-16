@@ -11,14 +11,10 @@ trap 'zpty -d 2>/dev/null || true; rm -rf -- "$tmp_dir"' EXIT
 
 export ZACRS_TYPEAHEAD_PLUGIN="$plugin_path"
 export ZACRS_TYPEAHEAD_MARKER="$tmp_dir/marker"
-export ZACRS_TYPEAHEAD_TRACE="$tmp_dir/trace"
 
 print -r -- '
 ZACRS_BIN=false
 source "$ZACRS_TYPEAHEAD_PLUGIN"
-exec 2> "$ZACRS_TYPEAHEAD_TRACE"
-functions -t _zacrs_line_pre_redraw _zacrs_deferred_self_insert
-TRAPZERR() { print -r -- "error:$?:${funcstack[*]}" >> "$ZACRS_TYPEAHEAD_MARKER" }
 
 # Keep the test focused on ZLE batching. Candidate generation, cursor queries,
 # terminal drawing, and the Rust popup session are covered separately.
@@ -27,7 +23,6 @@ _zacrs_clear_popup() {
     _zacrs_reset_popup_snapshot
 }
 _zacrs_compsys() {
-    print -r -- "stub:called" >> "$ZACRS_TYPEAHEAD_MARKER"
     _zacrs_ctx_valid=0
     _zacrs_captured=("abcdef\tcommand" "abcdefg\tcommand")
 }
@@ -64,10 +59,23 @@ PROMPT="READY> "
 RPROMPT=""
 ' > "$tmp_dir/.zshrc"
 
+typeset pty_output=""
+
+drain_pty() {
+    local chunk=""
+    while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
+        pty_output+="$chunk"
+    done
+    return 0
+}
+
 wait_for_marker() {
     local expected="$1"
     local i
     for (( i = 0; i < 200; i++ )); do
+        # Drain output while waiting: otherwise the child can block writing to
+        # its PTY before it reaches the marker (notably on macOS).
+        drain_pty
         [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] \
             && grep -Fqx -- "$expected" "$ZACRS_TYPEAHEAD_MARKER" \
             && return 0
@@ -75,16 +83,13 @@ wait_for_marker() {
     done
     print -u2 -r -- "not ok: timed out waiting for ${(qqq)expected}"
     [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] && sed 's/^/marker: /' "$ZACRS_TYPEAHEAD_MARKER" >&2
-    tail -100 "$ZACRS_TYPEAHEAD_TRACE" >&2
-    local chunk=""
-    while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
-        print -u2 -r -- "pty: ${(qqq)chunk}"
-    done
+    print -u2 -r -- "pty: ${(qqq)pty_output}"
     return 1
 }
 
 start_shell() {
     : > "$ZACRS_TYPEAHEAD_MARKER"
+    pty_output=""
     ZDOTDIR="$tmp_dir" zpty -b zacrs_typeahead zsh -d
     local output=""
     local i
@@ -120,11 +125,8 @@ zpty -w -n zacrs_typeahead $'abcdef\tprobe\n'
 wait_for_marker "tab:abcdef"
 wait_for_marker "probe:ok"
 
-typeset output="" chunk=""
-while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
-    output+="$chunk"
-done
-if [[ "$output" == *"No such widget"* ]]; then
+drain_pty
+if [[ "$pty_output" == *"No such widget"* ]]; then
     print -u2 -r -- "not ok: type-ahead Tab left a broken widget"
     return 1
 fi
