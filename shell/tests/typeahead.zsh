@@ -26,6 +26,9 @@ _zacrs_compsys() {
     _zacrs_ctx_valid=0
     _zacrs_captured=("abcdef\tcommand" "abcdefg\tcommand")
 }
+# The plugin registers this widget with _zacrs_compsys_func. Defining a shell
+# function alone does not replace that registration.
+zle -N _zacrs_compsys
 _zacrs_gather() {
     print -r -- $'"'"'abcdef\tcommand\nabcdefg\tcommand'"'"'
 }
@@ -45,14 +48,34 @@ probe() {
     print -r -- "probe:ok" >> "$ZACRS_TYPEAHEAD_MARKER"
 }
 
+# A printed prompt can precede ZLE entering raw mode on the PTY.
+# Wait for the editor itself before sending a batch of input.
+_zacrs_test_line_init() {
+    print -r -- "editor:ready" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+add-zle-hook-widget line-init _zacrs_test_line_init
+
 PROMPT="READY> "
 RPROMPT=""
 ' > "$tmp_dir/.zshrc"
+
+typeset pty_output=""
+
+drain_pty() {
+    local chunk=""
+    while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
+        pty_output+="$chunk"
+    done
+    return 0
+}
 
 wait_for_marker() {
     local expected="$1"
     local i
     for (( i = 0; i < 200; i++ )); do
+        # Drain output while waiting: otherwise the child can block writing to
+        # its PTY before it reaches the marker (notably on macOS).
+        drain_pty
         [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] \
             && grep -Fqx -- "$expected" "$ZACRS_TYPEAHEAD_MARKER" \
             && return 0
@@ -60,18 +83,23 @@ wait_for_marker() {
     done
     print -u2 -r -- "not ok: timed out waiting for ${(qqq)expected}"
     [[ -f "$ZACRS_TYPEAHEAD_MARKER" ]] && sed 's/^/marker: /' "$ZACRS_TYPEAHEAD_MARKER" >&2
+    print -u2 -r -- "pty: ${(qqq)pty_output}"
     return 1
 }
 
 start_shell() {
     : > "$ZACRS_TYPEAHEAD_MARKER"
+    pty_output=""
     ZDOTDIR="$tmp_dir" zpty -b zacrs_typeahead zsh -d
     local output=""
     local i
     for (( i = 0; i < 200; i++ )); do
         local chunk=""
         zpty -r -t zacrs_typeahead chunk 2>/dev/null && output+="$chunk"
-        [[ "$output" == *"READY> "* ]] && return 0
+        if [[ "$output" == *"READY> "* ]]; then
+            wait_for_marker "editor:ready"
+            return $?
+        fi
         sleep 0.01
     done
     print -u2 -r -- "not ok: child zsh did not become ready"
@@ -97,11 +125,8 @@ zpty -w -n zacrs_typeahead $'abcdef\tprobe\n'
 wait_for_marker "tab:abcdef"
 wait_for_marker "probe:ok"
 
-typeset output="" chunk=""
-while zpty -r -t zacrs_typeahead chunk 2>/dev/null; do
-    output+="$chunk"
-done
-if [[ "$output" == *"No such widget"* ]]; then
+drain_pty
+if [[ "$pty_output" == *"No such widget"* ]]; then
     print -u2 -r -- "not ok: type-ahead Tab left a broken widget"
     return 1
 fi

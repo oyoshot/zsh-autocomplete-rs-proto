@@ -1,0 +1,28 @@
+FROM docker.io/library/rust:1.98.0-slim-trixie
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates git jq ncurses-bin ncurses-term procps \
+        util-linux zsh \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 dev \
+    && useradd --uid 1000 --gid dev --create-home --shell /bin/zsh dev \
+    && install -d -o dev -g dev -m 700 /run/zacrs \
+    && install -d -o dev -g dev /var/cache/zacrs/target \
+        /home/dev/.cargo/registry /home/dev/.cargo/git \
+        /home/dev/.local/bin /home/dev/.config/zacrs
+
+ENV HOME=/home/dev USER=dev LOGNAME=dev SHELL=/bin/zsh \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    CARGO_HOME=/home/dev/.cargo CARGO_TARGET_DIR=/var/cache/zacrs/target \
+    XDG_RUNTIME_DIR=/run/zacrs \
+    PATH=/home/dev/.local/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+COPY entrypoint.sh /opt/zacrs/entrypoint.sh
+COPY --chown=dev:dev home/ /home/dev/
+COPY fixtures/ /opt/zacrs/fixtures/
+USER dev
+WORKDIR /home/dev/work
+ENTRYPOINT ["/bin/sh", "/opt/zacrs/entrypoint.sh"]
+CMD ["debug"]
