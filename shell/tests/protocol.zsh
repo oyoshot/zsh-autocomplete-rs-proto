@@ -17,6 +17,24 @@ assert_equal() {
     fi
 }
 
+for glob_mode in off on; do
+    if [[ "$glob_mode" == on ]]; then
+        setopt extendedglob
+    else
+        unsetopt extendedglob
+    fi
+    _zacrs_parse_done_line 'DONE 0 file\ with\ spaces.txt '
+    assert_equal 0 "$result_code" "DONE code with EXTENDED_GLOB=$glob_mode"
+    assert_equal 'file\ with\ spaces.txt ' "$result_text" \
+        "DONE text preserves escapes and trailing space with EXTENDED_GLOB=$glob_mode"
+    _zacrs_parse_done_line 'DONE 12 result'
+    assert_equal 12 "$result_code" "multi-digit DONE code with EXTENDED_GLOB=$glob_mode"
+    assert_equal result "$result_text" "multi-digit DONE prefix with EXTENDED_GLOB=$glob_mode"
+    _zacrs_parse_done_line 'DONE 1'
+    assert_equal '' "$result_text" "empty DONE text with EXTENDED_GLOB=$glob_mode"
+done
+unsetopt extendedglob
+
 result_text="legacy"
 chain=0
 execute=0

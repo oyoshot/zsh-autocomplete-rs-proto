@@ -111,6 +111,7 @@ _zacrs_record_popup_snapshot() {
 
 # Try to load zsh/system for sysread (used by daemon complete)
 zmodload zsh/system 2>/dev/null
+
 # Try to load zsh/net/socket (preferred) or zsh/net/unix for zsocket support
 if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; then
     _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
@@ -384,9 +385,7 @@ _zacrs_clear_popup() {
 
 _zacrs_read_done_response() {
     local fd="$1" header="$2"
-    result_code="${${(s: :)header}[2]}"
-    result_text="${header#DONE [0-9]## }"
-    [[ "$result_text" == "$header" ]] && result_text=""
+    _zacrs_parse_done_line "$header"
     local apply_line=""
     IFS= read -r -u $fd apply_line || apply_line=""
     _zacrs_parse_apply_line "$apply_line"
@@ -520,10 +519,8 @@ _zacrs_invoke_daemon() {
     fi
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset=""
-    result_code="${${(s: :)lines[1]}[2]}"
+    _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 4
-    result_text="${lines[1]#DONE [0-9]## }"
-    [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
@@ -588,10 +585,8 @@ _zacrs_invoke() {
     fi
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset=""
-    result_code="${${(s: :)lines[1]}[2]}"
+    _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 1
-    result_text="${lines[1]#DONE [0-9]## }"
-    [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"

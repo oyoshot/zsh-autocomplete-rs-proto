@@ -1,0 +1,9 @@
+# Opt in inside the session with:
+# cp /opt/zacrs/fixtures/config.toml ~/.config/zacrs/config.toml
+[abbreviations]
+gs = "git status"
+
+[[abbreviation]]
+trigger = "gcm"
+expansion = "git commit -m '{{cursor}}'"
+description = "commit with a message"
