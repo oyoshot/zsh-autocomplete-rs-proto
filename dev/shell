@@ -79,13 +79,13 @@ if command -v infocmp >/dev/null 2>&1; then
     chmod 644 "$terminfo_file"
 fi
 
-# Image and checkout IDs separate artifacts by userland, toolchain and worktree.
+# Share all of CARGO_HOME so Cargo lock files coordinate registry/git writes
+# across different target volumes. Image and checkout IDs separate artifacts.
 set -- \
     --mount "type=bind,source=$repo_root,destination=/src,readonly" \
     --mount "type=bind,source=$launcher_root/terminfo,destination=/opt/zacrs/host-terminfo,readonly" \
     --mount "type=volume,source=zacrs-target-$digest-$checkout_digest,destination=/var/cache/zacrs/target" \
-    --mount type=volume,source=zacrs-cargo-registry,destination=/home/dev/.cargo/registry \
-    --mount type=volume,source=zacrs-cargo-git,destination=/home/dev/.cargo/git \
+    --mount type=volume,source=zacrs-cargo-home,destination=/home/dev/.cargo \
     --env "TERM=${TERM:-xterm-256color}" \
     "$image" "$profile" "$@"
 if [ "${COLORTERM+x}" = x ]; then

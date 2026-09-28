@@ -10,7 +10,7 @@ RUN groupadd --gid 1000 dev \
     && useradd --uid 1000 --gid dev --create-home --shell /bin/zsh dev \
     && install -d -o dev -g dev -m 700 /run/zacrs \
     && install -d -o dev -g dev /var/cache/zacrs/target \
-        /home/dev/.cargo/registry /home/dev/.cargo/git \
+        /home/dev/.cargo /home/dev/.cargo/registry /home/dev/.cargo/git \
         /home/dev/.local/bin /home/dev/.config/zacrs
 
 ENV HOME=/home/dev USER=dev LOGNAME=dev SHELL=/bin/zsh \
