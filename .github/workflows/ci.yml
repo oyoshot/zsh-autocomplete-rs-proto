@@ -92,7 +92,4 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
       - run: cargo test
-      - run: zsh shell/tests/cache_context.zsh
-      - run: zsh shell/tests/compsys_options.zsh
-      - run: zsh shell/tests/compsys_state.zsh
-      - run: zsh shell/tests/protocol.zsh
+      - run: sh shell/tests/run.sh
