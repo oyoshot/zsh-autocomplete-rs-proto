@@ -340,9 +340,8 @@ fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
 }
 
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
-    b.is_user_defined()
-        .cmp(&a.is_user_defined())
-        .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
+    a.kind_priority()
+        .cmp(&b.kind_priority())
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.text.cmp(&b.text))
 }
@@ -350,7 +349,6 @@ fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
 fn compare_scored_candidates(a: &Candidate, a_score: u32, b: &Candidate, b_score: u32) -> Ordering {
     b_score
         .cmp(&a_score)
-        .then_with(|| b.is_user_defined().cmp(&a.is_user_defined()))
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
         .then_with(|| a.text.cmp(&b.text))
@@ -641,16 +639,41 @@ mod tests {
     }
 
     #[test]
-    fn user_defined_abbreviation_wins_equal_scored_match() {
+    fn paths_and_commands_precede_abbreviation_with_same_trigger() {
         let mut m = FuzzyMatcher::new();
         let candidates = vec![
+            Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
             Candidate::parse_line("gs\tcommand\tcommand"),
+            Candidate::parse_line("gs\t\tfile"),
+            Candidate::parse_line("gs\t\tdirectory"),
+        ];
+
+        let results = m.filter(&candidates, "gs");
+
+        assert!(
+            results
+                .windows(2)
+                .all(|pair| pair[0].score == pair[1].score)
+        );
+        let kinds: Vec<&str> = results.iter().map(|r| r.candidate.kind.as_str()).collect();
+        assert_eq!(kinds, ["directory", "file", "command", "abbreviation"]);
+    }
+
+    #[test]
+    fn better_matching_abbreviation_precedes_paths_and_commands() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = vec![
+            Candidate::parse_line("gs-backup\t\tdirectory"),
+            Candidate::parse_line("gs.txt\t\tfile"),
+            Candidate::parse_line("gstatus\t\tcommand"),
             Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
         ];
 
         let results = m.filter(&candidates, "gs");
 
+        assert_eq!(results.len(), 4);
         assert_eq!(results[0].candidate.kind, "abbreviation");
+        assert!(results[0].score > results[1].score);
     }
 
     #[test]
@@ -669,16 +692,19 @@ mod tests {
     }
 
     #[test]
-    fn user_defined_abbreviations_lead_empty_query() {
+    fn empty_query_keeps_paths_and_commands_before_abbreviations() {
         let mut m = FuzzyMatcher::new();
         let candidates = vec![
-            Candidate::parse_line("git\tcommand\tcommand"),
             Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
+            Candidate::parse_line("git\tcommand\tcommand"),
+            Candidate::parse_line("Cargo.toml\t\tfile"),
+            Candidate::parse_line("src\t\tdirectory"),
         ];
 
         let results = m.filter(&candidates, "");
 
-        assert_eq!(results[0].candidate.kind, "abbreviation");
+        let kinds: Vec<&str> = results.iter().map(|r| r.candidate.kind.as_str()).collect();
+        assert_eq!(kinds, ["directory", "file", "command", "abbreviation"]);
     }
 
     #[test]

@@ -107,6 +107,65 @@ _zacrs_command_context() {
     return 0
 }
 
+# Parse a standalone command without consulting configuration or changing ZLE.
+# Args: buffer, prebuffer. Returns reply=(trigger leading suffix context).
+_zacrs_abbreviation_target() {
+    local _buffer="$1" _prebuffer="${2:-}"
+    reply=()
+    # At a continuation prompt BUFFER is only the new line; preceding input
+    # (including heredoc delimiters and open quotes) lives in PREBUFFER.
+    [[ -n "$_prebuffer" ]] && return 1
+    local -a _tokens
+    _tokens=( ${(z)_buffer} ) 2>/dev/null || return 1
+    (( ${#_tokens} )) || return 1
+    local _word="${_tokens[1]}" _token
+    # Quoted/escaped words, paths, assignments and substitutions are explicit
+    # shell syntax and must not be reinterpreted as an abbreviation trigger.
+    [[ "$_word" == *[^[:alnum:]_.+-]* || "$_word" == ('.'|'..') ]] && return 1
+    [[ "$_word" == ('if'|'then'|'elif'|'else'|'fi'|'for'|'foreach'|'while'|'until'|'repeat'|'do'|'done'|'case'|'esac'|'select'|'function'|'coproc'|'time'|'nocorrect'|'noglob'|'command'|'exec'|'builtin'|'end') ]] && return 1
+    # Compound commands need a separate replacement-range model. Leave the
+    # entire line alone rather than partially expanding a pipeline or list.
+    # Zsh emits a single () token for function declarations, even without braces.
+    for _token in "${_tokens[@]}"; do
+        [[ "$_token" == ('|'|'|&'|'||'|'&&'|'&'|'&!'|'&|'|';'|$'\n'|'('|')'|'()'|'{'|'}') ]] && return 1
+    done
+
+    local _leading="${_buffer%%[^[:space:]]*}"
+    local -i _end=$(( ${#_leading} + ${#_word} ))
+    [[ "${_buffer[${#_leading}+1,_end]}" == "$_word" ]] || return 1
+    local _context="${(j: :)${(@Q)_tokens}}"
+    [[ "$_buffer" == *[[:space:]] ]] && _context+=" "
+    reply=("$_word" "$_leading" "${_buffer[_end+1,-1]}" "$_context")
+}
+
+# Resolve the parsed trigger through Rust and apply the literal edit to ZLE.
+# On success REPLY is 1 to execute, or 0 to keep editing a cursor placeholder.
+_zacrs_expand_command_abbreviation() {
+    _zacrs_update_enter_selection
+    [[ -n "$_zacrs_enter_selected_command" ]] && return 1
+    local -a reply
+    _zacrs_abbreviation_target "$BUFFER" "${PREBUFFER:-}" || return 1
+    local _word="$reply[1]" _leading="$reply[2]" _suffix="$reply[3]" _context="$reply[4]"
+    local _response
+    _response=$("$ZACRS_BIN" expand-abbreviation --trigger "$_word" \
+        --command-context "$_context" 2>/dev/null) || return 1
+    local -a _lines=( "${(@f)_response}" )
+    (( ${#_lines} == 2 )) || return 1
+    [[ "${_lines[1]}" == 'DONE 0 '* || "${_lines[1]}" == 'DONE 0' ]] || return 1
+    [[ "${_lines[2]}" == 'APPLY '* ]] || return 1
+    local result_code result_text chain execute restore_text cursor_offset selection_applied
+    _zacrs_parse_done_line "${_lines[1]}"
+    _zacrs_parse_apply_line "${_lines[2]}"
+    BUFFER="${_leading}${result_text}${_suffix}"
+    if [[ "$cursor_offset" == <-> ]]; then
+        CURSOR=$(( ${#_leading} + cursor_offset ))
+    else
+        CURSOR=${#BUFFER}
+    fi
+    REPLY="$execute"
+    return 0
+}
+
 # Render even when compsys produced no candidates. The Rust side may still
 # contribute configured abbreviations at any command-line position.
 # Args: $1=candidates $2=buffer $3=prefix

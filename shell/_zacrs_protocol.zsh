@@ -1,5 +1,14 @@
 # Helpers for decoding and parsing the shell-facing completion result protocol.
 
+_zacrs_parse_done_line() {
+    local header="$1"
+    result_code="${${(s: :)header}[2]}"
+    # <-> matches decimal digits without requiring the user's EXTENDED_GLOB.
+    result_text="${header#DONE <-> }"
+    [[ "$result_text" == "$header" ]] && result_text=""
+    return 0
+}
+
 _zacrs_decode_hex_to_REPLY() {
     local hex="$1"
     REPLY=""
@@ -20,6 +29,7 @@ _zacrs_parse_apply_line() {
     local metadata="$apply_line"
     chain=0
     execute=0
+    selection_applied=0
     restore_text=""
     cursor_offset=""
 
@@ -37,6 +47,7 @@ _zacrs_parse_apply_line() {
     for token in ${(s: :)metadata}; do
         [[ "$token" == "chain=1" ]] && chain=1
         [[ "$token" == "execute=1" ]] && execute=1
+        [[ "$token" == "selection_applied=1" ]] && selection_applied=1
         [[ "$token" == cursor_offset=<-> ]] && cursor_offset="${token#cursor_offset=}"
         if [[ "$token" == text_hex=* ]]; then
             _zacrs_decode_hex_to_REPLY "${token#text_hex=}"

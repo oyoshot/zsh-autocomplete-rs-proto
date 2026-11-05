@@ -1,0 +1,212 @@
+set -eu
+zmodload zsh/zpty
+
+# Both modes use real ZLE, the actual CLI, and production Enter/selection hooks.
+# The socket-free mode supplies a popup result through a test widget. The daemon
+# mode exercises the real Rust popup via Tab and Space as well.
+cat > "$HOME/.zshrc" <<'ZSH'
+unsetopt MONITOR
+stty rows 24 cols 100
+autoload -Uz compinit
+compinit -d "$HOME/.zcompdump"
+if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
+    zmodload() {
+        [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
+        builtin zmodload "$@"
+    }
+fi
+source "$ZACRS_PLUGIN"
+_zacrs_render() { :; }
+if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
+    unfunction zmodload
+    _test_choose_command() {
+        local cursor_offset=''
+        _zacrs_apply ${#LBUFFER} 2 'gs ' 0 0 '' 1
+    }
+    zle -N _test_choose_command
+    bindkey '^X' _test_choose_command
+    _test_dismiss_unselected() {
+        local cursor_offset=''
+        _zacrs_apply ${#LBUFFER} 2 'gs ' 0 0 '' 0
+    }
+    zle -N _test_dismiss_unselected
+    bindkey '^W' _test_dismiss_unselected
+fi
+functions[_test_original_apply]=$functions[_zacrs_apply]
+_zacrs_apply() {
+    _test_original_apply "$@"
+    print -r -- "$BUFFER" > "$HOME/applied"
+}
+_zacrs_line_pre_redraw() {
+    # Keep selection tracking active without opening an unrelated auto popup.
+    _zacrs_update_enter_selection
+    print -r -- "$BUFFER" > "$HOME/redrawn"
+}
+git() { print -r -- "git:$*" > "$HOME/executed"; }
+gs() { print -r -- "gs:$*" > "$HOME/executed"; }
+typeset -gi _test_ssh_count=0
+ssh() {
+    print -r -- "ssh:$*" > "$HOME/executed"
+    print -r -- "$(( ++_test_ssh_count ))" > "$HOME/ssh-count"
+}
+zacrs_next() { print -r -- 'unexpected native selection' > "$HOME/executed"; }
+_test_git_definition="$functions[git]"
+preexec() { print -r -- "$1" > "$HOME/last-command"; }
+typeset -gi _test_ready_count=0
+_test_line_init() {
+    (( ++_test_ready_count ))
+    print -r -- "$_test_ready_count" > "$HOME/ready"
+}
+_test_observe_buffer() {
+    print -r -- "$BUFFER" > "$HOME/editor"
+    print -r -- "$CURSOR" > "$HOME/cursor"
+}
+add-zle-hook-widget line-init _test_line_init
+zle -N _test_observe_buffer
+bindkey '^Y' _test_observe_buffer
+PROMPT='TEST> '
+RPROMPT=''
+ZSH
+
+cleanup() {
+    if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+        "$ZACRS_BIN" daemon stop >/dev/null 2>&1 || true
+    fi
+    zpty -d zacrs_enter 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+typeset pty_output='' dsr_pending=''
+drain_pty() {
+    local chunk=''
+    while zpty -r -t zacrs_enter chunk 2>/dev/null; do
+        pty_output+="$chunk"
+        dsr_pending+="$chunk"
+        while [[ "$dsr_pending" == *$'\e[6n'* ]]; do
+            zpty -w -n zacrs_enter $'\e[1;1R'
+            dsr_pending="${dsr_pending#*$'\e[6n'}"
+        done
+        # A terminal query may be split across reads.
+        dsr_pending="${dsr_pending[-3,-1]}"
+    done
+    return 0
+}
+fail() {
+    print -u2 -r -- "not ok: $*"
+    print -u2 -r -- "pty: ${(qqq)pty_output}"
+    exit 1
+}
+wait_file() {
+    local filename="$1" expected="$2" attempt
+    for attempt in {1..500}; do
+        drain_pty
+        [[ -f "$filename" && "$(<"$filename")" == "$expected" ]] && return 0
+        sleep 0.01
+    done
+    fail "waiting for ${filename:t} = ${(qqq)expected}"
+}
+wait_popup() {
+    local title="$1" attempt
+    for attempt in {1..500}; do
+        drain_pty
+        [[ "$pty_output" == *"┌ $title "* ]] && return 0
+        sleep 0.01
+    done
+    fail "waiting for popup title ${(qqq)title}"
+}
+enter_line() {
+    local next_ready=$(( $(<"$HOME/ready") + 1 ))
+    zpty -w -n zacrs_enter "$1"$'\r'
+    wait_file "$HOME/ready" "$next_ready"
+}
+
+zpty -b zacrs_enter zsh -di
+wait_file "$HOME/ready" 1
+enter_line gs
+wait_file "$HOME/executed" 'gs:'
+enter_line ZACRS_ABBR_EXPAND_ON_ENTER=1
+enter_line 'gs -sb'
+wait_file "$HOME/executed" 'git:status -sb'
+enter_line 'fc -ln -1 > "$HOME/history"'
+[[ "$(<"$HOME/history")" == *'git status -sb' ]] || fail 'expanded history'
+
+zpty -w -n zacrs_enter $'gcm\r\x19'
+wait_file "$HOME/editor" "git commit -m ''"
+wait_file "$HOME/cursor" 15
+enter_line EDITED
+wait_file "$HOME/executed" 'git:commit -m EDITED'
+
+typeset -i ssh_count=0
+for trigger in ssh connect; do
+    zpty -w -n zacrs_enter "$trigger"$'\r\x19'
+    wait_file "$HOME/editor" 'ssh user@'
+    wait_file "$HOME/cursor" 9
+    enter_line host
+    wait_file "$HOME/executed" 'ssh:user@host'
+    wait_file "$HOME/ssh-count" "$(( ++ssh_count ))"
+done
+
+enter_line "cat <<'EOF' > \"\$HOME/heredoc\""
+enter_line gs
+enter_line EOF
+wait_file "$HOME/heredoc" gs
+enter_line 'print -r -- "'
+enter_line gs
+enter_line '" > "$HOME/quoted"'
+wait_file "$HOME/quoted" $'\ngs'
+
+# Typing in the Rust popup clears its selection. Space then returns the filter,
+# which must still be eligible for expansion when Enter accepts it.
+: > "$HOME/applied"
+: > "$HOME/redrawn"
+zpty -w -n zacrs_enter $'g\x19'
+wait_file "$HOME/editor" g
+if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+    pty_output=''
+    zpty -w -n zacrs_enter $'\t'
+    wait_popup g
+    zpty -w -n zacrs_enter 's '
+else
+    zpty -w -n zacrs_enter $'\x17'
+fi
+wait_file "$HOME/applied" 'gs '
+wait_file "$HOME/redrawn" 'gs '
+enter_line ''
+wait_file "$HOME/executed" 'git:status'
+
+for trigger in gs zacrs_next; do
+    : > "$HOME/applied"
+    : > "$HOME/redrawn"
+    zpty -w -n zacrs_enter "$trigger"$'\x19'
+    wait_file "$HOME/editor" "$trigger"
+    if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+        pty_output=''
+        zpty -w -n zacrs_enter $'\t'
+        wait_popup "$trigger"
+        if [[ "$trigger" == gs ]]; then
+            zpty -w -n zacrs_enter ' '
+        else
+            # The native command is first; choose the abbreviation below it.
+            zpty -w -n zacrs_enter $'\e[B '
+        fi
+    else
+        zpty -w -n zacrs_enter $'\x18'
+    fi
+    wait_file "$HOME/applied" 'gs '
+    wait_file "$HOME/redrawn" 'gs '
+    enter_line '-sb'
+    wait_file "$HOME/executed" 'gs:-sb'
+done
+enter_line gs
+wait_file "$HOME/executed" 'git:status'
+
+enter_line 'gs() print hello'
+wait_file "$HOME/last-command" 'gs() print hello'
+enter_line '[[ "$functions[git]" == "$_test_git_definition" && ${+functions[status]} == 0 ]] && print -r -- ok > "$HOME/function-ok"'
+wait_file "$HOME/function-ok" ok
+if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+    [[ "$("$ZACRS_BIN" daemon status)" == running ]] || fail 'daemon is not running'
+else
+    [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'socket-free test started a daemon'
+fi
+print -r -- "ok: real ZLE Enter, history, cursor, continuation, selection and declarations (daemon=$ZACRS_TEST_DAEMON)"

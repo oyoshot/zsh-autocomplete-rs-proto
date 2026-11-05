@@ -1,3 +1,4 @@
+pub mod abbreviation;
 pub mod app;
 pub mod candidate;
 pub mod cli;
