@@ -137,6 +137,7 @@ _zacrs_record_popup_snapshot() {
 
 # Try to load zsh/system for sysread (used by daemon complete)
 zmodload zsh/system 2>/dev/null
+
 # Try to load zsh/net/socket (preferred) or zsh/net/unix for zsocket support
 if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; then
     _zacrs_socket_path="${XDG_RUNTIME_DIR:-/tmp}/zacrs.sock"
