@@ -50,6 +50,7 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
+typeset -g _zacrs_enter_selected_command=""
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
@@ -74,6 +75,31 @@ _zacrs_reset_cache() {
     _zacrs_chain_retry=0
     _zacrs_redraw_deferred=0
     _zacrs_restore_self_insert
+}
+
+_zacrs_reset_enter_selection() {
+    _zacrs_enter_selected_command=""
+}
+
+# Protect either an explicit popup choice or a placeholder expansion that
+# returned to editing. Record the resulting command, which may differ from
+# the abbreviation trigger.
+_zacrs_record_enter_selection() {
+    local -a _words
+    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
+    _zacrs_enter_selected_command="${_words[1]:-}"
+}
+
+# Keep the prepared command while arguments are edited. Editing the
+# command itself invalidates the choice; a fresh ZLE line always resets it.
+_zacrs_update_enter_selection() {
+    [[ -n "$_zacrs_enter_selected_command" ]] || return 0
+    local -a _words
+    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
+    if [[ "${_words[1]:-}" != "$_zacrs_enter_selected_command" ]]; then
+        _zacrs_reset_enter_selection
+    fi
+    return 0
 }
 
 _zacrs_restore_self_insert() {
@@ -384,9 +410,7 @@ _zacrs_clear_popup() {
 
 _zacrs_read_done_response() {
     local fd="$1" header="$2"
-    result_code="${${(s: :)header}[2]}"
-    result_text="${header#DONE [0-9]## }"
-    [[ "$result_text" == "$header" ]] && result_text=""
+    _zacrs_parse_done_line "$header"
     local apply_line=""
     IFS= read -r -u $fd apply_line || apply_line=""
     _zacrs_parse_apply_line "$apply_line"
@@ -404,6 +428,7 @@ _zacrs_finish_popup_session() {
 
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
+    local selection_applied="${7:-0}"
     local base
     local new_lbuffer="$LBUFFER"
     if (( prefix_len > 0 )); then
@@ -434,6 +459,12 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
+    _zacrs_update_enter_selection
+    if [[ "$result_code" == (0|2) && -n "$result_text" \
+        && -z "${base//[[:space:]]/}" && -z "${PREBUFFER:-}" ]]; then
+        _zacrs_reset_enter_selection
+        [[ "$selection_applied" == 1 ]] && _zacrs_record_enter_selection
+    fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
         CURSOR=$((${#base} + cursor_offset))
     else
@@ -519,14 +550,12 @@ _zacrs_invoke_daemon() {
         return 1
     fi
 
-    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset=""
-    result_code="${${(s: :)lines[1]}[2]}"
+    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0
+    _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 4
-    result_text="${lines[1]#DONE [0-9]## }"
-    [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
-    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
+    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
     return 0
 }
@@ -587,14 +616,12 @@ _zacrs_invoke() {
         return 1
     fi
 
-    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset=""
-    result_code="${${(s: :)lines[1]}[2]}"
+    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0
+    _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 1
-    result_text="${lines[1]#DONE [0-9]## }"
-    [[ "$result_text" == "${lines[1]}" ]] && result_text=""
     _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
-    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text"
+    _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
 }
 
@@ -701,6 +728,7 @@ _zacrs_complete_popup() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
+    _zacrs_update_enter_selection
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
@@ -882,15 +910,29 @@ _zacrs_line_pre_redraw() {
 
 _zacrs_accept_line() {
     _zacrs_clear_popup
+    local _keep_editing=0
+    if [[ "${ZACRS_ABBR_EXPAND_ON_ENTER:-0}" == 1 ]] \
+        && _zacrs_expand_command_abbreviation; then
+        if [[ "$REPLY" == 0 ]]; then
+            _keep_editing=1
+            _zacrs_record_enter_selection
+        fi
+    fi
     _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
     zle reset-prompt
+    if (( _keep_editing )); then
+        zle -R
+        return
+    fi
+    _zacrs_reset_enter_selection
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
+    _zacrs_reset_enter_selection
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
     _zacrs_reset_cache
@@ -964,6 +1006,7 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
+add-zle-hook-widget line-init _zacrs_reset_enter_selection
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.

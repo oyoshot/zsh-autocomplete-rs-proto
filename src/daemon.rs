@@ -28,6 +28,7 @@ struct ApplyResult {
     text: String,
     chain: bool,
     execute: bool,
+    selection_applied: bool,
     restore_text: String,
     cursor_offset: Option<usize>,
 }
@@ -39,6 +40,7 @@ impl ApplyResult {
             text,
             code: 0,
             execute: false,
+            selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -50,6 +52,7 @@ impl ApplyResult {
             text,
             code: 0,
             execute: true,
+            selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -61,6 +64,7 @@ impl ApplyResult {
             text,
             chain: false,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -72,6 +76,7 @@ impl ApplyResult {
             text: String::new(),
             chain: false,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -83,6 +88,7 @@ impl ApplyResult {
             text,
             code: 2,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -109,6 +115,7 @@ fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Res
         text: result.text.clone(),
         chain: result.chain,
         execute: result.execute,
+        selection_applied: result.selection_applied,
         restore_text: result.restore_text.clone(),
         cursor_offset: result.cursor_offset,
     }
@@ -1340,6 +1347,7 @@ impl DaemonServer {
                                 text: encode_hex_bytes(&drained),
                                 chain: false,
                                 execute: false,
+                                selection_applied: false,
                                 restore_text: app.filter_text.clone(),
                                 cursor_offset: None,
                             },
@@ -1439,6 +1447,7 @@ impl DaemonServer {
                                     let _ = write_apply_result(
                                         writer,
                                         &ApplyResult {
+                                            selection_applied: true,
                                             cursor_offset: c.cursor_offset,
                                             ..ApplyResult::dismiss_with_space(
                                                 c.text_for_dismiss_with_space(
@@ -1483,6 +1492,7 @@ impl DaemonServer {
                                     text: encode_hex_bytes(&key_buf),
                                     chain: false,
                                     execute: false,
+                                    selection_applied: false,
                                     restore_text: app.filter_text.clone(),
                                     cursor_offset: None,
                                 },
@@ -2391,7 +2401,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=1 restore_hex="
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -2463,6 +2473,39 @@ mod tests {
     }
 
     #[test]
+    fn handle_complete_space_without_selection_returns_unselected_filter() {
+        let mut server = test_server();
+        server.config.auto_insert_unambiguous = false;
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                command_context: None,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "gs\t\tcommand\ngstack\t\tcommand\n",
+            &[SessionMessage::Key(b"s"), SessionMessage::Key(b" ")],
+        );
+        let _ = read_frame(&mut reader);
+        let _ = read_frame(&mut reader);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        let result = read_text_complete_result(&bytes);
+        assert_eq!(result.code, 2);
+        assert_eq!(result.text, "gs ");
+        assert!(!result.selection_applied);
+    }
+
+    #[test]
     fn handle_complete_space_after_selection_returns_selected_candidate() {
         let mut server = test_server();
         let mut reader = run_complete_session(
@@ -2495,7 +2538,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -2526,7 +2569,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -2626,7 +2669,7 @@ mod tests {
             "fo",
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -2667,7 +2710,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 cargo!");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=1 restore_hex="
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -2701,7 +2744,10 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
         let mut lines = output.lines();
         assert_eq!(lines.next(), Some("DONE 0 cargo!"));
-        assert_eq!(lines.next(), Some("APPLY chain=0 execute=0 restore_hex="));
+        assert_eq!(
+            lines.next(),
+            Some("APPLY chain=0 execute=0 selection_applied=1 restore_hex=")
+        );
         assert_eq!(lines.next(), None);
     }
 
@@ -3088,7 +3134,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 git!");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=1 restore_hex="
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -3129,7 +3175,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git! ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -3139,7 +3185,7 @@ mod tests {
             "car",
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3197,7 +3243,7 @@ mod tests {
             "\"s",
             "\"src/\t\tdirectory\n",
             "DONE 0 \"src/",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3208,7 +3254,7 @@ mod tests {
             "'s",
             "'src/\t\tdirectory\n",
             "DONE 0 'src/",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3220,7 +3266,7 @@ mod tests {
             "FOO=ba",
             "FOO=bar\t\t\n",
             "DONE 0 FOO=bar",
-            "APPLY chain=0 execute=1 restore_hex=",
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3231,7 +3277,7 @@ mod tests {
             "--opt=va",
             "--opt=value\t\t\n",
             "DONE 0 --opt=value",
-            "APPLY chain=0 execute=1 restore_hex=",
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex=",
         );
     }
 

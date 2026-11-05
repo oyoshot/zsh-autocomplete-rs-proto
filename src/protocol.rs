@@ -110,6 +110,8 @@ pub struct TextCompleteResult {
     pub text: String,
     pub chain: bool,
     pub execute: bool,
+    /// The returned text came from an actual candidate, not the typed filter.
+    pub selection_applied: bool,
     pub restore_text: String,
     pub cursor_offset: Option<usize>,
 }
@@ -674,6 +676,9 @@ impl TextCompleteResult {
             if self.chain { 1 } else { 0 },
             if self.execute { 1 } else { 0 },
         )?;
+        if self.selection_applied {
+            write!(writer, " selection_applied=1")?;
+        }
         if let Some(cursor_offset) = self.cursor_offset {
             write!(writer, " cursor_offset={cursor_offset}")?;
         }
@@ -730,12 +735,15 @@ impl TextCompleteResult {
 
         let mut chain = false;
         let mut execute = false;
+        let mut selection_applied = false;
         let mut cursor_offset = None;
         for token in flag_fields.split_whitespace() {
             if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
             } else if let Some(value) = token.strip_prefix("execute=") {
                 execute = value == "1";
+            } else if let Some(value) = token.strip_prefix("selection_applied=") {
+                selection_applied = value == "1";
             } else if let Some(value) = token.strip_prefix("cursor_offset=") {
                 cursor_offset = value.parse().ok();
             } else if let Some(value) = token.strip_prefix("text_hex=") {
@@ -748,6 +756,7 @@ impl TextCompleteResult {
             text,
             chain,
             execute,
+            selection_applied,
             restore_text,
             cursor_offset,
         })
@@ -1159,6 +1168,7 @@ mod tests {
             text: "cargo ".to_string(),
             chain: true,
             execute: false,
+            selection_applied: true,
             restore_text: "cargo ".to_string(),
             cursor_offset: None,
         };
@@ -1184,6 +1194,7 @@ mod tests {
             text: "printf 'first\nsecond'\n".to_string(),
             chain: false,
             execute: true,
+            selection_applied: true,
             restore_text: String::new(),
             cursor_offset: Some(7),
         };
@@ -1211,6 +1222,7 @@ mod tests {
             text: String::new(),
             chain: false,
             execute: false,
+            selection_applied: false,
             restore_text: "--foo=chain=1 execute=0".to_string(),
             cursor_offset: None,
         };
@@ -1232,6 +1244,7 @@ mod tests {
 
         assert!(!result.chain);
         assert!(!result.execute);
+        assert!(!result.selection_applied);
         assert_eq!(result.restore_text, "--foo=chain=1 execute=1");
     }
 }
