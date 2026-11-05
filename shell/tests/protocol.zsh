@@ -54,4 +54,11 @@ _zacrs_parse_apply_line "APPLY chain=0 execute=1 restore=legacy restore"
 assert_equal "legacy result" "$result_text" 'legacy result text remains unchanged'
 assert_equal "legacy restore" "$restore_text" 'legacy restore field is parsed'
 
+_zacrs_parse_apply_line 'APPLY chain=1 execute=0 selection_applied=1 restore_hex='
+assert_equal 1 "$selection_applied" 'explicit selection flag is parsed'
+_zacrs_parse_apply_line 'APPLY chain=1 execute=0 restore_hex='
+assert_equal 0 "$selection_applied" 'missing selection flag defaults to false without retaining prior state'
+_zacrs_parse_apply_line 'APPLY chain=1 execute=0 selection_applied=0 restore_hex='
+assert_equal 0 "$selection_applied" 'unselected Space dismissal is parsed'
+
 (( failures == 0 ))

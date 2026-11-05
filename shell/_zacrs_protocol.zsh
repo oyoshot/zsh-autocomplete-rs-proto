@@ -29,6 +29,7 @@ _zacrs_parse_apply_line() {
     local metadata="$apply_line"
     chain=0
     execute=0
+    selection_applied=0
     restore_text=""
     cursor_offset=""
 
@@ -46,6 +47,7 @@ _zacrs_parse_apply_line() {
     for token in ${(s: :)metadata}; do
         [[ "$token" == "chain=1" ]] && chain=1
         [[ "$token" == "execute=1" ]] && execute=1
+        [[ "$token" == "selection_applied=1" ]] && selection_applied=1
         [[ "$token" == cursor_offset=<-> ]] && cursor_offset="${token#cursor_offset=}"
         if [[ "$token" == text_hex=* ]]; then
             _zacrs_decode_hex_to_REPLY "${token#text_hex=}"

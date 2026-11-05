@@ -1,5 +1,7 @@
 mod helpers;
 
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zsh_autocomplete_rs::app::compute_common_prefix;
 use zsh_autocomplete_rs::candidate::Candidate;
@@ -52,6 +54,31 @@ fn bench_parse_line(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_parse_lines_dedup(c: &mut Criterion) {
+    let unique = helpers::candidates_to_tsv(&helpers::generate_candidates(1_000));
+
+    let mut duplicate_heavy = String::new();
+    for candidate in helpers::generate_candidates(500) {
+        duplicate_heavy.push_str(&format!("{}\t\t{}\n", candidate.text, candidate.kind));
+        duplicate_heavy.push_str(&format!(
+            "{}\t{}\t{}\n",
+            candidate.text, candidate.description, candidate.kind
+        ));
+    }
+
+    let cases = [
+        ("unique_1000", unique),
+        ("duplicates_50pct_1000", duplicate_heavy),
+    ];
+    let mut group = c.benchmark_group("parse_lines_dedup");
+    for (name, input) in &cases {
+        group.bench_with_input(BenchmarkId::from_parameter(name), input, |b, input| {
+            b.iter(|| black_box(Candidate::parse_lines_dedup(black_box(input.as_str()))));
+        });
+    }
+    group.finish();
+}
+
 fn bench_compute_common_prefix(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_common_prefix");
 
@@ -82,6 +109,7 @@ criterion_group!(
     benches,
     bench_truncate_to_width,
     bench_parse_line,
+    bench_parse_lines_dedup,
     bench_compute_common_prefix
 );
 criterion_main!(benches);

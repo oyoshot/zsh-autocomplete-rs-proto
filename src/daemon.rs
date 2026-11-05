@@ -28,6 +28,7 @@ struct ApplyResult {
     text: String,
     chain: bool,
     execute: bool,
+    selection_applied: bool,
     restore_text: String,
     cursor_offset: Option<usize>,
 }
@@ -39,6 +40,7 @@ impl ApplyResult {
             text,
             code: 0,
             execute: false,
+            selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -50,6 +52,7 @@ impl ApplyResult {
             text,
             code: 0,
             execute: true,
+            selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -61,6 +64,7 @@ impl ApplyResult {
             text,
             chain: false,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -72,6 +76,7 @@ impl ApplyResult {
             text: String::new(),
             chain: false,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -83,6 +88,7 @@ impl ApplyResult {
             text,
             code: 2,
             execute: false,
+            selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
         }
@@ -109,6 +115,7 @@ fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Res
         text: result.text.clone(),
         chain: result.chain,
         execute: result.execute,
+        selection_applied: result.selection_applied,
         restore_text: result.restore_text.clone(),
         cursor_offset: result.cursor_offset,
     }
@@ -916,25 +923,54 @@ impl DaemonServer {
                 use std::time::Duration;
                 stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
 
-                self.handle_complete(
-                    reader,
-                    &mut writer,
-                    CompleteParams {
-                        prefix,
-                        cursor_row,
-                        cursor_col,
-                        term_cols,
-                        term_rows,
-                        prev_popup_row: prev_popup.map(|(row, _)| row),
-                        prev_popup_height: prev_popup.map(|(_, height)| height),
-                        command_position,
-                        command_context,
-                        accept_single,
-                        reuse_popup: reuse_token.is_some(),
-                        shift_tab_sequence,
-                    },
-                    &tsv,
-                );
+                // The accept loop must not wait for keys from this pane. Preserve
+                // bytes already prefetched by BufReader when handing off the socket.
+                let session_stream = match stream.try_clone() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        warn!(%error, "failed to clone complete connection");
+                        return false;
+                    }
+                };
+                let buffered = reader.buffer().to_vec();
+                let mut session = DaemonServer {
+                    config: self.config.clone(),
+                    theme: self.theme.clone(),
+                    key_bindings: self.key_bindings.clone(),
+                    config_mtime: self.config_mtime,
+                    socket_path: self.socket_path.clone(),
+                    fuzzy: None,
+                    candidate_cache: HashMap::new(),
+                    candidate_cache_order: Vec::new(),
+                    active_popups: HashMap::new(),
+                    active_popup_order: Vec::new(),
+                };
+                let params = CompleteParams {
+                    prefix,
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    prev_popup_row: prev_popup.map(|(row, _)| row),
+                    prev_popup_height: prev_popup.map(|(_, height)| height),
+                    command_position,
+                    command_context,
+                    accept_single,
+                    reuse_popup: reuse_token.is_some(),
+                    shift_tab_sequence,
+                };
+                if let Err(error) = std::thread::Builder::new()
+                    .name("zacrs-complete".into())
+                    .spawn(move || {
+                        use std::io::Read;
+                        let mut reader =
+                            BufReader::new(io::Cursor::new(buffered).chain(&session_stream));
+                        let mut writer = io::BufWriter::new(&session_stream);
+                        session.handle_complete(&mut reader, &mut writer, params, &tsv);
+                    })
+                {
+                    warn!(%error, "failed to start complete session");
+                }
                 false
             }
             TextRequest::Clear(TextClearRequest {
@@ -1311,6 +1347,7 @@ impl DaemonServer {
                                 text: encode_hex_bytes(&drained),
                                 chain: false,
                                 execute: false,
+                                selection_applied: false,
                                 restore_text: app.filter_text.clone(),
                                 cursor_offset: None,
                             },
@@ -1410,6 +1447,7 @@ impl DaemonServer {
                                     let _ = write_apply_result(
                                         writer,
                                         &ApplyResult {
+                                            selection_applied: true,
                                             cursor_offset: c.cursor_offset,
                                             ..ApplyResult::dismiss_with_space(
                                                 c.text_for_dismiss_with_space(
@@ -1454,6 +1492,7 @@ impl DaemonServer {
                                     text: encode_hex_bytes(&key_buf),
                                     chain: false,
                                     execute: false,
+                                    selection_applied: false,
                                     restore_text: app.filter_text.clone(),
                                     cursor_offset: None,
                                 },
@@ -1853,6 +1892,70 @@ mod tests {
         let mut output = Vec::new();
         client_stream.read_to_end(&mut output).unwrap();
         output
+    }
+
+    #[test]
+    fn idle_complete_does_not_block_another_pane_or_control_requests() {
+        use crate::protocol::{Request, Response};
+        use std::time::Duration;
+
+        let mut server = DaemonServer::new(PathBuf::new());
+        server.config = Config::default();
+        server.key_bindings = server.config.key_bindings();
+        let mut clients = Vec::new();
+        let mut connections = Vec::new();
+        for _ in 0..4 {
+            let (client, connection) = UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            clients.push(client);
+            connections.push(connection);
+        }
+        let worker = std::thread::spawn(move || {
+            for (index, connection) in connections.into_iter().enumerate() {
+                assert_eq!(server.handle_connection(connection), index == 3);
+            }
+        });
+
+        // Leave both panes waiting for input after their initial frame.
+        for client in &mut clients[..2] {
+            client
+                .write_all(&text_request_input(
+                    "complete 5 2 80 24",
+                    "",
+                    Some("alpha\t\nbeta\t\n"),
+                ))
+                .unwrap();
+            let mut reader = BufReader::new(client);
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            assert!(header.starts_with("FRAME "), "{header}");
+            let length: usize = header.split_whitespace().last().unwrap().parse().unwrap();
+            let mut frame = vec![0; length];
+            reader.read_exact(&mut frame).unwrap();
+        }
+        clients[2].write_all(&Request::Ping.serialize()).unwrap();
+        assert!(Response::deserialize(&mut BufReader::new(&clients[2])).is_ok());
+        clients[3]
+            .write_all(&Request::Shutdown.serialize())
+            .unwrap();
+        assert!(Response::deserialize(&mut BufReader::new(&clients[3])).is_ok());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn complete_handoff_preserves_prefetched_key_bytes() {
+        let mut server = DaemonServer::new(PathBuf::new());
+        server.config = Config::default();
+        server.key_bindings = server.config.key_bindings();
+        let mut input = text_request_input("complete 5 2 80 24", "al", Some("alpha\t\nbeta\t\n"));
+        input.extend_from_slice(b"KEY 1\n\r");
+        let output = run_text_request(&mut server, input);
+        let mut reader = BufReader::new(Cursor::new(output));
+        let _ = read_frame(&mut reader);
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 0 alpha"), "{done}");
     }
 
     fn read_text_ok(bytes: &[u8]) -> (String, String) {
@@ -2298,7 +2401,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=1 restore_hex="
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -2370,6 +2473,39 @@ mod tests {
     }
 
     #[test]
+    fn handle_complete_space_without_selection_returns_unselected_filter() {
+        let mut server = test_server();
+        server.config.auto_insert_unambiguous = false;
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: true,
+                command_context: None,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "gs\t\tcommand\ngstack\t\tcommand\n",
+            &[SessionMessage::Key(b"s"), SessionMessage::Key(b" ")],
+        );
+        let _ = read_frame(&mut reader);
+        let _ = read_frame(&mut reader);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        let result = read_text_complete_result(&bytes);
+        assert_eq!(result.code, 2);
+        assert_eq!(result.text, "gs ");
+        assert!(!result.selection_applied);
+    }
+
+    #[test]
     fn handle_complete_space_after_selection_returns_selected_candidate() {
         let mut server = test_server();
         let mut reader = run_complete_session(
@@ -2402,7 +2538,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 ab ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -2433,7 +2569,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -2533,7 +2669,7 @@ mod tests {
             "fo",
             "foobar\tcommand\tcommand\nfoobaz\tcommand\tcommand\n",
             "DONE 0 foobar ",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -2574,7 +2710,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 cargo!");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=1 restore_hex="
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -2608,7 +2744,10 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
         let mut lines = output.lines();
         assert_eq!(lines.next(), Some("DONE 0 cargo!"));
-        assert_eq!(lines.next(), Some("APPLY chain=0 execute=0 restore_hex="));
+        assert_eq!(
+            lines.next(),
+            Some("APPLY chain=0 execute=0 selection_applied=1 restore_hex=")
+        );
         assert_eq!(lines.next(), None);
     }
 
@@ -2995,7 +3134,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 0 git!");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=0 execute=1 restore_hex="
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex="
         );
     }
 
@@ -3036,7 +3175,7 @@ mod tests {
         assert_eq!(done.strip_suffix('\n').unwrap_or(&done), "DONE 2 git! ");
         assert_eq!(
             apply.strip_suffix('\n').unwrap_or(&apply),
-            "APPLY chain=1 execute=0 restore_hex="
+            "APPLY chain=1 execute=0 selection_applied=1 restore_hex="
         );
     }
 
@@ -3046,7 +3185,7 @@ mod tests {
             "car",
             "cargo\tcommand\tcommand\ncargo-add\tcommand\tcommand\n",
             "DONE 0 cargo ",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3104,7 +3243,7 @@ mod tests {
             "\"s",
             "\"src/\t\tdirectory\n",
             "DONE 0 \"src/",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3115,7 +3254,7 @@ mod tests {
             "'s",
             "'src/\t\tdirectory\n",
             "DONE 0 'src/",
-            "APPLY chain=1 execute=1 restore_hex=",
+            "APPLY chain=1 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3127,7 +3266,7 @@ mod tests {
             "FOO=ba",
             "FOO=bar\t\t\n",
             "DONE 0 FOO=bar",
-            "APPLY chain=0 execute=1 restore_hex=",
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex=",
         );
     }
 
@@ -3138,7 +3277,7 @@ mod tests {
             "--opt=va",
             "--opt=value\t\t\n",
             "DONE 0 --opt=value",
-            "APPLY chain=0 execute=1 restore_hex=",
+            "APPLY chain=0 execute=1 selection_applied=1 restore_hex=",
         );
     }
 

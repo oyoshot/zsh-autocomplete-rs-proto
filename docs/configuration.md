@@ -9,6 +9,11 @@ Static abbreviations are portable completion candidates. By default they are
 offered only at command position. Expansions are inserted literally without
 running shell evaluation while candidates are being gathered or displayed.
 
+Abbreviations use the same matching score as other candidates, without an extra
+priority boost. For equal scores and text lengths, files, directories, and
+commands precede abbreviations. With an empty query, candidates are ordered by
+kind, so those native candidates also appear before abbreviations.
+
 For simple entries, use the `[abbreviations]` table:
 
 ```toml
@@ -78,3 +83,45 @@ applying completion results.
 
 Both the daemon and subprocess paths read the same configuration. A running
 daemon reloads the file when its modification time changes.
+
+### Optional expansion on Enter (Zsh)
+
+To expand an exact command abbreviation when accepting a line, set this Zsh
+variable (in `.zshrc` to keep it across sessions):
+
+```zsh
+ZACRS_ABBR_EXPAND_ON_ENTER=1
+```
+
+It is disabled by default. With `gs = "git status"`, typing `gs` then Enter
+rewrites the input to `git status` and executes it; `gs -sb` becomes
+`git status -sb`. History records the expanded command. A same-named executable
+or alias is overridden by the configured abbreviation in this mode. Space
+keeps its ordinary behavior.
+
+Only a bare command word in a single simple command is eligible. Partial
+triggers, quoted/escaped words, paths such as `./gs`, assignment prefixes,
+command modifiers such as `command gs`, and compound lines such as `gs | cat`
+or `gs &! echo done`, and function declarations such as `gs() print hello`,
+are left as typed. Continuation input (including heredoc
+bodies and multiline quoted strings) is also left unchanged.
+Command-position and `when.command` conditions still apply;
+argument-position abbreviations continue to require popup selection.
+
+An expansion with `{{cursor}}` replaces the command word and leaves the line in
+the editor at the marker instead of executing it. Arguments and surrounding
+whitespace are preserved. Editing the resulting arguments and pressing Enter
+executes that prepared command without expanding it again, even if its name is
+also an abbreviation trigger (for example, `ssh = "ssh user@{{cursor}}"`).
+Expansion happens once per Enter, and a candidate
+explicitly selected in the popup is accepted without a second expansion.
+This also applies after selecting with Space and editing arguments; editing the
+command word or starting a new input line clears that exemption.
+Closing the popup with Space after typing a filter without selecting a candidate
+keeps that typed command eligible for Enter expansion.
+
+The shell uses one CLI lookup per eligible Enter while this option is enabled.
+It reads the current configuration independently of the daemon, so it also
+works with the daemon stopped. A failed lookup accepts the original input.
+Lookup only returns literal text; shell expressions in the resulting line are
+evaluated by Zsh when the line is executed.
