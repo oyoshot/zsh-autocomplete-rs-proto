@@ -8,7 +8,7 @@ cat > "$HOME/.zshrc" <<'ZSH'
 unsetopt MONITOR
 stty rows 24 cols 100
 autoload -Uz compinit
-compinit -d "$HOME/.zcompdump"
+compinit -i -d "$HOME/.zcompdump"
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
     zmodload() {
         [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
