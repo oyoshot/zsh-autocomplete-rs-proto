@@ -81,6 +81,8 @@ fn run_abbreviation_test(script: &str, daemon: bool) {
         config_dir.join("config.toml"),
         r#"[abbreviations]
 gs = "git status"
+"$HOME" = "should-not-expand"
+"[[" = "should-not-expand"
 if = "should-not-expand"
 for = "should-not-expand"
 function = "should-not-expand"

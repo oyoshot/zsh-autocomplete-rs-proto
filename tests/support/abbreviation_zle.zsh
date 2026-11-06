@@ -139,6 +139,12 @@ wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'
 [[ "$(<"$HOME/history")" == *'git status -sb' ]] || fail 'expanded history'
 
+for input in 'gs "$HOME"' 'gs "$HOME" ' 'gs $HOME' 'gs "${HOME}"'; do
+    : > "$HOME/executed"
+    enter_line "$input"
+    wait_file "$HOME/executed" "git:status $HOME"
+done
+
 enter_line "alias gs='echo aliased'"
 enter_line 'unsetopt completealiases'
 for input in gs 'gs ' 'gs -sb'; do
@@ -150,6 +156,9 @@ for input in gs 'gs ' 'gs -sb'; do
         wait_file "$HOME/executed" 'git:status'
     fi
 done
+: > "$HOME/executed"
+enter_line 'gs "$HOME"'
+wait_file "$HOME/executed" "git:status $HOME"
 enter_line 'unalias gs'
 
 zpty -w -n zacrs_enter $'gcm\r\x19'

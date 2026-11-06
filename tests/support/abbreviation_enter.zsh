@@ -79,7 +79,7 @@ previous_completealiases=$options[completealiases]
 alias gs='echo aliased'
 for alias_option in off on; do
     if [[ "$alias_option" == on ]]; then setopt completealiases; else unsetopt completealiases; fi
-    for input in gs 'gs ' 'gs -sb'; do
+    for input in gs 'gs ' 'gs -sb' 'gs "$HOME"' 'gs "$HOME" ' 'gs $HOME' 'gs ${HOME}' 'gs "${HOME}"'; do
         set_buffer "$input"
         _zacrs_accept_line
         [[ "$accepted" == "git status${input#gs}" ]] || fail 'native context must preserve a same-named literal alias'
@@ -91,6 +91,17 @@ for alias_option in off on; do
 done
 unalias gs
 if [[ "$previous_completealiases" == on ]]; then setopt completealiases; else unsetopt completealiases; fi
+
+for input in 'gs "$HOME"' 'gs "$HOME" ' 'gs $HOME' 'gs ${HOME}' 'gs "${HOME}"' 'gs ${HOME:-fallback}' 'gs ${values[1]}'; do
+    set_buffer "$input"
+    _zacrs_accept_line
+    [[ "$accepted" == "git status${input#gs}" ]] || fail 'argument completion context must not change the command target'
+done
+for input in '$HOME' 'gs() print "$HOME"' 'gs | echo "$HOME"' 'gs; echo "$HOME"' '[[ gs $HOME ]]' '(( gs + value ))'; do
+    set_buffer "$input"
+    _zacrs_accept_line
+    [[ "$accepted" == "$input" ]] || fail 'parameter context must not expose declarations, lists, expressions, or a parameter command as targets'
+done
 
 for input in g gss ./gs ../gs /tmp/gs '~/gs' '"gs"' "'gs'" '\gs' 'gs | cat' 'gs; gs' 'gs &! echo done' 'gs &| echo done' 'echo $(gs)' 'echo gs' 'A=1 gs' 'command gs' if 'if gs' for function arg scoped ''; do
     set_buffer "$input"

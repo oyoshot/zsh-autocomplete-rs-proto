@@ -17,7 +17,9 @@ widget in context-only mode for target context at the current cursor position.
 The mode returns before candidate state initialization, `compinit`, or candidate
 providers. During this query only, locally enabled `COMPLETE_ALIASES` keeps
 literal alias names intact. Caller options are restored immediately afterward. It compares the parser's command words with the complete lexical input
-and rejects quoted command words and native reserved words. Zsh's synthetic empty
+and rejects quoted command words and native reserved words. The cursor may be
+completing a parameter in an argument; that does not invalidate the first command
+word when the native word array still covers the complete lexical input. Zsh's synthetic empty
 current word at a whitespace insertion point is excluded from this comparison.
 No extra completion widget or deliberate cursor repositioning is needed. The
 adapter restores `BUFFER` and `CURSOR` only if the native query changed them.

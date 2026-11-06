@@ -150,7 +150,10 @@ _zacrs_abbreviation_words() {
 _zacrs_abbreviation_context_func() {
     compstate[insert]=''
     compstate[list]=''
-    [[ "${compstate[context]}" == command ]] || return 0
+    # The cursor may complete a parameter in an argument while words still
+    # describes the whole command. Only the command position needs command
+    # completion context; argument positions are checked by full word coverage.
+    [[ "${compstate[context]}" == command ]] || (( CURRENT > 1 )) || return 0
     local -a native_words=( "${words[@]}" )
     # Zsh adds an empty current word at an insertion point between words.
     # Remove that native cursor marker, not a quoted empty argument.
