@@ -260,6 +260,17 @@ set_buffer gs
 _zacrs_accept_line
 [[ "$accepted" == 'git status' ]] || fail 'expansion must recover after plugin reload'
 
+# An invalid UTF-8 filename must produce a transport error, not a normal
+# no-expansion response that silently discards an explicit command choice.
+set_buffer gs
+_zacrs_apply 2 2 $'gs \xff' 0 0 '' 1
+(( _zacrs_enter_enabled == -1 )) || fail 'undecodable selection must disable expansion'
+BUFFER=gs
+LBUFFER="$BUFFER"
+_zacrs_accept_line
+[[ "$accepted" == gs ]] || fail 'removing the invalid filename must preserve the native command'
+source "$ZACRS_PLUGIN"
+
 config_text=$(<"$XDG_CONFIG_HOME/zacrs/config.toml")
 print -r -- "${config_text/expand_abbreviation_on_enter = true/expand_abbreviation_on_enter = false}" > "$XDG_CONFIG_HOME/zacrs/config.toml"
 set_buffer gs

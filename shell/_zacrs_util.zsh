@@ -126,6 +126,7 @@ _zacrs_abbreviation_request() {
             print -r -u $fd -- "$item"
         done
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* ]] || { _zacrs_enter_enabled=-1; return 1; }
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_enter_enabled=-1; return 1; }
         [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=-1; return 1; }
     } always {

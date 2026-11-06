@@ -1093,9 +1093,18 @@ impl DaemonServer {
                 operation,
                 fields,
             } => {
-                let result = protocol::read_abbreviation_fields(reader, fields)
-                    .ok()
-                    .and_then(|fields| self.abbreviation_event(&key, &operation, &fields));
+                let fields = match protocol::read_abbreviation_fields(reader, fields) {
+                    Ok(fields) => fields,
+                    Err(_) => {
+                        // This observation was lost: neither this connection nor
+                        // a later acceptance may use the previous selection state.
+                        self.abbreviation_sessions.remove(&key);
+                        let _ = writeln!(writer, "ERROR abbreviation-frame");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+                let result = self.abbreviation_event(&key, &operation, &fields);
                 if let Some(result) = result {
                     let _ = result.write_to(&mut writer);
                 } else {
@@ -2102,6 +2111,27 @@ mod tests {
             active_popup_order: Vec::new(),
             abbreviation_sessions: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn undecodable_abbreviation_frame_invalidates_the_session() {
+        let mut server = test_server();
+        server.config_mtime = super::config_file_mtime();
+        server.config.expand_abbreviation_on_enter = true;
+        server.abbreviation_event("shell", "reset", &[]);
+        let mut input = b"abbreviation shell select 3\n1\n0\n1\n1\n4\ngs ".to_vec();
+        input.extend_from_slice(&[0xff, b'\n']);
+        assert_eq!(
+            run_text_request(&mut server, input),
+            b"ERROR abbreviation-frame\n"
+        );
+        assert!(!server.abbreviation_sessions.contains_key("shell"));
+        let accept = ["gs", "", "gs", "gs"].map(str::to_owned);
+        assert!(
+            server
+                .abbreviation_event("shell", "accept", &accept)
+                .is_none()
+        );
     }
 
     #[test]
