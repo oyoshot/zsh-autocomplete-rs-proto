@@ -465,9 +465,12 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_update_enter_selection
-    if (( _zacrs_enter_enabled > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
-        _zacrs_record_enter_selection ${#base} "$selection_applied"
+    if (( _zacrs_enter_enabled > 0 )); then
+        if [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+            _zacrs_record_enter_selection ${#base} "$selection_applied"
+        else
+            _zacrs_update_enter_selection
+        fi
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
         CURSOR=$((${#base} + cursor_offset))
@@ -928,7 +931,6 @@ _zacrs_accept_line() {
         zle -R
         return
     fi
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_reset_enter_selection
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line

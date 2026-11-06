@@ -135,7 +135,6 @@ _zacrs_abbreviation_request() {
 
 # Zsh supplies lexical facts; Rust owns eligibility, selection policy and edits.
 _zacrs_expand_command_abbreviation() {
-    _zacrs_update_enter_selection
     local -a _tokens
     _tokens=( ${(z)BUFFER} ) 2>/dev/null || return 1
     local _context="${(j: :)${(@Q)_tokens}}"

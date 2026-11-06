@@ -41,6 +41,27 @@ ZACRS_BIN="$actual_binary"
 
 print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
 source "$ZACRS_PLUGIN"
+# Count actual adapter requests. Redraw and line-init are driven separately in
+# the real ZLE test; acceptance itself must not observe or reset a second time.
+typeset -a test_requests=()
+functions[_test_original_abbreviation_request]=$functions[_zacrs_abbreviation_request]
+_zacrs_abbreviation_request() {
+    test_requests+=("$1")
+    _test_original_abbreviation_request "$@"
+}
+set_buffer gs
+test_requests=()
+_zacrs_accept_line
+[[ "${(j:,:)test_requests}" == accept && "$accepted" == 'git status' ]] || fail 'Enter must send only acceptance'
+set_buffer gs
+test_requests=()
+_zacrs_apply 2 2 'gs ' 0 0 '' 1
+[[ "${(j:,:)test_requests}" == select ]] || fail 'candidate application must send only selection'
+LBUFFER="$BUFFER"
+_zacrs_accept_line
+[[ "${(j:,:)test_requests}" == select,accept && "$accepted" == 'gs ' ]] || fail 'selected Enter must not send a duplicate observation or reset'
+functions[_zacrs_abbreviation_request]=$functions[_test_original_abbreviation_request]
+unfunction _test_original_abbreviation_request
 set_buffer $'  gs\t-sb "日本語 a"  '
 CURSOR=1
 _zacrs_accept_line

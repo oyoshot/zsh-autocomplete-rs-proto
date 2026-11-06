@@ -450,6 +450,9 @@ impl DaemonServer {
                 None
             }
             ("select", [start, applied, buffer]) => {
+                let state =
+                    crate::abbreviation::observe_selection(&state, &format!("buffer:{buffer}"))
+                        .unwrap_or_default();
                 let state = crate::abbreviation::observe_selection(
                     &state,
                     &format!("select:{applied}:{start}:{buffer}"),
@@ -459,6 +462,11 @@ impl DaemonServer {
                 None
             }
             ("accept", fields) if fields.len() >= 3 => {
+                let state = crate::abbreviation::observe_selection(
+                    &state,
+                    &format!("buffer:{}", fields[0]),
+                )
+                .unwrap_or_default();
                 let result = crate::abbreviation::expand_enter_line(
                     &self.config,
                     &fields[0],
@@ -2141,6 +2149,23 @@ mod tests {
             server
                 .abbreviation_event("one", "accept", &accept)
                 .is_some()
+        );
+        // Selection requests include the resulting buffer observation, so a
+        // command edit cannot keep the old choice when only an argument is picked.
+        server.abbreviation_event("one", "reset", &[]);
+        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
+        server.abbreviation_event("one", "select", &fields(&["10", "1", "gs'quote' new"]));
+        assert!(
+            server
+                .abbreviation_event("one", "accept", &accept)
+                .is_some()
+        );
+        assert!(!server.abbreviation_sessions.contains_key("one"));
+        // A fresh line must reset explicitly; acceptance already consumed the session.
+        assert!(
+            server
+                .abbreviation_event("one", "accept", &accept)
+                .is_none()
         );
         for n in 0..140 {
             server.abbreviation_event(&format!("session{n}"), "reset", &[]);
