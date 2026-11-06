@@ -15,7 +15,8 @@ after later edits. A fresh line starts a fresh session.
 Zsh uses its native lexer for word identity and reuses its existing completion
 widget in context-only mode for target context at the current cursor position.
 The mode returns before candidate state initialization, `compinit`, or candidate
-providers. It compares the parser's command words with the complete lexical input
+providers. During this query only, locally enabled `COMPLETE_ALIASES` keeps
+literal alias names intact. Caller options are restored immediately afterward. It compares the parser's command words with the complete lexical input
 and rejects quoted command words and native reserved words. Zsh's synthetic empty
 current word at a whitespace insertion point is excluded from this comparison.
 No extra completion widget or deliberate cursor repositioning is needed. The

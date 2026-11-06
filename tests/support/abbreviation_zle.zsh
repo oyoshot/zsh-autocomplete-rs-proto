@@ -139,6 +139,19 @@ wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'
 [[ "$(<"$HOME/history")" == *'git status -sb' ]] || fail 'expanded history'
 
+enter_line "alias gs='echo aliased'"
+enter_line 'unsetopt completealiases'
+for input in gs 'gs ' 'gs -sb'; do
+    : > "$HOME/executed"
+    enter_line "$input"
+    if [[ "$input" == 'gs -sb' ]]; then
+        wait_file "$HOME/executed" 'git:status -sb'
+    else
+        wait_file "$HOME/executed" 'git:status'
+    fi
+done
+enter_line 'unalias gs'
+
 zpty -w -n zacrs_enter $'gcm\r\x19'
 wait_file "$HOME/editor" "git commit -m ''"
 wait_file "$HOME/cursor" 15

@@ -175,7 +175,11 @@ _zacrs_expand_command_abbreviation() {
     local original_buffer="$BUFFER" original_cursor=$CURSOR
     if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
         {
-            zle _zacrs_compsys 2>/dev/null || true
+            # Complete the literal alias name; restore caller options immediately.
+            () {
+                setopt localoptions completealiases
+                zle _zacrs_compsys 2>/dev/null || true
+            }
         } always {
             [[ "$BUFFER" == "$original_buffer" ]] || BUFFER="$original_buffer"
             (( CURSOR == original_cursor )) || CURSOR=$original_cursor
