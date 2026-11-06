@@ -82,7 +82,22 @@ functions, or traps. The shell adapter remains responsible for presenting and
 applying completion results.
 
 Both the daemon and subprocess paths read the same configuration. A running
-daemon reloads the file when its modification time changes.
+daemon checks the file's modification time and size on existing requests and
+applies changes to subsequent completion sessions. An interactive popup retains
+the settings it started with. There is no file watcher, additional shell hook,
+or per-keystroke configuration request.
+
+If the file contains invalid TOML, cannot be read, or temporarily disappears while
+being saved, the daemon keeps the last successfully loaded settings. Invalid TOML
+is logged once per file version and retried when the file changes; I/O failures
+are retried on subsequent requests. Without a successfully loaded file, defaults
+are used. To restore defaults, save an empty file. Removing the file keeps the
+running daemon's current settings until it restarts or a valid file reappears.
+
+Abbreviations are added to native candidates using the current configuration on
+each request, including requests that reuse cached native candidates. Reloading
+does not change their matching or ranking rules. The Zsh initialization setting
+for optional Enter expansion below still requires a plugin reload.
 
 ### Optional expansion on Enter (Zsh)
 

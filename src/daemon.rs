@@ -4,11 +4,10 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use crate::app::App;
 use crate::candidate::Candidate;
-use crate::config::{Config, KeyBindings, Theme, config_path};
+use crate::config::{Config, ConfigReloader, KeyBindings, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
@@ -169,7 +168,7 @@ struct DaemonServer {
     config: Config,
     theme: Theme,
     key_bindings: KeyBindings,
-    config_mtime: Option<SystemTime>,
+    config_reloader: Option<ConfigReloader>,
     socket_path: PathBuf,
     fuzzy: Option<FuzzyMatcher>,
     /// Candidate-set cache keyed by `context_key` supplied by the shell.
@@ -186,15 +185,14 @@ struct DaemonServer {
 
 impl DaemonServer {
     fn new(socket_path: PathBuf) -> Self {
-        let config = Config::load();
-        let config_mtime = config_file_mtime();
+        let config = Config::default();
         let theme = config.theme();
         let key_bindings = config.key_bindings();
-        Self {
+        let mut server = Self {
             config,
             theme,
             key_bindings,
-            config_mtime,
+            config_reloader: config_path().map(ConfigReloader::new),
             socket_path,
             fuzzy: Some(FuzzyMatcher::new()),
             candidate_cache: HashMap::new(),
@@ -202,7 +200,9 @@ impl DaemonServer {
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
             abbreviation_sessions: HashMap::new(),
-        }
+        };
+        server.maybe_reload_config();
+        server
     }
 }
 
@@ -234,7 +234,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         config,
         theme,
         key_bindings,
-        config_mtime: None,
+        config_reloader: None,
         socket_path: PathBuf::new(),
         fuzzy: Some(FuzzyMatcher::new()),
         candidate_cache: HashMap::new(),
@@ -405,15 +405,18 @@ impl DaemonServer {
     }
 
     fn maybe_reload_config(&mut self) {
-        let current_mtime = config_file_mtime();
-        let reloaded = current_mtime != self.config_mtime;
-        debug!(reloaded, "checked config reload");
-        if reloaded {
-            self.config = Config::load();
-            self.theme = self.config.theme();
-            self.key_bindings = self.config.key_bindings();
-            self.config_mtime = current_mtime;
-            info!(reloaded = true, "reloaded config");
+        let Some(reloader) = self.config_reloader.as_mut() else {
+            return;
+        };
+        match reloader.reload() {
+            Ok(Some(config)) => {
+                self.theme = config.theme();
+                self.key_bindings = config.key_bindings();
+                self.config = config;
+                info!("reloaded config");
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "failed to reload config; keeping previous settings"),
         }
     }
 
@@ -997,7 +1000,8 @@ impl DaemonServer {
                     config: self.config.clone(),
                     theme: self.theme.clone(),
                     key_bindings: self.key_bindings.clone(),
-                    config_mtime: self.config_mtime,
+                    // Interactive sessions retain the settings they started with.
+                    config_reloader: None,
                     socket_path: self.socket_path.clone(),
                     fuzzy: None,
                     candidate_cache: HashMap::new(),
@@ -1834,11 +1838,6 @@ fn init_tracing() {
         .try_init();
 }
 
-fn config_file_mtime() -> Option<SystemTime> {
-    let path = config_path()?;
-    fs::metadata(path).ok()?.modified().ok()
-}
-
 pub fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
     const MAX_TSV_BYTES: usize = 1_048_576;
     let mut tsv = String::new();
@@ -2093,7 +2092,7 @@ mod tests {
             config,
             theme,
             key_bindings,
-            config_mtime: None,
+            config_reloader: None,
             socket_path: PathBuf::from("/tmp/zacrs-test.sock"),
             fuzzy: Some(FuzzyMatcher::new()),
             candidate_cache: HashMap::new(),
@@ -2105,10 +2104,140 @@ mod tests {
     }
 
     #[test]
+    fn config_reload_keeps_previous_settings_on_errors_and_missing_files() {
+        use crate::config::ConfigReloader;
+        use crate::input::Action;
+        use crossterm::style::Color;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut server = test_server();
+        server.config_reloader = Some(ConfigReloader::new(path.clone()));
+        fs::write(
+            &path,
+            "[completion]\nauto_insert_unambiguous = false\n\
+             [theme]\nborder = 'blue'\n[keybindings]\ntab = 'page-down'\n\
+             [abbreviations]\ngs = 'git status'",
+        )
+        .unwrap();
+        server.maybe_reload_config();
+
+        let assert_previous = |server: &DaemonServer| {
+            assert!(!server.config.auto_insert_unambiguous);
+            assert_eq!(server.theme.border, Some(Color::Blue));
+            assert_eq!(server.key_bindings.tab, Action::PageDown);
+            assert_eq!(server.config.abbreviations[0].expansion, "git status");
+        };
+        assert_previous(&server);
+
+        fs::write(&path, "[theme]\nborder = 'red'\n[abbreviations]\ngs = '").unwrap();
+        server.maybe_reload_config();
+        assert_previous(&server);
+        fs::remove_file(&path).unwrap();
+        server.maybe_reload_config();
+        assert_previous(&server);
+        fs::create_dir(&path).unwrap();
+        server.maybe_reload_config();
+        assert_previous(&server);
+        fs::remove_dir(&path).unwrap();
+
+        // An explicitly empty, valid file restores defaults.
+        fs::write(&path, "").unwrap();
+        server.maybe_reload_config();
+        assert!(server.config.auto_insert_unambiguous);
+        assert_eq!(server.theme.border, None);
+        assert_eq!(server.key_bindings.tab, Action::MoveDown);
+        assert!(server.config.abbreviations.is_empty());
+    }
+
+    #[test]
+    fn config_reload_updates_partial_matches_without_regathering_native_candidates() {
+        use crate::config::ConfigReloader;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut server = test_server();
+        server.config_reloader = Some(ConfigReloader::new(path.clone()));
+        server.store_cached_tsv("ctx", "st".into(), "status\tcommand\tcommand\n".into());
+
+        for expansion in ["git status", "git status --short"] {
+            fs::write(&path, format!("[abbreviations]\ngstatus = '{expansion}'")).unwrap();
+            server.maybe_reload_config();
+            // The infix query also matches an abbreviation that was never in
+            // the shell's cached TSV. Native candidates keep their ranking.
+            let output = run_text_request(
+                &mut server,
+                text_request_input(
+                    "render 5 2 80 24 selected=0 context_key=ctx command_position=1",
+                    "st",
+                    None,
+                ),
+            );
+            let (header, tty) = read_text_ok(&output);
+            assert!(header.contains("filtered_count=2"), "{header}");
+            assert!(header.contains("selected_original_idx=0"), "{header}");
+            assert!(tty.contains(expansion), "{tty:?}");
+        }
+
+        fs::write(&path, "").unwrap();
+        server.maybe_reload_config();
+        let output = run_text_request(
+            &mut server,
+            text_request_input(
+                "render 5 2 80 24 context_key=ctx command_position=1",
+                "st",
+                None,
+            ),
+        );
+        let (header, tty) = read_text_ok(&output);
+        assert!(header.contains("filtered_count=1"), "{header}");
+        assert!(!tty.contains("git status"), "{tty:?}");
+    }
+
+    #[test]
+    fn complete_session_keeps_its_settings_while_config_is_reloaded() {
+        use crate::config::ConfigReloader;
+        use std::fs;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut server = test_server();
+        server.config_reloader = Some(ConfigReloader::new(path.clone()));
+        fs::write(&path, "[suffix]\ncommand = '!'").unwrap();
+        server.maybe_reload_config();
+        let (mut client, connection) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .write_all(&text_request_input(
+                "complete 5 2 80 24",
+                "st",
+                Some("status\tcommand\tcommand\nstash\tcommand\tcommand\n"),
+            ))
+            .unwrap();
+        assert!(!server.handle_connection(connection));
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        let _ = read_frame(&mut reader);
+
+        fs::write(&path, "[suffix]\ncommand = '???'").unwrap();
+        server.maybe_reload_config();
+        assert_eq!(
+            server.config.suffixes.suffix_for_kind("command"),
+            Some("???")
+        );
+        client.write_all(b"KEY 1\n\r").unwrap();
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 0 stash!"), "{done}");
+    }
+
+    #[test]
     fn undecodable_abbreviation_frame_invalidates_the_session() {
         use crate::protocol::AbbreviationObservation as Event;
         let mut server = test_server();
-        server.config_mtime = super::config_file_mtime();
         server.config.expand_abbreviation_on_enter = true;
         server.abbreviation_event("shell", Event::Reset);
         let mut input = b"abbreviation shell select 3\n1\n0\n1\n1\n4\ngs ".to_vec();
@@ -2124,7 +2253,6 @@ mod tests {
     fn abbreviation_sessions_use_adapter_facts_and_isolate_choices() {
         use crate::protocol::AbbreviationObservation as Event;
         let mut server = test_server();
-        server.config_mtime = super::config_file_mtime();
         server.config.expand_abbreviation_on_enter = true;
         server
             .config

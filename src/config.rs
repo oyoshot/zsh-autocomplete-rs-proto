@@ -4,7 +4,9 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::input::Action;
 
@@ -27,6 +29,50 @@ pub(crate) fn config_path() -> Option<PathBuf> {
         env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
         dirs::home_dir(),
     )
+}
+
+/// Tracks file changes separately from the settings used by a completion session.
+pub(crate) struct ConfigReloader {
+    path: PathBuf,
+    last_attempt: Option<(SystemTime, u64)>,
+}
+
+impl ConfigReloader {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            last_attempt: None,
+        }
+    }
+
+    pub(crate) fn reload(&mut self) -> io::Result<Option<Config>> {
+        let metadata = match fs::metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // Editors may temporarily remove the file while saving. Keep the
+                // active settings, but retry if the file reappears unchanged.
+                self.last_attempt = None;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let version = (metadata.modified()?, metadata.len());
+        if self.last_attempt == Some(version) {
+            return Ok(None);
+        }
+
+        let result = Config::load_from(&self.path);
+        // Do not repeatedly parse/log the same invalid file. I/O failures remain
+        // retryable even if the file's modification time has not changed.
+        if result.is_ok()
+            || result
+                .as_ref()
+                .is_err_and(|error| error.kind() == io::ErrorKind::InvalidData)
+        {
+            self.last_attempt = Some(version);
+        }
+        result.map(Some)
+    }
 }
 
 #[derive(Clone)]
@@ -446,12 +492,20 @@ impl Config {
         let Some(path) = config_path() else {
             return Config::default();
         };
-        let Ok(content) = fs::read_to_string(&path) else {
-            return Config::default();
-        };
-        let file: ConfigFile = toml::from_str(&content).unwrap_or_default();
+        Self::load_from(&path).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::warn!(path = %path.display(), %error, "failed to load config; using defaults");
+            }
+            Self::default()
+        })
+    }
+
+    fn load_from(path: &Path) -> io::Result<Self> {
+        let content = fs::read_to_string(path)?;
+        let file: ConfigFile = toml::from_str(&content)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let abbreviations = Self::abbreviations_from_file(&file);
-        Config {
+        Ok(Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
@@ -459,7 +513,7 @@ impl Config {
             keybindings: file.keybindings,
             abbreviations,
             theme_raw: file.theme,
-        }
+        })
     }
 
     pub fn key_bindings(&self) -> KeyBindings {
@@ -547,6 +601,98 @@ mod tests {
     #[test]
     fn config_path_is_none_without_xdg_config_home_or_home() {
         assert_eq!(config_path_from(None, None), None);
+    }
+
+    fn write_config(path: &Path, content: &str, modified: u64) {
+        fs::write(path, content).unwrap();
+        fs::File::open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified),
+                ),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn reload_reads_only_changed_versions_and_recovers_from_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        write_config(&path, "[abbreviations]\ngs = 'git status'", 1);
+        let config = reloader.reload().unwrap().unwrap();
+        assert_eq!(config.abbreviations[0].expansion, "git status");
+        assert!(reloader.reload().unwrap().is_none());
+
+        write_config(&path, "[abbreviations]\ngs = 'unfinished", 2);
+        assert_eq!(
+            reloader.reload().err().unwrap().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(reloader.reload().unwrap().is_none());
+
+        write_config(&path, "[abbreviations]\ngs = 'git status --short'", 3);
+        let config = reloader.reload().unwrap().unwrap();
+        assert_eq!(config.abbreviations[0].expansion, "git status --short");
+    }
+
+    #[test]
+    fn reload_detects_length_changes_with_the_same_modification_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        write_config(&path, "[abbreviations]\ngs = 'git status'", 1);
+        assert!(reloader.reload().unwrap().is_some());
+        write_config(&path, "[abbreviations]\ngs = 'git status --short'", 1);
+        let config = reloader.reload().unwrap().unwrap();
+        assert_eq!(config.abbreviations[0].expansion, "git status --short");
+    }
+
+    #[test]
+    fn reload_retries_a_recreated_file_even_with_the_same_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        assert!(reloader.reload().unwrap().is_none());
+        write_config(&path, "[abbreviations]\ngs = 'git status'", 1);
+        assert!(reloader.reload().unwrap().is_some());
+        fs::remove_file(&path).unwrap();
+        assert!(reloader.reload().unwrap().is_none());
+        write_config(&path, "[abbreviations]\ngs = 'git branch'", 1);
+        assert_eq!(
+            reloader.reload().unwrap().unwrap().abbreviations[0].expansion,
+            "git branch"
+        );
+    }
+
+    #[test]
+    fn reload_recovers_after_atomic_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let replacement = dir.path().join("replacement.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        write_config(&path, "[abbreviations]\ngs = 'unfinished", 1);
+        assert!(reloader.reload().is_err());
+        write_config(&replacement, "[abbreviations]\ngs = 'git status'", 2);
+        fs::rename(replacement, &path).unwrap();
+        assert_eq!(
+            reloader.reload().unwrap().unwrap().abbreviations[0].expansion,
+            "git status"
+        );
+    }
+
+    #[test]
+    fn reload_retries_io_errors_instead_of_caching_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        fs::create_dir(&path).unwrap();
+        assert!(reloader.reload().is_err());
+        assert!(reloader.reload().is_err());
+        fs::remove_dir(&path).unwrap();
+        write_config(&path, "", 1);
+        assert!(reloader.reload().unwrap().unwrap().abbreviations.is_empty());
     }
 
     // --- parse_action ---
