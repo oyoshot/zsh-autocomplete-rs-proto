@@ -107,9 +107,11 @@ keeps its ordinary behavior.
 
 The Zsh adapter obtains a command-word range from the native completion parser.
 It offers that range only when the parser's command words cover the complete
-lexical input and the word is unquoted and not a native reserved word. Partial
-triggers, quoted/escaped words, assignment prefixes, command lists, function
-declarations, and continuation input are left as typed. A path such as `./gs`
+lexical input and native literal quoting leaves the word unchanged. Native
+reserved words are excluded. Partial triggers, quoted/escaped words, command
+words containing substitutions or patterns, assignment prefixes, command lists,
+function declarations, and continuation input are left as typed. Variables in
+arguments do not prevent expansion. A path such as `./gs`
 does not match the trigger `gs`. Redirections are currently left unchanged
 because this query cannot verify their full context.
 Command-position and `when.command` conditions still apply;

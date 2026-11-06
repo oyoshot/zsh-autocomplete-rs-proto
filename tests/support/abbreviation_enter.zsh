@@ -97,6 +97,18 @@ for input in 'gs "$HOME"' 'gs "$HOME" ' 'gs $HOME' 'gs ${HOME}' 'gs "${HOME}"' '
     _zacrs_accept_line
     [[ "$accepted" == "git status${input#gs}" ]] || fail 'argument completion context must not change the command target'
 done
+# Every head has a configured exact trigger, so unchanged input proves that
+# native context acquisition rejected substitutions rather than lookup missing.
+for head in '$HOME' '${HOME}' '$(touch should-not-exist)' '`touch should-not-exist`' '$((1 + 1))' '~' '=git' 'gs*'; do
+    for suffix in '' ' ' ' x' ' "$HOME"'; do
+        input="$head$suffix"
+        set_buffer "$input"
+        _zacrs_accept_line
+        [[ "$accepted" == "$input" ]] || fail 'substituted command heads must not become literal abbreviation targets'
+        [[ ! -e should-not-exist ]] || fail 'command context query evaluated a substitution'
+    done
+done
+
 for input in '$HOME' 'gs() print "$HOME"' 'gs | echo "$HOME"' 'gs; echo "$HOME"' '[[ gs $HOME ]]' '(( gs + value ))'; do
     set_buffer "$input"
     _zacrs_accept_line

@@ -82,6 +82,13 @@ fn run_abbreviation_test(script: &str, daemon: bool) {
         r#"[abbreviations]
 gs = "git status"
 "$HOME" = "should-not-expand"
+'${HOME}' = "should-not-expand"
+'$(touch should-not-exist)' = "should-not-expand"
+'`touch should-not-exist`' = "should-not-expand"
+'$((1 + 1))' = "should-not-expand"
+'~' = "should-not-expand"
+'=git' = "should-not-expand"
+'gs*' = "should-not-expand"
 "[[" = "should-not-expand"
 if = "should-not-expand"
 for = "should-not-expand"

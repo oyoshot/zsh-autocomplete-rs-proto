@@ -162,7 +162,9 @@ _zacrs_abbreviation_context_func() {
     fi
     (( ${#native_words} == ${#_zacrs_abbr_words} )) || return 0
     local head="$reply[2]"
-    [[ -n "$head" && "${(Q)head}" == "$head" ]] || return 0
+    # Unquoting alone leaves substitutions intact. Require Zsh's literal
+    # quoting to leave the head unchanged, independently of cursor context.
+    [[ -n "$head" && "${(q)head}" == "$head" ]] || return 0
     (( ${reswords[(Ie)$head]} == 0 )) || return 0
     local -i i
     for ((i=1; i<=${#native_words}; i++)); do
