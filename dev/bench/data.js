@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793949298034,
+  "lastUpdate": 1793969750173,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -17314,6 +17314,282 @@ window.BENCHMARK_DATA = {
           {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 688,
+            "range": "± 2",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d9dfe1a5c7ceee70884eb7d3cc92d41d252d255",
+          "message": "refactor(abbr): separate native shell context from portable Enter edits (#149)\n\n* refactor(abbr): move Enter expansion policy into Rust\n\nRead the opt-in setting from config.toml and make Rust decide syntax eligibility, replacement ranges, and selection exemptions from ZLE observations.\n\n* refactor(shell): skip disabled Enter work and bound selection state\n\nRead the TOML opt-in once at plugin initialization. Keep disabled Enter and popup paths free of abbreviation helper calls and selection tracking. Replace the edit journal with an opaque state updated by Rust, with failure preserving the original input.\n\n* refactor(abbr): keep editing sessions in the daemon\n\nReceive the TOML opt-in in the existing daemon handshake and exchange bounded framed observations over the Unix socket. Remove standalone settings and state helpers and shell-owned selection state. Preserve literal input on communication failure or lost sessions; Enter expansion now requires the daemon.\n\n* fix(abbr): preserve selection protection across retries and separators\n\nLatch communication failures until plugin reload and apply handshake settings only during initialization. Treat Zsh list operators as command boundaries when observing edits, while continuing to reject compound lines for expansion. Cover daemon retry with an unrecorded fallback choice and separator append/remove sequences.\n\n* perf(abbr): remove duplicate editing session requests\n\nObserve the resulting buffer within daemon acceptance and selection requests. Remove the redundant shell observations and the reset immediately after acceptance; retain line-init reset for fresh editing sessions. Verify request counts through the actual shell adapter.\n\n* fix(abbr): reject undecodable editing observations\n\nInvalidate the daemon editing session and return an explicit error when a framed observation cannot be decoded. Latch expansion off in the shell rather than silently acknowledging a lost selection. Cover invalid UTF-8 arguments and subsequent argument removal.\n\n* refactor(abbr): accept native verified command ranges\n\nRemove handwritten shell syntax classification from the shared engine. Have the Zsh adapter use its native lexer, completion context and reserved-word data to verify a whole command-word range, declining unsupported contexts. Exchange typed shell-neutral observations with protocol capability negotiation. Exercise the adapter inside real ZLE and document the cross-shell boundary.\n\n* refactor(shell): minimize Enter expansion integration\n\nReuse the existing completion widget in a context-only mode at the current cursor. Remove the dedicated widget, deliberate cursor movement, per-redraw observations, and duplicate send-break reset. Compare explicit choices only on selection and acceptance, preserving the same selected word within the input line. Negotiate context protocol v2 and cover candidate-state preservation and real interruption paths.\n\n* fix(shell): preserve literal aliases in Enter context queries\n\nEnable COMPLETE_ALIASES in a local scope around the native completion query and restore caller options immediately. Cover bare triggers, trailing whitespace, arguments, declined contexts, both caller option states, and actual command execution with a same-named alias.\n\n* fix(shell): keep command targets in parameter argument contexts\n\nUse native argument position and complete word coverage independently of the cursor completion category. Continue requiring command context at the first word. Cover variable arguments with and without trailing whitespace, aliases, and unsafe expression or declaration contexts in real ZLE.\n\n* fix(shell): reject substituted Enter command heads\n\n* fix(shell): query Enter context at the command word",
+          "timestamp": "2026-11-06T21:46:37+09:00",
+          "tree_id": "f4992f4ac2107d4c624515bf16180319c75baa3c",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/3d9dfe1a5c7ceee70884eb7d3cc92d41d252d255"
+        },
+        "date": 1793969749418,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7889,
+            "range": "± 77",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 96528,
+            "range": "± 780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1186362,
+            "range": "± 14129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 325776,
+            "range": "± 491",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 147181,
+            "range": "± 342",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 96901,
+            "range": "± 520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 31522,
+            "range": "± 207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 28924,
+            "range": "± 180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 25906,
+            "range": "± 238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 225933,
+            "range": "± 2182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 227198,
+            "range": "± 1038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 230339,
+            "range": "± 3303",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 215900,
+            "range": "± 2895",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 20853,
+            "range": "± 184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 227152,
+            "range": "± 1570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 2416689,
+            "range": "± 13354",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 213499,
+            "range": "± 2764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 159539,
+            "range": "± 1163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 908342,
+            "range": "± 2699",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 317410,
+            "range": "± 2505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 334304,
+            "range": "± 1057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 102700,
+            "range": "± 137136",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 174987,
+            "range": "± 2319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 761517,
+            "range": "± 6276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 550861,
+            "range": "± 17324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 572,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 91,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 83,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 31,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 76,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 20,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 37,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 47,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 42,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 403160,
+            "range": "± 1994",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 273418,
+            "range": "± 3992",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 124,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 865,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7746,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 763,
             "range": "± 2",
             "unit": "ns/iter"
           }
