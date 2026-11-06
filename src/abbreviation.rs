@@ -1,5 +1,87 @@
 use crate::{candidate::Candidate, config::Config, protocol::TextCompleteResult};
 
+/// A command word and replacement range verified by a shell adapter.
+/// Offsets count Unicode characters, matching the existing cursor edit protocol.
+#[derive(Debug, Clone)]
+pub struct CommandTarget {
+    pub trigger: String,
+    pub start: usize,
+    pub end: usize,
+    pub command_context: String,
+}
+
+/// Shell-independent selection protection. Word identity is supplied by the
+/// adapter's native lexer; this module never interprets shell syntax.
+#[derive(Debug, Default, Clone)]
+pub struct EditingSession {
+    selected: Option<String>,
+    uncertain: bool,
+}
+
+impl EditingSession {
+    pub fn observe(&mut self, head: Option<&str>) {
+        match head {
+            None => {
+                self.selected = None;
+                self.uncertain = true;
+            }
+            Some(head) if self.selected.as_deref() != Some(head) => self.selected = None,
+            _ => {}
+        }
+    }
+
+    pub fn select(
+        &mut self,
+        edit_start: usize,
+        applied: bool,
+        head: Option<&str>,
+        head_start: usize,
+    ) {
+        self.observe(head);
+        if edit_start <= head_start {
+            self.selected = head
+                .filter(|head| applied && !head.is_empty())
+                .map(str::to_owned);
+        }
+    }
+}
+
+/// Apply a verified literal range. Shell grammar and syntax capabilities belong
+/// to the adapter; invalid or unavailable ranges always preserve the input.
+pub fn expand_enter_line(
+    config: &Config,
+    buffer: &str,
+    target: Option<&CommandTarget>,
+    session: &EditingSession,
+) -> Option<TextCompleteResult> {
+    if !config.expand_abbreviation_on_enter || session.uncertain {
+        return None;
+    }
+    let target = target?;
+    if target.trigger.is_empty()
+        || session.selected.as_deref() == Some(&target.trigger)
+        || target.start >= target.end
+    {
+        return None;
+    }
+    let byte_at = |offset: usize| {
+        buffer
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(buffer.len()))
+            .nth(offset)
+    };
+    let start = byte_at(target.start)?;
+    let end = byte_at(target.end)?;
+    if buffer.get(start..end)? != target.trigger {
+        return None;
+    }
+    let mut result = expand_command_abbreviation(config, &target.trigger, &target.command_context)?;
+    result.cursor_offset = result.cursor_offset.map(|offset| target.start + offset);
+    result.text = format!("{}{}{}", &buffer[..start], result.text, &buffer[end..]);
+    Some(result)
+}
+
 /// Resolve an exact command-position trigger without evaluating shell code.
 pub fn expand_command_abbreviation(
     config: &Config,
@@ -34,6 +116,66 @@ pub fn expand_command_abbreviation(
 mod tests {
     use super::*;
     use crate::config::{Abbreviation, AbbreviationPosition, AbbreviationWhen};
+
+    #[test]
+    fn verified_ranges_preserve_arguments_and_validate_offsets() {
+        let mut config = config("git {{cursor}}", AbbreviationWhen::default());
+        let buffer = "　gs -sb";
+        let mut target = CommandTarget {
+            trigger: "gs".into(),
+            start: 1,
+            end: 3,
+            command_context: "gs -sb".into(),
+        };
+        let session = EditingSession::default();
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
+        config.expand_abbreviation_on_enter = true;
+        let result = expand_enter_line(&config, buffer, Some(&target), &session).unwrap();
+        assert_eq!(result.text, "　git  -sb");
+        assert_eq!(result.cursor_offset, Some(5));
+        assert!(expand_enter_line(&config, buffer, None, &session).is_none());
+        target.end = 20;
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
+        target.end = 2;
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
+    }
+
+    #[test]
+    fn native_word_observations_preserve_choices_and_unknown_context_is_safe() {
+        let mut session = EditingSession::default();
+        session.select(0, true, Some("gs"), 0);
+        session.observe(Some("gs"));
+        assert_eq!(session.selected.as_deref(), Some("gs"));
+        session.select(3, true, Some("gs"), 0);
+        assert_eq!(session.selected.as_deref(), Some("gs"));
+        session.observe(Some("gsx"));
+        session.observe(Some("gs"));
+        assert!(session.selected.is_none());
+        session.observe(None);
+        session.select(0, true, Some("gs"), 0);
+        assert!(session.uncertain);
+    }
+
+    #[test]
+    fn shared_engine_does_not_classify_a_shells_reserved_words() {
+        let mut config = config("literal edit", AbbreviationWhen::default());
+        config.expand_abbreviation_on_enter = true;
+        config.abbreviations[0].trigger = "if".into();
+        let target = CommandTarget {
+            trigger: "if".into(),
+            start: 0,
+            end: 2,
+            command_context: "if".into(),
+        };
+        assert_eq!(
+            expand_enter_line(&config, "if", Some(&target), &EditingSession::default())
+                .unwrap()
+                .text,
+            "literal edit"
+        );
+        // Zsh refuses this target in its native adapter; another backend is
+        // responsible for establishing its own capabilities before offering it.
+    }
 
     fn config(expansion: &str, when: AbbreviationWhen) -> Config {
         let mut config = Config::default();

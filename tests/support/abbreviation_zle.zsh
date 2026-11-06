@@ -9,6 +9,7 @@ unsetopt MONITOR
 stty rows 24 cols 100
 autoload -Uz compinit
 compinit -i -d "$HOME/.zcompdump"
+_test_load_plugin() {
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
     zmodload() {
         [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
@@ -38,10 +39,11 @@ _zacrs_apply() {
     print -r -- "$BUFFER" > "$HOME/applied"
 }
 _zacrs_line_pre_redraw() {
-    # Keep selection tracking active without opening an unrelated auto popup.
-    _zacrs_update_enter_selection
+    # Avoid unrelated auto popups while observing real ZLE readiness.
     print -r -- "$BUFFER" > "$HOME/redrawn"
 }
+}
+_test_load_plugin
 git() { print -r -- "git:$*" > "$HOME/executed"; }
 gs() { print -r -- "gs:$*" > "$HOME/executed"; }
 typeset -gi _test_ssh_count=0
@@ -124,11 +126,40 @@ zpty -b zacrs_enter zsh -di
 wait_file "$HOME/ready" 1
 enter_line gs
 wait_file "$HOME/executed" 'gs:'
-enter_line ZACRS_ABBR_EXPAND_ON_ENTER=1
+enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"; _test_load_plugin'
+if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
+    enter_line gs
+    wait_file "$HOME/executed" 'gs:'
+    [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'offline shell started daemon'
+    print -r -- 'ok: no daemon accepts the original input'
+    exit 0
+fi
 enter_line 'gs -sb'
 wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'
 [[ "$(<"$HOME/history")" == *'git status -sb' ]] || fail 'expanded history'
+
+for input in 'gs "$HOME"' 'gs "$HOME" ' 'gs $HOME' 'gs "${HOME}"'; do
+    : > "$HOME/executed"
+    enter_line "$input"
+    wait_file "$HOME/executed" "git:status $HOME"
+done
+
+enter_line "alias gs='echo aliased'"
+enter_line 'unsetopt completealiases'
+for input in gs 'gs ' 'gs -sb'; do
+    : > "$HOME/executed"
+    enter_line "$input"
+    if [[ "$input" == 'gs -sb' ]]; then
+        wait_file "$HOME/executed" 'git:status -sb'
+    else
+        wait_file "$HOME/executed" 'git:status'
+    fi
+done
+: > "$HOME/executed"
+enter_line 'gs "$HOME"'
+wait_file "$HOME/executed" "git:status $HOME"
+enter_line 'unalias gs'
 
 zpty -w -n zacrs_enter $'gcm\r\x19'
 wait_file "$HOME/editor" "git commit -m ''"
@@ -199,6 +230,27 @@ for trigger in gs zacrs_next; do
 done
 enter_line gs
 wait_file "$HOME/executed" 'git:status'
+
+# Both terminal interruption and the send-break widget begin a fresh ZLE line.
+# The sole line-init notification must clear a previously selected native word.
+for abort_key in $'\x03' $'\x07'; do
+    : > "$HOME/editor"
+    : > "$HOME/applied"
+    : > "$HOME/redrawn"
+    zpty -w -n zacrs_enter $'gs\x19'
+    wait_file "$HOME/editor" gs
+    pty_output=''
+    zpty -w -n zacrs_enter $'\t'
+    wait_popup gs
+    zpty -w -n zacrs_enter ' '
+    wait_file "$HOME/applied" 'gs '
+    wait_file "$HOME/redrawn" 'gs '
+    next_ready=$(( $(<"$HOME/ready") + 1 ))
+    zpty -w -n zacrs_enter "$abort_key"
+    wait_file "$HOME/ready" "$next_ready"
+    enter_line gs
+    wait_file "$HOME/executed" 'git:status'
+done
 
 enter_line 'gs() print hello'
 wait_file "$HOME/last-command" 'gs() print hello'

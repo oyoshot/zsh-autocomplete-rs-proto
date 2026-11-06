@@ -181,6 +181,7 @@ struct DaemonServer {
     /// Most recent auto-popup payload per shell session.
     active_popups: HashMap<String, ActivePopupEntry>,
     active_popup_order: Vec<String>,
+    abbreviation_sessions: HashMap<String, crate::abbreviation::EditingSession>,
 }
 
 impl DaemonServer {
@@ -200,6 +201,7 @@ impl DaemonServer {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            abbreviation_sessions: HashMap::new(),
         }
     }
 }
@@ -239,6 +241,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         candidate_cache_order: Vec::new(),
         active_popups: HashMap::new(),
         active_popup_order: Vec::new(),
+        abbreviation_sessions: HashMap::new(),
     };
     let params = CompleteParams {
         prefix,
@@ -412,6 +415,63 @@ impl DaemonServer {
             self.config_mtime = current_mtime;
             info!(reloaded = true, "reloaded config");
         }
+    }
+
+    fn abbreviation_event(
+        &mut self,
+        key: &str,
+        event: protocol::AbbreviationObservation<'_>,
+    ) -> Option<TextCompleteResult> {
+        use protocol::AbbreviationObservation as Event;
+        self.maybe_reload_config();
+        if !self.config.expand_abbreviation_on_enter {
+            self.abbreviation_sessions.remove(key);
+            return None;
+        }
+        if matches!(event, Event::Reset) {
+            if self.abbreviation_sessions.len() >= 128
+                && !self.abbreviation_sessions.contains_key(key)
+                && let Some(oldest) = self.abbreviation_sessions.keys().next().cloned()
+            {
+                self.abbreviation_sessions.remove(&oldest);
+            }
+            self.abbreviation_sessions
+                .insert(key.to_owned(), Default::default());
+            return None;
+        }
+        // Unknown sessions (restart or eviction) cannot reinterpret a prior choice.
+        let session = self.abbreviation_sessions.get_mut(key)?;
+        match event {
+            Event::Select {
+                edit_start,
+                applied,
+                head,
+                head_start,
+            } => session.select(edit_start, applied, head, head_start),
+            Event::Accept {
+                buffer,
+                head,
+                target,
+            } => {
+                session.observe(head);
+                let result = crate::abbreviation::expand_enter_line(
+                    &self.config,
+                    buffer,
+                    target.as_ref(),
+                    session,
+                );
+                self.abbreviation_sessions.remove(key);
+                if result.as_ref().is_some_and(|result| !result.execute) {
+                    // The adapter reports the prepared command's native word
+                    // identity after applying the literal placeholder edit.
+                    self.abbreviation_sessions
+                        .insert(key.to_owned(), Default::default());
+                }
+                return result;
+            }
+            Event::Reset => unreachable!(),
+        }
+        None
     }
 
     fn handle_connection(&mut self, stream: UnixStream) -> bool {
@@ -944,6 +1004,7 @@ impl DaemonServer {
                     candidate_cache_order: Vec::new(),
                     active_popups: HashMap::new(),
                     active_popup_order: Vec::new(),
+                    abbreviation_sessions: HashMap::new(),
                 };
                 let params = CompleteParams {
                     prefix,
@@ -997,6 +1058,50 @@ impl DaemonServer {
                         let _ = writeln!(writer, "ERROR clear failed");
                     }
                 }
+                false
+            }
+            TextRequest::ShellPing => {
+                self.maybe_reload_config();
+                let _ = writeln!(
+                    writer,
+                    "OK enter_expansion={} edit_context=2",
+                    u8::from(self.config.expand_abbreviation_on_enter)
+                );
+                let _ = writer.flush();
+                false
+            }
+            TextRequest::Abbreviation {
+                key,
+                operation,
+                fields,
+            } => {
+                let fields = match protocol::read_abbreviation_fields(reader, fields) {
+                    Ok(fields) => fields,
+                    Err(_) => {
+                        // This observation was lost: neither this connection nor
+                        // a later acceptance may use the previous selection state.
+                        self.abbreviation_sessions.remove(&key);
+                        let _ = writeln!(writer, "ERROR abbreviation-frame");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+                let event = match protocol::AbbreviationObservation::decode(&operation, &fields) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        self.abbreviation_sessions.remove(&key);
+                        let _ = writeln!(writer, "ERROR abbreviation-context");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+                let result = self.abbreviation_event(&key, event);
+                if let Some(result) = result {
+                    let _ = result.write_to(&mut writer);
+                } else {
+                    let _ = writeln!(writer, "DONE 1\nAPPLY chain=0 execute=1 restore_hex=");
+                }
+                let _ = writer.flush();
                 false
             }
             TextRequest::Ping => {
@@ -1995,7 +2100,94 @@ mod tests {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            abbreviation_sessions: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn undecodable_abbreviation_frame_invalidates_the_session() {
+        use crate::protocol::AbbreviationObservation as Event;
+        let mut server = test_server();
+        server.config_mtime = super::config_file_mtime();
+        server.config.expand_abbreviation_on_enter = true;
+        server.abbreviation_event("shell", Event::Reset);
+        let mut input = b"abbreviation shell select 3\n1\n0\n1\n1\n4\ngs ".to_vec();
+        input.extend_from_slice(&[0xff, b'\n']);
+        assert_eq!(
+            run_text_request(&mut server, input),
+            b"ERROR abbreviation-frame\n"
+        );
+        assert!(!server.abbreviation_sessions.contains_key("shell"));
+    }
+
+    #[test]
+    fn abbreviation_sessions_use_adapter_facts_and_isolate_choices() {
+        use crate::protocol::AbbreviationObservation as Event;
+        let mut server = test_server();
+        server.config_mtime = super::config_file_mtime();
+        server.config.expand_abbreviation_on_enter = true;
+        server
+            .config
+            .abbreviations
+            .push(crate::config::Abbreviation {
+                trigger: "gs".into(),
+                expansion: "git status".into(),
+                description: String::new(),
+                when: Default::default(),
+            });
+        let accept = || Event::Accept {
+            buffer: "gs",
+            head: Some("gs"),
+            target: Some(crate::abbreviation::CommandTarget {
+                trigger: "gs".into(),
+                start: 0,
+                end: 2,
+                command_context: "gs".into(),
+            }),
+        };
+        assert!(server.abbreviation_event("lost", accept()).is_none());
+        server.abbreviation_event("one", Event::Reset);
+        server.abbreviation_event("two", Event::Reset);
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 0,
+                applied: true,
+                head: Some("gs"),
+                head_start: 0,
+            },
+        );
+
+        assert!(server.abbreviation_event("one", accept()).is_none());
+        assert_eq!(
+            server.abbreviation_event("two", accept()).unwrap().text,
+            "git status"
+        );
+        server.abbreviation_event("one", Event::Reset);
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 0,
+                applied: true,
+                head: Some("gs"),
+                head_start: 0,
+            },
+        );
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 4,
+                applied: true,
+                head: Some("gsx"),
+                head_start: 0,
+            },
+        );
+        assert!(server.abbreviation_event("one", accept()).is_some());
+        assert!(server.abbreviation_event("one", accept()).is_none());
+        for n in 0..140 {
+            server.abbreviation_event(&format!("session{n}"), Event::Reset);
+        }
+        assert!(server.abbreviation_sessions.len() <= 128);
     }
 
     fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {

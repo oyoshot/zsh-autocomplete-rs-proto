@@ -107,61 +107,100 @@ _zacrs_command_context() {
     return 0
 }
 
-# Parse a standalone command without consulting configuration or changing ZLE.
-# Args: buffer, prebuffer. Returns reply=(trigger leading suffix context).
-_zacrs_abbreviation_target() {
-    local _buffer="$1" _prebuffer="${2:-}"
-    reply=()
-    # At a continuation prompt BUFFER is only the new line; preceding input
-    # (including heredoc delimiters and open quotes) lives in PREBUFFER.
-    [[ -n "$_prebuffer" ]] && return 1
-    local -a _tokens
-    _tokens=( ${(z)_buffer} ) 2>/dev/null || return 1
-    (( ${#_tokens} )) || return 1
-    local _word="${_tokens[1]}" _token
-    # Quoted/escaped words, paths, assignments and substitutions are explicit
-    # shell syntax and must not be reinterpreted as an abbreviation trigger.
-    [[ "$_word" == *[^[:alnum:]_.+-]* || "$_word" == ('.'|'..') ]] && return 1
-    [[ "$_word" == ('if'|'then'|'elif'|'else'|'fi'|'for'|'foreach'|'while'|'until'|'repeat'|'do'|'done'|'case'|'esac'|'select'|'function'|'coproc'|'time'|'nocorrect'|'noglob'|'command'|'exec'|'builtin'|'end') ]] && return 1
-    # Compound commands need a separate replacement-range model. Leave the
-    # entire line alone rather than partially expanding a pipeline or list.
-    # Zsh emits a single () token for function declarations, even without braces.
-    for _token in "${_tokens[@]}"; do
-        [[ "$_token" == ('|'|'|&'|'||'|'&&'|'&'|'&!'|'&|'|';'|$'\n'|'('|')'|'()'|'{'|'}') ]] && return 1
-    done
-
-    local _leading="${_buffer%%[^[:space:]]*}"
-    local -i _end=$(( ${#_leading} + ${#_word} ))
-    [[ "${_buffer[${#_leading}+1,_end]}" == "$_word" ]] || return 1
-    local _context="${(j: :)${(@Q)_tokens}}"
-    [[ "$_buffer" == *[[:space:]] ]] && _context+=" "
-    reply=("$_word" "$_leading" "${_buffer[_end+1,-1]}" "$_context")
+# Byte-length fields preserve multiline input without evaluation or encoders.
+# Failed communication disables expansion until plugin reload.
+_zacrs_abbreviation_request() {
+    local operation="$1" fd item
+    shift
+    (( _zacrs_enter_enabled > 0 && _zacrs_daemon_available )) || { _zacrs_enter_enabled=-1; return 1; }
+    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+        _zacrs_enter_enabled=-1
+        return 1
+    fi
+    fd=$REPLY
+    local LC_ALL=C
+    {
+        print -r -u $fd -- "abbreviation $$ $operation $#"
+        for item in "$@"; do
+            print -r -u $fd -- "${#item}"
+            print -r -u $fd -- "$item"
+        done
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* ]] || { _zacrs_enter_enabled=-1; return 1; }
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=-1; return 1; }
+    } always {
+        exec {fd}<&-
+    }
 }
 
-# Resolve the parsed trigger through Rust and apply the literal edit to ZLE.
-# On success REPLY is 1 to execute, or 0 to keep editing a cursor placeholder.
-_zacrs_expand_command_abbreviation() {
-    _zacrs_update_enter_selection
-    [[ -n "$_zacrs_enter_selected_command" ]] && return 1
-    local -a reply
-    _zacrs_abbreviation_target "$BUFFER" "${PREBUFFER:-}" || return 1
-    local _word="$reply[1]" _leading="$reply[2]" _suffix="$reply[3]" _context="$reply[4]"
-    local _response
-    _response=$("$ZACRS_BIN" expand-abbreviation --trigger "$_word" \
-        --command-context "$_context" 2>/dev/null) || return 1
-    local -a _lines=( "${(@f)_response}" )
-    (( ${#_lines} == 2 )) || return 1
-    [[ "${_lines[1]}" == 'DONE 0 '* || "${_lines[1]}" == 'DONE 0' ]] || return 1
-    [[ "${_lines[2]}" == 'APPLY '* ]] || return 1
-    local result_code result_text chain execute restore_text cursor_offset selection_applied
-    _zacrs_parse_done_line "${_lines[1]}"
-    _zacrs_parse_apply_line "${_lines[2]}"
-    BUFFER="${_leading}${result_text}${_suffix}"
-    if [[ "$cursor_offset" == <-> ]]; then
-        CURSOR=$(( ${#_leading} + cursor_offset ))
-    else
-        CURSOR=${#BUFFER}
+# Native Zsh lexer facts. Unknown lexical contexts are represented explicitly.
+# Caller declares local arrays reply and _zacrs_abbr_words.
+_zacrs_abbreviation_words() {
+    reply=(0 '' 0 0)
+    _zacrs_abbr_words=( ${(z)BUFFER} ) 2>/dev/null || return 0
+    local leading="${BUFFER%%[^[:space:]]*}" word="${_zacrs_abbr_words[1]:-}"
+    local -i start=${#leading} end=$(( ${#leading} + ${#word} ))
+    [[ -z "$word" || "${BUFFER[start+1,end]}" == "$word" ]] || return 0
+    reply=(1 "$word" "$start" "$end")
+}
+
+# No candidate providers are called. Zsh's completion parser supplies context;
+# its command words must cover the entire native lexical input before we opt in.
+_zacrs_abbreviation_context_func() {
+    compstate[insert]=''
+    compstate[list]=''
+    [[ "${compstate[context]}" == command ]] || return 0
+    local -a native_words=( "${words[@]}" )
+    # Zsh adds an empty current word at an insertion point between words.
+    # Remove that native cursor marker, not a quoted empty argument.
+    if (( ${#native_words} == ${#_zacrs_abbr_words} + 1 )) && [[ -z "${native_words[CURRENT]:-}" ]]; then
+        native_words[CURRENT]=()
     fi
+    (( ${#native_words} == ${#_zacrs_abbr_words} )) || return 0
+    local head="$reply[2]"
+    # Unquoting alone leaves substitutions intact. Require Zsh's literal
+    # quoting to leave the head unchanged, independently of cursor context.
+    [[ -n "$head" && "${(q)head}" == "$head" ]] || return 0
+    (( ${reswords[(Ie)$head]} == 0 )) || return 0
+    local -i i
+    for ((i=1; i<=${#native_words}; i++)); do
+        [[ "$native_words[i]" == "${_zacrs_abbr_words[i]}" ]] || return 0
+    done
+    _zacrs_abbr_valid=1
+}
+
+_zacrs_expand_command_abbreviation() {
+    local -a reply _zacrs_abbr_words
+    _zacrs_abbreviation_words
+    local -i _zacrs_abbr_valid=0 _zacrs_abbr_context_only=1
+    local original_buffer="$BUFFER" original_cursor=$CURSOR
+    if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
+        {
+            # Query the command word, independent of the editing cursor. Inside
+            # function parentheses Zsh can expose the whole line as plain words.
+            CURSOR=$reply[4]
+            # Complete the literal alias name; restore caller options immediately.
+            () {
+                setopt localoptions completealiases
+                zle _zacrs_compsys 2>/dev/null || true
+            }
+        } always {
+            [[ "$BUFFER" == "$original_buffer" ]] || BUFFER="$original_buffer"
+            (( CURSOR == original_cursor )) || CURSOR=$original_cursor
+        }
+    fi
+    local context="${(j: :)${(@Q)_zacrs_abbr_words}}"
+    [[ "$BUFFER" == *[[:space:]] ]] && context+=" "
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    _zacrs_abbreviation_request accept "$BUFFER" "$reply[1]" "$reply[2]" "$reply[3]" "$reply[4]" "$_zacrs_abbr_valid" "$context" || return 1
+    [[ "$_zacrs_abbreviation_header" == 'DONE 0 '* || "$_zacrs_abbreviation_header" == 'DONE 0' ]] || return 1
+    [[ "$_zacrs_abbreviation_apply" == 'APPLY '* ]] || return 1
+    local result_code result_text chain execute restore_text cursor_offset selection_applied
+    _zacrs_parse_done_line "$_zacrs_abbreviation_header"
+    _zacrs_parse_apply_line "$_zacrs_abbreviation_apply"
+    BUFFER="$result_text"
+    CURSOR=${cursor_offset:-${#BUFFER}}
     REPLY="$execute"
     return 0
 }

@@ -9,13 +9,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Resolve a literal, exact command-position abbreviation (no shell evaluation)
-    ExpandAbbreviation {
-        #[arg(long, allow_hyphen_values = true)]
-        trigger: String,
-        #[arg(long, allow_hyphen_values = true)]
-        command_context: String,
-    },
     /// Print shell initialization code
     Init {
         #[arg(value_enum)]

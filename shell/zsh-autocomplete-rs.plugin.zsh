@@ -50,7 +50,9 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
-typeset -g _zacrs_enter_selected_command=""
+# 0: not enabled by configuration; 1: enabled; -1: communication failed.
+# Only plugin reload resets the failure latch.
+typeset -gi _zacrs_enter_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
@@ -77,28 +79,19 @@ _zacrs_reset_cache() {
     _zacrs_restore_self_insert
 }
 
+# Only enabled shells send observations; the daemon owns the editing session.
 _zacrs_reset_enter_selection() {
-    _zacrs_enter_selected_command=""
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset || true
+    return 0
 }
 
-# Protect either an explicit popup choice or a placeholder expansion that
-# returned to editing. Record the resulting command, which may differ from
-# the abbreviation trigger.
 _zacrs_record_enter_selection() {
-    local -a _words
-    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
-    _zacrs_enter_selected_command="${_words[1]:-}"
-}
-
-# Keep the prepared command while arguments are edited. Editing the
-# command itself invalidates the choice; a fresh ZLE line always resets it.
-_zacrs_update_enter_selection() {
-    [[ -n "$_zacrs_enter_selected_command" ]] || return 0
-    local -a _words
-    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
-    if [[ "${_words[1]:-}" != "$_zacrs_enter_selected_command" ]]; then
-        _zacrs_reset_enter_selection
-    fi
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    (( _zacrs_enter_enabled > 0 )) || return 0
+    local -a reply _zacrs_abbr_words
+    _zacrs_abbreviation_words
+    _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$reply[1]" "$reply[2]" "$reply[3]" || true
     return 0
 }
 
@@ -148,23 +141,26 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         _zacrs_daemon_next_retry=$(( SECONDS + 1 ))
     }
 
+    _zacrs_ping_daemon() {
+        local fd resp
+        zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+        fd=$REPLY
+        print -r -u $fd -- 'ping shell'
+        IFS= read -r -u $fd resp
+        exec {fd}<&-
+        [[ "$resp" == OK* ]] || return 1
+        REPLY="$resp"
+        return 0
+    }
+
     _zacrs_ensure_daemon() {
         # Already confirmed available this session
         (( _zacrs_daemon_available )) && return 0
-        # Check if daemon is running via zsocket ping
-        local fd
-        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
-            fd=$REPLY
-            print -u $fd "ping"
-            local resp
-            read -r -u $fd resp 2>/dev/null
-            exec {fd}<&-
-            if [[ "$resp" == OK* ]]; then
-                _zacrs_daemon_available=1
-                _zacrs_daemon_started=0
-                _zacrs_daemon_next_retry=0
-                return 0
-            fi
+        if _zacrs_ping_daemon; then
+            _zacrs_daemon_available=1
+            _zacrs_daemon_started=0
+            _zacrs_daemon_next_retry=0
+            return 0
         fi
         # Start daemon
         "$ZACRS_BIN" daemon start &!
@@ -177,6 +173,7 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         if [[ -S "$_zacrs_socket_path" ]]; then
             _zacrs_daemon_available=1
             _zacrs_daemon_started=1
+            _zacrs_ping_daemon || true
             _zacrs_daemon_next_retry=0
             return 0
         fi
@@ -190,7 +187,11 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         (( SECONDS < _zacrs_daemon_next_retry )) && return 1
         _zacrs_ensure_daemon
     }
-    _zacrs_ensure_daemon
+    # Apply configuration only during plugin initialization. Routine daemon
+    # retries return handshake metadata without changing the failure latch.
+    if _zacrs_ensure_daemon && [[ "$REPLY" == OK* && " $REPLY " == *' enter_expansion=1 '* && " $REPLY " == *' edit_context=2 '* ]]; then
+        _zacrs_enter_enabled=1
+    fi
 fi
 
 # === Render header parsing (shared by daemon + subprocess paths) ===
@@ -460,11 +461,8 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    _zacrs_update_enter_selection
-    if [[ "$result_code" == (0|2) && -n "$result_text" \
-        && -z "${base//[[:space:]]/}" && -z "${PREBUFFER:-}" ]]; then
-        _zacrs_reset_enter_selection
-        [[ "$selection_applied" == 1 ]] && _zacrs_record_enter_selection
+    if (( _zacrs_enter_enabled > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+        _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
         CURSOR=$((${#base} + cursor_offset))
@@ -729,7 +727,6 @@ _zacrs_complete_popup() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
-    _zacrs_update_enter_selection
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
@@ -912,8 +909,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     local _keep_editing=0
-    if [[ "${ZACRS_ABBR_EXPAND_ON_ENTER:-0}" == 1 ]] \
-        && _zacrs_expand_command_abbreviation; then
+    if (( _zacrs_enter_enabled > 0 )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
             _zacrs_record_enter_selection
@@ -927,13 +923,11 @@ _zacrs_accept_line() {
         zle -R
         return
     fi
-    _zacrs_reset_enter_selection
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
-    _zacrs_reset_enter_selection
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
     _zacrs_reset_cache
@@ -1007,7 +1001,11 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-add-zle-hook-widget line-init _zacrs_reset_enter_selection
+add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+zle -D _zacrs_abbreviation_context 2>/dev/null || true
+if (( _zacrs_enter_enabled > 0 )); then
+    add-zle-hook-widget line-init _zacrs_reset_enter_selection
+fi
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.

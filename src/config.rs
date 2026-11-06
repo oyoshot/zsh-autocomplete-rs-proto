@@ -33,6 +33,7 @@ pub(crate) fn config_path() -> Option<PathBuf> {
 pub struct Config {
     pub max_visible: usize,
     pub auto_insert_unambiguous: bool,
+    pub expand_abbreviation_on_enter: bool,
     pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
     pub abbreviations: Vec<Abbreviation>,
@@ -44,6 +45,7 @@ impl Default for Config {
         Config {
             max_visible: 10,
             auto_insert_unambiguous: true,
+            expand_abbreviation_on_enter: false,
             suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
             abbreviations: Vec::new(),
@@ -61,12 +63,15 @@ fn default_true() -> bool {
 struct CompletionRaw {
     #[serde(default = "default_true")]
     auto_insert_unambiguous: bool,
+    #[serde(default)]
+    expand_abbreviation_on_enter: bool,
 }
 
 impl Default for CompletionRaw {
     fn default() -> Self {
         CompletionRaw {
             auto_insert_unambiguous: true,
+            expand_abbreviation_on_enter: false,
         }
     }
 }
@@ -449,6 +454,7 @@ impl Config {
         Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
+            expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
             suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
             abbreviations,
@@ -711,6 +717,24 @@ mod tests {
     }
 
     // --- auto_insert_unambiguous TOML parsing ---
+
+    #[test]
+    fn enter_expansion_is_opt_in_in_toml() {
+        for content in [
+            "",
+            "[completion]",
+            "[completion]\nexpand_abbreviation_on_enter = false",
+        ] {
+            let file: ConfigFile = toml::from_str(content).unwrap();
+            assert!(!file.completion.expand_abbreviation_on_enter);
+        }
+        let file: ConfigFile =
+            toml::from_str("[completion]\nexpand_abbreviation_on_enter = true").unwrap();
+        assert!(file.completion.expand_abbreviation_on_enter);
+        assert!(
+            toml::from_str::<ConfigFile>("[completion]\nexpand_abbreviation_on_enter = 1").is_err()
+        );
+    }
 
     #[test]
     fn auto_insert_unambiguous_defaults_true_without_completion_section() {

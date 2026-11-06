@@ -56,7 +56,7 @@ fn run_shell(command: &mut Command, timeout: Duration) -> (Output, bool) {
 
 #[test]
 fn zsh_enter_abbreviation_is_opt_in_and_preserves_input() {
-    run_abbreviation_test(include_str!("support/abbreviation_enter.zsh"), false);
+    run_abbreviation_test(include_str!("support/abbreviation_adapter.zsh"), true);
 }
 
 #[test]
@@ -81,6 +81,18 @@ fn run_abbreviation_test(script: &str, daemon: bool) {
         config_dir.join("config.toml"),
         r#"[abbreviations]
 gs = "git status"
+"$HOME" = "should-not-expand"
+'${HOME}' = "should-not-expand"
+'$(touch should-not-exist)' = "should-not-expand"
+'`touch should-not-exist`' = "should-not-expand"
+'$((1 + 1))' = "should-not-expand"
+'~' = "should-not-expand"
+'=git' = "should-not-expand"
+'gs*' = "should-not-expand"
+"[[" = "should-not-expand"
+if = "should-not-expand"
+for = "should-not-expand"
+function = "should-not-expand"
 next = "gs"
 zacrs_next = "gs"
 connect = "ssh user@{{cursor}}"
@@ -116,6 +128,13 @@ when.command = "scoped -s*"
             .env("ZDOTDIR", root.path())
             .env("XDG_CONFIG_HOME", root.path().join("config"))
             .env("ZACRS_BIN", env!("CARGO_BIN_EXE_zsh-autocomplete-rs"))
+            .env(
+                "ZACRS_ADAPTER_TEST_FILE",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/support/abbreviation_enter.zsh"
+                ),
+            )
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
             .env(

@@ -92,6 +92,12 @@ pub enum TextRequest {
     Complete(TextCompleteRequest),
     Clear(TextClearRequest),
     Ping,
+    ShellPing,
+    Abbreviation {
+        key: String,
+        operation: String,
+        fields: usize,
+    },
     Shutdown,
 }
 
@@ -419,10 +425,125 @@ impl Response {
     }
 }
 
+/// Shell-neutral facts supplied by a native shell adapter. No grammar tokens or
+/// reserved words are interpreted by the daemon.
+pub enum AbbreviationObservation<'a> {
+    Reset,
+    Select {
+        edit_start: usize,
+        applied: bool,
+        head: Option<&'a str>,
+        head_start: usize,
+    },
+    Accept {
+        buffer: &'a str,
+        head: Option<&'a str>,
+        target: Option<crate::abbreviation::CommandTarget>,
+    },
+}
+
+impl<'a> AbbreviationObservation<'a> {
+    pub fn decode(operation: &str, fields: &'a [String]) -> io::Result<Self> {
+        let invalid = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid abbreviation observation",
+            )
+        };
+        let number = |s: &str| s.parse::<usize>().map_err(|_| invalid());
+        let flag = |s: &str| match s {
+            "0" => Ok(false),
+            "1" => Ok(true),
+            _ => Err(invalid()),
+        };
+        match (operation, fields) {
+            ("reset", []) => Ok(Self::Reset),
+            ("select", [start, applied, known, head, head_start]) => Ok(Self::Select {
+                edit_start: number(start)?,
+                applied: flag(applied)?,
+                head: flag(known)?.then_some(head),
+                head_start: number(head_start)?,
+            }),
+            ("accept", [buffer, known, head, start, end, eligible, context]) => {
+                let known = flag(known)?;
+                let target = if flag(eligible)? {
+                    if !known {
+                        return Err(invalid());
+                    }
+                    Some(crate::abbreviation::CommandTarget {
+                        trigger: head.clone(),
+                        start: number(start)?,
+                        end: number(end)?,
+                        command_context: context.clone(),
+                    })
+                } else {
+                    None
+                };
+                Ok(Self::Accept {
+                    buffer,
+                    head: known.then_some(head),
+                    target,
+                })
+            }
+            _ => Err(invalid()),
+        }
+    }
+}
+
+/// Byte-length framing preserves newlines and UTF-8 in ZLE observations.
+pub fn read_abbreviation_fields(
+    reader: &mut impl BufRead,
+    count: usize,
+) -> io::Result<Vec<String>> {
+    if count > 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "too many fields",
+        ));
+    }
+    let mut fields = Vec::new();
+    let mut total = 0usize;
+    for _ in 0..count {
+        let mut length = String::new();
+        reader.read_line(&mut length)?;
+        let size = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid field size"))?;
+        total = total
+            .checked_add(size)
+            .filter(|n| *n <= 1_048_576)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "fields too large"))?;
+        let mut bytes = vec![0; size];
+        reader.read_exact(&mut bytes)?;
+        let mut newline = [0];
+        reader.read_exact(&mut newline)?;
+        if newline != *b"\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing field terminator",
+            ));
+        }
+        fields.push(
+            String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+    }
+    Ok(fields)
+}
+
 impl TextRequest {
     pub fn parse_header(line: &str) -> Option<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
+            ["ping", "shell"] => Some(Self::ShellPing),
+            ["abbreviation", key, operation, fields] => {
+                let fields = fields.parse::<usize>().ok()?;
+                (fields <= 1024 && key.len() <= 128).then(|| Self::Abbreviation {
+                    key: key.to_string(),
+                    operation: operation.to_string(),
+                    fields,
+                })
+            }
             [
                 "render",
                 cursor_row,
@@ -805,6 +926,60 @@ pub fn socket_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_context_contract_validates_capability_and_ranges() {
+        use super::AbbreviationObservation;
+        let mut fields = ["gs -sb", "1", "gs", "0", "2", "1", "gs -sb"].map(str::to_owned);
+        match AbbreviationObservation::decode("accept", &fields).unwrap() {
+            AbbreviationObservation::Accept {
+                target: Some(target),
+                ..
+            } => {
+                assert_eq!(target.trigger, "gs");
+                assert_eq!((target.start, target.end), (0, 2));
+            }
+            _ => panic!("missing verified target"),
+        }
+        assert!(AbbreviationObservation::decode("observe", &["1".into(), "gs".into()]).is_err());
+        fields[1] = "0".into();
+        assert!(AbbreviationObservation::decode("accept", &fields).is_err());
+        fields[5] = "0".into();
+        assert!(matches!(
+            AbbreviationObservation::decode("accept", &fields).unwrap(),
+            AbbreviationObservation::Accept {
+                head: None,
+                target: None,
+                ..
+            }
+        ));
+        assert!(
+            AbbreviationObservation::decode(
+                "select",
+                &["0", "yes", "1", "gs", "0"].map(str::to_owned)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn abbreviation_fields_preserve_utf8_and_reject_bad_frames() {
+        let text = "gs\n日本語 ";
+        let wire = format!("{}\n{}\n0\n\n", text.len(), text);
+        assert_eq!(
+            super::read_abbreviation_fields(&mut std::io::Cursor::new(wire), 2).unwrap(),
+            vec![text, ""]
+        );
+        for wire in ["1048577\n", "nope\n", "3\nxy", "1\nx!"] {
+            assert!(super::read_abbreviation_fields(&mut std::io::Cursor::new(wire), 1).is_err());
+        }
+        assert!(super::read_abbreviation_fields(&mut std::io::Cursor::new(""), 1025).is_err());
+        assert!(matches!(
+            super::TextRequest::parse_header("ping shell"),
+            Some(super::TextRequest::ShellPing)
+        ));
+        assert!(super::TextRequest::parse_header("abbreviation shell accept 1025").is_none());
+    }
 
     #[test]
     fn render_request_roundtrip() {
