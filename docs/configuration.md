@@ -105,12 +105,13 @@ rewrites the input to `git status` and executes it; `gs -sb` becomes
 or alias is overridden by the configured abbreviation in this mode. Space
 keeps its ordinary behavior.
 
-Only a bare command word in a single simple command is eligible. Partial
-triggers, quoted/escaped words, paths such as `./gs`, assignment prefixes,
-command modifiers such as `command gs`, and compound lines such as `gs | cat`
-or `gs &! echo done`, and function declarations such as `gs() print hello`,
-are left as typed. Continuation input (including heredoc
-bodies and multiline quoted strings) is also left unchanged.
+The Zsh adapter obtains a command-word range from the native completion parser.
+It offers that range only when the parser's command words cover the complete
+lexical input and the word is unquoted and not a native reserved word. Partial
+triggers, quoted/escaped words, assignment prefixes, command lists, function
+declarations, and continuation input are left as typed. A path such as `./gs`
+does not match the trigger `gs`. Redirections are currently left unchanged
+because this query cannot verify their full context.
 Command-position and `when.command` conditions still apply;
 argument-position abbreviations continue to require popup selection.
 
@@ -129,11 +130,17 @@ keeps that typed command eligible for Enter expansion.
 When enabled, the daemon owns the editing session and selection protection.
 Zsh forwards buffer observations and applies the edit returned on Enter; it holds
 no abbreviation selection state or edit journal. These requests use the existing
-Unix socket and launch no helper processes. Zsh tokenizes the accepted line to
-supply lexical facts needed for Zsh syntax, while Rust decides eligibility.
+Unix socket and launch no helper processes. The Zsh adapter uses a native completion widget to verify the target and supplies
+its literal word and character range. Rust validates the range and performs
+exact lookup and editing without parsing shell syntax. This widget runs only
+when Enter expansion is enabled, calls no candidate providers, and restores the
+buffer and cursor after querying. Other shell adapters must establish their own
+native context capability; there is no shared Zsh grammar heuristic.
 
 Enter expansion requires a compatible running daemon. If communication fails,
 the original input is accepted and expansion is disabled until the plugin is
 reloaded. If the daemon restarts or loses the editing session, the current input
 is left unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
+
+See [the shell adapter boundary](shell-adapters.md) for the context contract.

@@ -181,7 +181,7 @@ struct DaemonServer {
     /// Most recent auto-popup payload per shell session.
     active_popups: HashMap<String, ActivePopupEntry>,
     active_popup_order: Vec<String>,
-    abbreviation_sessions: HashMap<String, String>,
+    abbreviation_sessions: HashMap<String, crate::abbreviation::EditingSession>,
 }
 
 impl DaemonServer {
@@ -420,15 +420,15 @@ impl DaemonServer {
     fn abbreviation_event(
         &mut self,
         key: &str,
-        operation: &str,
-        fields: &[String],
+        event: protocol::AbbreviationObservation<'_>,
     ) -> Option<TextCompleteResult> {
+        use protocol::AbbreviationObservation as Event;
         self.maybe_reload_config();
         if !self.config.expand_abbreviation_on_enter {
             self.abbreviation_sessions.remove(key);
             return None;
         }
-        if operation == "reset" {
+        if matches!(event, Event::Reset) {
             if self.abbreviation_sessions.len() >= 128
                 && !self.abbreviation_sessions.contains_key(key)
                 && let Some(oldest) = self.abbreviation_sessions.keys().next().cloned()
@@ -436,60 +436,43 @@ impl DaemonServer {
                 self.abbreviation_sessions.remove(&oldest);
             }
             self.abbreviation_sessions
-                .insert(key.to_owned(), String::new());
+                .insert(key.to_owned(), Default::default());
             return None;
         }
-        // A restart or evicted session must not reinterpret a previous choice.
-        let state = self.abbreviation_sessions.get(key)?.clone();
-        match (operation, fields) {
-            ("observe", [buffer]) => {
-                let state =
-                    crate::abbreviation::observe_selection(&state, &format!("buffer:{buffer}"))
-                        .unwrap_or_default();
-                self.abbreviation_sessions.insert(key.to_owned(), state);
-                None
-            }
-            ("select", [start, applied, buffer]) => {
-                let state =
-                    crate::abbreviation::observe_selection(&state, &format!("buffer:{buffer}"))
-                        .unwrap_or_default();
-                let state = crate::abbreviation::observe_selection(
-                    &state,
-                    &format!("select:{applied}:{start}:{buffer}"),
-                )
-                .unwrap_or_default();
-                self.abbreviation_sessions.insert(key.to_owned(), state);
-                None
-            }
-            ("accept", fields) if fields.len() >= 3 => {
-                let state = crate::abbreviation::observe_selection(
-                    &state,
-                    &format!("buffer:{}", fields[0]),
-                )
-                .unwrap_or_default();
+        // Unknown sessions (restart or eviction) cannot reinterpret a prior choice.
+        let session = self.abbreviation_sessions.get_mut(key)?;
+        match event {
+            Event::Observe { head } => session.observe(head),
+            Event::Select {
+                edit_start,
+                applied,
+                head,
+                head_start,
+            } => session.select(edit_start, applied, head, head_start),
+            Event::Accept {
+                buffer,
+                head,
+                target,
+            } => {
+                session.observe(head);
                 let result = crate::abbreviation::expand_enter_line(
                     &self.config,
-                    &fields[0],
-                    &fields[1],
-                    &fields[3..],
-                    &state,
-                    &fields[2],
+                    buffer,
+                    target.as_ref(),
+                    session,
                 );
                 self.abbreviation_sessions.remove(key);
-                if let Some(result) = &result
-                    && !result.execute
-                {
-                    let state = crate::abbreviation::observe_selection(
-                        "",
-                        &format!("select:1:0:{}", result.text),
-                    )
-                    .unwrap_or_default();
-                    self.abbreviation_sessions.insert(key.to_owned(), state);
+                if result.as_ref().is_some_and(|result| !result.execute) {
+                    // The adapter reports the prepared command's native word
+                    // identity after applying the literal placeholder edit.
+                    self.abbreviation_sessions
+                        .insert(key.to_owned(), Default::default());
                 }
-                result
+                return result;
             }
-            _ => None,
+            Event::Reset => unreachable!(),
         }
+        None
     }
 
     fn handle_connection(&mut self, stream: UnixStream) -> bool {
@@ -1082,7 +1065,7 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={}",
+                    "OK enter_expansion={} edit_context=1",
                     u8::from(self.config.expand_abbreviation_on_enter)
                 );
                 let _ = writer.flush();
@@ -1104,7 +1087,16 @@ impl DaemonServer {
                         return false;
                     }
                 };
-                let result = self.abbreviation_event(&key, &operation, &fields);
+                let event = match protocol::AbbreviationObservation::decode(&operation, &fields) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        self.abbreviation_sessions.remove(&key);
+                        let _ = writeln!(writer, "ERROR abbreviation-context");
+                        let _ = writer.flush();
+                        return false;
+                    }
+                };
+                let result = self.abbreviation_event(&key, event);
                 if let Some(result) = result {
                     let _ = result.write_to(&mut writer);
                 } else {
@@ -2115,10 +2107,11 @@ mod tests {
 
     #[test]
     fn undecodable_abbreviation_frame_invalidates_the_session() {
+        use crate::protocol::AbbreviationObservation as Event;
         let mut server = test_server();
         server.config_mtime = super::config_file_mtime();
         server.config.expand_abbreviation_on_enter = true;
-        server.abbreviation_event("shell", "reset", &[]);
+        server.abbreviation_event("shell", Event::Reset);
         let mut input = b"abbreviation shell select 3\n1\n0\n1\n1\n4\ngs ".to_vec();
         input.extend_from_slice(&[0xff, b'\n']);
         assert_eq!(
@@ -2126,16 +2119,11 @@ mod tests {
             b"ERROR abbreviation-frame\n"
         );
         assert!(!server.abbreviation_sessions.contains_key("shell"));
-        let accept = ["gs", "", "gs", "gs"].map(str::to_owned);
-        assert!(
-            server
-                .abbreviation_event("shell", "accept", &accept)
-                .is_none()
-        );
     }
 
     #[test]
-    fn abbreviation_sessions_isolate_choices_and_fail_closed_after_loss() {
+    fn abbreviation_sessions_use_adapter_facts_and_isolate_choices() {
+        use crate::protocol::AbbreviationObservation as Event;
         let mut server = test_server();
         server.config_mtime = super::config_file_mtime();
         server.config.expand_abbreviation_on_enter = true;
@@ -2148,57 +2136,49 @@ mod tests {
                 description: String::new(),
                 when: Default::default(),
             });
-        let fields = |s: &[&str]| s.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-        let accept = fields(&["gs", "", "gs", "gs"]);
-        assert!(
-            server
-                .abbreviation_event("lost", "accept", &accept)
-                .is_none()
+        let accept = || Event::Accept {
+            buffer: "gs",
+            head: Some("gs"),
+            target: Some(crate::abbreviation::CommandTarget {
+                trigger: "gs".into(),
+                start: 0,
+                end: 2,
+                command_context: "gs".into(),
+            }),
+        };
+        assert!(server.abbreviation_event("lost", accept()).is_none());
+        server.abbreviation_event("one", Event::Reset);
+        server.abbreviation_event("two", Event::Reset);
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 0,
+                applied: true,
+                head: Some("gs"),
+                head_start: 0,
+            },
         );
-        server.abbreviation_event("one", "reset", &[]);
-        server.abbreviation_event("two", "reset", &[]);
-        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
-        server.abbreviation_event("one", "observe", &fields(&["gs -sb"]));
-        assert!(
-            server
-                .abbreviation_event("one", "accept", &accept)
-                .is_none()
-        );
+        server.abbreviation_event("one", Event::Observe { head: Some("gs") });
+        assert!(server.abbreviation_event("one", accept()).is_none());
         assert_eq!(
-            server
-                .abbreviation_event("two", "accept", &accept)
-                .unwrap()
-                .text,
+            server.abbreviation_event("two", accept()).unwrap().text,
             "git status"
         );
-        server.abbreviation_event("one", "reset", &[]);
-        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
-        server.abbreviation_event("one", "observe", &fields(&["gsx"]));
-        server.abbreviation_event("one", "observe", &fields(&["gs"]));
-        assert!(
-            server
-                .abbreviation_event("one", "accept", &accept)
-                .is_some()
+        server.abbreviation_event("one", Event::Reset);
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 0,
+                applied: true,
+                head: Some("gs"),
+                head_start: 0,
+            },
         );
-        // Selection requests include the resulting buffer observation, so a
-        // command edit cannot keep the old choice when only an argument is picked.
-        server.abbreviation_event("one", "reset", &[]);
-        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
-        server.abbreviation_event("one", "select", &fields(&["10", "1", "gs'quote' new"]));
-        assert!(
-            server
-                .abbreviation_event("one", "accept", &accept)
-                .is_some()
-        );
-        assert!(!server.abbreviation_sessions.contains_key("one"));
-        // A fresh line must reset explicitly; acceptance already consumed the session.
-        assert!(
-            server
-                .abbreviation_event("one", "accept", &accept)
-                .is_none()
-        );
+        server.abbreviation_event("one", Event::Observe { head: Some("gsx") });
+        assert!(server.abbreviation_event("one", accept()).is_some());
+        assert!(server.abbreviation_event("one", accept()).is_none());
         for n in 0..140 {
-            server.abbreviation_event(&format!("session{n}"), "reset", &[]);
+            server.abbreviation_event(&format!("session{n}"), Event::Reset);
         }
         assert!(server.abbreviation_sessions.len() <= 128);
     }

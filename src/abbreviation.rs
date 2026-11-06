@@ -1,129 +1,84 @@
 use crate::{candidate::Candidate, config::Config, protocol::TextCompleteResult};
 
-fn bare_command(buffer: &str) -> Option<(&str, usize)> {
-    let trimmed = buffer.trim_start();
-    let end = trimmed
-        .find(|c: char| !(c.is_alphanumeric() || "_.+-".contains(c)))
-        .unwrap_or(trimmed.len());
-    let word = &trimmed[..end];
-    if word.is_empty() || word == "." || word == ".." {
-        return None;
-    }
-    Some((word, buffer.len() - trimmed.len()))
+/// A command word and replacement range verified by a shell adapter.
+/// Offsets count Unicode characters, matching the existing cursor edit protocol.
+#[derive(Debug, Clone)]
+pub struct CommandTarget {
+    pub trigger: String,
+    pub start: usize,
+    pub end: usize,
+    pub command_context: String,
 }
 
-/// Update the opaque selection state from a single ZLE observation.
-/// Offsets in selection observations count characters, as ZLE does.
-/// `!` means observation failed: preserve input until the next ZLE line reset.
-pub fn observe_selection(state: &str, event: &str) -> Option<String> {
-    if state == "!" {
-        return Some(state.to_owned());
-    }
-    let mut selected = (!state.is_empty()).then(|| state.to_owned());
-    if let Some(buffer) = event.strip_prefix("buffer:") {
-        let unchanged = bare_command(buffer).is_some_and(|(word, leading)| {
-            let suffix = &buffer[leading + word.len()..];
-            let boundary = suffix.is_empty()
-                || suffix.starts_with(char::is_whitespace)
-                || suffix.starts_with(['<', '>', ';', '|', '&', '(', ')']);
-            boundary && selected.as_deref() == Some(word)
-        });
-        if !unchanged {
-            selected = None;
-        }
-    } else if let Some(word) = event.strip_prefix("edit:") {
-        if selected.as_deref() != Some(word) {
-            selected = None;
-        }
-    } else if let Some(event) = event.strip_prefix("select:") {
-        let mut fields = event.splitn(3, ':');
-        let applied = fields.next() == Some("1");
-        let start = fields.next()?.parse::<usize>().ok()?;
-        let buffer = fields.next()?;
-        let (word, leading) = bare_command(buffer)?;
-        if selected.as_deref() != Some(word) {
-            selected = None;
-        }
-        if start <= buffer[..leading].chars().count() {
-            selected = applied.then(|| word.to_owned());
-        }
-    }
-    selected
+/// Shell-independent selection protection. Word identity is supplied by the
+/// adapter's native lexer; this module never interprets shell syntax.
+#[derive(Debug, Default, Clone)]
+pub struct EditingSession {
+    selected: Option<String>,
+    uncertain: bool,
 }
 
-/// Plan an Enter edit from ZLE's buffer and Zsh's raw lexical tokens.
-/// No shell code is evaluated here. Unsupported syntax passes through unchanged.
+impl EditingSession {
+    pub fn observe(&mut self, head: Option<&str>) {
+        match head {
+            None => {
+                self.selected = None;
+                self.uncertain = true;
+            }
+            Some(head) if self.selected.as_deref() != Some(head) => self.selected = None,
+            _ => {}
+        }
+    }
+
+    pub fn select(
+        &mut self,
+        edit_start: usize,
+        applied: bool,
+        head: Option<&str>,
+        head_start: usize,
+    ) {
+        self.observe(head);
+        if edit_start <= head_start {
+            self.selected = head
+                .filter(|head| applied && !head.is_empty())
+                .map(str::to_owned);
+        }
+    }
+}
+
+/// Apply a verified literal range. Shell grammar and syntax capabilities belong
+/// to the adapter; invalid or unavailable ranges always preserve the input.
 pub fn expand_enter_line(
     config: &Config,
     buffer: &str,
-    prebuffer: &str,
-    tokens: &[String],
-    selection: &str,
-    command_context: &str,
+    target: Option<&CommandTarget>,
+    session: &EditingSession,
 ) -> Option<TextCompleteResult> {
-    if !config.expand_abbreviation_on_enter || !prebuffer.is_empty() || selection == "!" {
+    if !config.expand_abbreviation_on_enter || session.uncertain {
         return None;
     }
-    let (word, leading) = bare_command(buffer)?;
-    if tokens.first().map(String::as_str) != Some(word)
-        || selection == word
-        || matches!(
-            word,
-            "if" | "then"
-                | "elif"
-                | "else"
-                | "fi"
-                | "for"
-                | "foreach"
-                | "while"
-                | "until"
-                | "repeat"
-                | "do"
-                | "done"
-                | "case"
-                | "esac"
-                | "select"
-                | "function"
-                | "coproc"
-                | "time"
-                | "nocorrect"
-                | "noglob"
-                | "command"
-                | "exec"
-                | "builtin"
-                | "end"
-        )
-        || tokens.iter().any(|t| {
-            matches!(
-                t.as_str(),
-                "|" | "|&"
-                    | "||"
-                    | "&&"
-                    | "&"
-                    | "&!"
-                    | "&|"
-                    | ";"
-                    | "\n"
-                    | "("
-                    | ")"
-                    | "()"
-                    | "{"
-                    | "}"
-            )
-        })
+    let target = target?;
+    if target.trigger.is_empty()
+        || session.selected.as_deref() == Some(&target.trigger)
+        || target.start >= target.end
     {
         return None;
     }
-    let mut result = expand_command_abbreviation(config, word, command_context)?;
-    result.cursor_offset = result
-        .cursor_offset
-        .map(|offset| buffer[..leading].chars().count() + offset);
-    result.text = format!(
-        "{}{}{}",
-        &buffer[..leading],
-        result.text,
-        &buffer[leading + word.len()..]
-    );
+    let byte_at = |offset: usize| {
+        buffer
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(buffer.len()))
+            .nth(offset)
+    };
+    let start = byte_at(target.start)?;
+    let end = byte_at(target.end)?;
+    if buffer.get(start..end)? != target.trigger {
+        return None;
+    }
+    let mut result = expand_command_abbreviation(config, &target.trigger, &target.command_context)?;
+    result.cursor_offset = result.cursor_offset.map(|offset| target.start + offset);
+    result.text = format!("{}{}{}", &buffer[..start], result.text, &buffer[end..]);
     Some(result)
 }
 
@@ -162,138 +117,64 @@ mod tests {
     use super::*;
     use crate::config::{Abbreviation, AbbreviationPosition, AbbreviationWhen};
 
-    fn enter(
-        buffer: &str,
-        prebuffer: &str,
-        tokens: &[&str],
-        events: &[&str],
-    ) -> Option<TextCompleteResult> {
-        let mut config = config("git status", AbbreviationWhen::default());
-        config.expand_abbreviation_on_enter = true;
-        expand_enter_line(
-            &config,
-            buffer,
-            prebuffer,
-            &tokens.iter().map(|s| (*s).into()).collect::<Vec<_>>(),
-            &events.iter().fold(String::new(), |state, event| {
-                observe_selection(&state, event).unwrap_or_default()
-            }),
-            buffer,
-        )
-    }
-
     #[test]
-    fn enter_preserves_suffix_and_requires_simple_bare_command() {
-        assert_eq!(
-            enter(
-                "  gs\t-sb \"日本語 a\"  ",
-                "",
-                &["gs", "-sb", "\"日本語 a\""],
-                &[]
-            )
-            .unwrap()
-            .text,
-            "  git status\t-sb \"日本語 a\"  "
-        );
-        assert!(enter("gs", "cat <<'EOF'\n", &["gs"], &[]).is_none());
-        for word in ["", "./gs", "'gs'", "\\gs", "A=1", "command", "function"] {
-            assert!(enter(word, "", &[word], &[]).is_none(), "{word}");
-        }
-        for operator in [
-            "|", "|&", "||", "&&", "&", "&!", "&|", ";", "\n", "(", ")", "()", "{", "}",
-        ] {
-            assert!(
-                enter(
-                    &format!("gs {operator} echo done"),
-                    "",
-                    &["gs", operator, "echo", "done"],
-                    &[]
-                )
-                .is_none(),
-                "{operator}"
-            );
-        }
-        assert!(enter("gs \"()\"", "", &["gs", "\"()\""], &[]).is_some());
-        assert_eq!(
-            enter("gs>out", "", &["gs", ">", "out"], &[]).unwrap().text,
-            "git status>out"
-        );
-        assert!(enter("gs() print hello", "", &["gs", "()", "print", "hello"], &[]).is_none());
-    }
-
-    #[test]
-    fn explicit_choices_survive_arguments_but_not_command_edits_or_dismissal() {
-        assert!(enter("gs -sb", "", &["gs", "-sb"], &["select:1:0:gs ", "edit:gs"]).is_none());
-        assert!(
-            enter(
-                "gs new",
-                "",
-                &["gs", "new"],
-                &["select:1:0:gs ", "select:1:3:gs new"]
-            )
-            .is_none()
-        );
-        for events in [
-            vec!["select:0:0:gs "],
-            vec!["select:1:0:gs ", "select:0:0:gs "],
-            vec!["select:1:3:gs new"],
-            vec!["select:1:0:gs ", "edit:g", "edit:gs"],
-            vec!["select:1:0:gs ", "edit:gsx", "edit:gs"],
-        ] {
-            assert!(
-                enter("gs new", "", &["gs", "new"], &events).is_some(),
-                "{events:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn selected_word_survives_separator_edits_but_not_word_edits() {
-        for suffix in [
-            "; echo hello",
-            "| cat",
-            "|| echo fallback",
-            "& echo done",
-            "&& echo done",
-            "&! echo done",
-            "&| echo done",
-            "() print hello",
-            ">out",
-        ] {
-            let state = observe_selection("gs", &format!("buffer:gs{suffix}")).unwrap();
-            assert_eq!(
-                observe_selection(&state, "buffer:gs"),
-                Some("gs".into()),
-                "{suffix}"
-            );
-        }
-        for changed in ["gsx", "gs'hello'", "gs\\x"] {
-            let state = observe_selection("gs", &format!("buffer:{changed}")).unwrap_or_default();
-            assert!(
-                observe_selection(&state, "buffer:gs").is_none(),
-                "{changed}"
-            );
-        }
-    }
-
-    #[test]
-    fn enter_default_is_disabled_and_cursor_offset_counts_characters() {
+    fn verified_ranges_preserve_arguments_and_validate_offsets() {
         let mut config = config("git {{cursor}}", AbbreviationWhen::default());
-        let tokens = vec!["gs".into()];
-        assert!(expand_enter_line(&config, "gs", "", &tokens, "", "gs").is_none());
+        let buffer = "　gs -sb";
+        let mut target = CommandTarget {
+            trigger: "gs".into(),
+            start: 1,
+            end: 3,
+            command_context: "gs -sb".into(),
+        };
+        let session = EditingSession::default();
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
         config.expand_abbreviation_on_enter = true;
-        let result = expand_enter_line(&config, "\u{3000}gs", "", &tokens, "", "gs").unwrap();
-        assert_eq!(result.text, "\u{3000}git ");
+        let result = expand_enter_line(&config, buffer, Some(&target), &session).unwrap();
+        assert_eq!(result.text, "　git  -sb");
         assert_eq!(result.cursor_offset, Some(5));
-        assert!(!result.execute);
+        assert!(expand_enter_line(&config, buffer, None, &session).is_none());
+        target.end = 20;
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
+        target.end = 2;
+        assert!(expand_enter_line(&config, buffer, Some(&target), &session).is_none());
     }
 
     #[test]
-    fn failed_observation_disables_rewriting_until_line_reset() {
-        assert_eq!(observe_selection("!", "edit:gs"), Some("!".into()));
-        let mut config = config("git status", AbbreviationWhen::default());
+    fn native_word_observations_preserve_choices_and_unknown_context_is_safe() {
+        let mut session = EditingSession::default();
+        session.select(0, true, Some("gs"), 0);
+        session.observe(Some("gs"));
+        assert_eq!(session.selected.as_deref(), Some("gs"));
+        session.select(3, true, Some("gs"), 0);
+        assert_eq!(session.selected.as_deref(), Some("gs"));
+        session.observe(Some("gsx"));
+        session.observe(Some("gs"));
+        assert!(session.selected.is_none());
+        session.observe(None);
+        session.select(0, true, Some("gs"), 0);
+        assert!(session.uncertain);
+    }
+
+    #[test]
+    fn shared_engine_does_not_classify_a_shells_reserved_words() {
+        let mut config = config("literal edit", AbbreviationWhen::default());
         config.expand_abbreviation_on_enter = true;
-        assert!(expand_enter_line(&config, "gs", "", &["gs".into()], "!", "gs").is_none());
+        config.abbreviations[0].trigger = "if".into();
+        let target = CommandTarget {
+            trigger: "if".into(),
+            start: 0,
+            end: 2,
+            command_context: "if".into(),
+        };
+        assert_eq!(
+            expand_enter_line(&config, "if", Some(&target), &EditingSession::default())
+                .unwrap()
+                .text,
+            "literal edit"
+        );
+        // Zsh refuses this target in its native adapter; another backend is
+        // responsible for establishing its own capabilities before offering it.
     }
 
     fn config(expansion: &str, when: AbbreviationWhen) -> Config {

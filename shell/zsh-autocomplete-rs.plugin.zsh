@@ -88,14 +88,19 @@ _zacrs_reset_enter_selection() {
 
 _zacrs_record_enter_selection() {
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$BUFFER" || true
+    (( _zacrs_enter_enabled > 0 )) || return 0
+    local -a reply _zacrs_abbr_words
+    _zacrs_abbreviation_words
+    _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$reply[1]" "$reply[2]" "$reply[3]" || true
     return 0
 }
 
 _zacrs_update_enter_selection() {
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     (( _zacrs_enter_enabled > 0 )) || return 0
-    _zacrs_abbreviation_request observe "$BUFFER" || true
+    local -a reply _zacrs_abbr_words
+    _zacrs_abbreviation_words
+    _zacrs_abbreviation_request observe "$reply[1]" "$reply[2]" || true
     return 0
 }
 
@@ -193,7 +198,7 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
     }
     # Apply configuration only during plugin initialization. Routine daemon
     # retries return handshake metadata without changing the failure latch.
-    if _zacrs_ensure_daemon && [[ "$REPLY" == OK*'enter_expansion=1'* ]]; then
+    if _zacrs_ensure_daemon && [[ "$REPLY" == OK* && " $REPLY " == *' enter_expansion=1 '* && " $REPLY " == *' edit_context=1 '* ]]; then
         _zacrs_enter_enabled=1
     fi
 fi
@@ -921,6 +926,7 @@ _zacrs_accept_line() {
     if (( _zacrs_enter_enabled > 0 )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
+            _zacrs_record_enter_selection
         fi
     fi
     _zacrs_prev_lbuffer="$LBUFFER"
@@ -1011,7 +1017,9 @@ bindkey '^I' _zacrs_complete_popup
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
 add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
+    zle -C _zacrs_abbreviation_context complete-word _zacrs_abbreviation_context_func
     add-zle-hook-widget line-init _zacrs_reset_enter_selection
 fi
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw

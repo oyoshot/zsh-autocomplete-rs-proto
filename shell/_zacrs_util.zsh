@@ -134,14 +134,52 @@ _zacrs_abbreviation_request() {
     }
 }
 
-# Zsh supplies lexical facts; Rust owns eligibility, selection policy and edits.
+# Native Zsh lexer facts. Unknown lexical contexts are represented explicitly.
+# Caller declares local arrays reply and _zacrs_abbr_words.
+_zacrs_abbreviation_words() {
+    reply=(0 '' 0 0)
+    _zacrs_abbr_words=( ${(z)BUFFER} ) 2>/dev/null || return 0
+    local leading="${BUFFER%%[^[:space:]]*}" word="${_zacrs_abbr_words[1]:-}"
+    local -i start=${#leading} end=$(( ${#leading} + ${#word} ))
+    [[ -z "$word" || "${BUFFER[start+1,end]}" == "$word" ]] || return 0
+    reply=(1 "$word" "$start" "$end")
+}
+
+# No candidate providers are called. Zsh's completion parser supplies context;
+# its command words must cover the entire native lexical input before we opt in.
+_zacrs_abbreviation_context_func() {
+    compstate[insert]=''
+    compstate[list]=''
+    [[ "${compstate[context]}" == command && -z "${compstate[quote]:-}${QIPREFIX}${QISUFFIX}" ]] || return 0
+    (( CURRENT == 1 && ${#words} == ${#_zacrs_abbr_words} )) || return 0
+    local head="$reply[2]"
+    [[ -n "$head" && "$PREFIX$SUFFIX" == "$head" ]] || return 0
+    (( ${reswords[(Ie)$head]} == 0 )) || return 0
+    local -i i
+    for ((i=1; i<=${#words}; i++)); do
+        [[ "$words[i]" == "${_zacrs_abbr_words[i]}" ]] || return 0
+    done
+    _zacrs_abbr_valid=1
+}
+
 _zacrs_expand_command_abbreviation() {
-    local -a _tokens
-    _tokens=( ${(z)BUFFER} ) 2>/dev/null || return 1
-    local _context="${(j: :)${(@Q)_tokens}}"
-    [[ "$BUFFER" == *[[:space:]] ]] && _context+=" "
+    local -a reply _zacrs_abbr_words
+    _zacrs_abbreviation_words
+    local -i _zacrs_abbr_valid=0
+    local original_buffer="$BUFFER" original_cursor=$CURSOR
+    if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
+        {
+            CURSOR=$reply[4]
+            zle _zacrs_abbreviation_context 2>/dev/null || true
+        } always {
+            BUFFER="$original_buffer"
+            CURSOR=$original_cursor
+        }
+    fi
+    local context="${(j: :)${(@Q)_zacrs_abbr_words}}"
+    [[ "$BUFFER" == *[[:space:]] ]] && context+=" "
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    _zacrs_abbreviation_request accept "$BUFFER" "${PREBUFFER:-}" "$_context" "${_tokens[@]}" || return 1
+    _zacrs_abbreviation_request accept "$BUFFER" "$reply[1]" "$reply[2]" "$reply[3]" "$reply[4]" "$_zacrs_abbr_valid" "$context" || return 1
     [[ "$_zacrs_abbreviation_header" == 'DONE 0 '* || "$_zacrs_abbreviation_header" == 'DONE 0' ]] || return 1
     [[ "$_zacrs_abbreviation_apply" == 'APPLY '* ]] || return 1
     local result_code result_text chain execute restore_text cursor_offset selection_applied

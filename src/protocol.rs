@@ -425,6 +425,77 @@ impl Response {
     }
 }
 
+/// Shell-neutral facts supplied by a native shell adapter. No grammar tokens or
+/// reserved words are interpreted by the daemon.
+pub enum AbbreviationObservation<'a> {
+    Reset,
+    Observe {
+        head: Option<&'a str>,
+    },
+    Select {
+        edit_start: usize,
+        applied: bool,
+        head: Option<&'a str>,
+        head_start: usize,
+    },
+    Accept {
+        buffer: &'a str,
+        head: Option<&'a str>,
+        target: Option<crate::abbreviation::CommandTarget>,
+    },
+}
+
+impl<'a> AbbreviationObservation<'a> {
+    pub fn decode(operation: &str, fields: &'a [String]) -> io::Result<Self> {
+        let invalid = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid abbreviation observation",
+            )
+        };
+        let number = |s: &str| s.parse::<usize>().map_err(|_| invalid());
+        let flag = |s: &str| match s {
+            "0" => Ok(false),
+            "1" => Ok(true),
+            _ => Err(invalid()),
+        };
+        match (operation, fields) {
+            ("reset", []) => Ok(Self::Reset),
+            ("observe", [known, head]) => Ok(Self::Observe {
+                head: flag(known)?.then_some(head),
+            }),
+            ("select", [start, applied, known, head, head_start]) => Ok(Self::Select {
+                edit_start: number(start)?,
+                applied: flag(applied)?,
+                head: flag(known)?.then_some(head),
+                head_start: number(head_start)?,
+            }),
+            ("accept", [buffer, known, head, start, end, eligible, context]) => {
+                let known = flag(known)?;
+                let target = if flag(eligible)? {
+                    if !known {
+                        return Err(invalid());
+                    }
+                    Some(crate::abbreviation::CommandTarget {
+                        trigger: head.clone(),
+                        start: number(start)?,
+                        end: number(end)?,
+                        command_context: context.clone(),
+                    })
+                } else {
+                    None
+                };
+                Ok(Self::Accept {
+                    buffer,
+                    head: known.then_some(head),
+                    target,
+                })
+            }
+            _ => Err(invalid()),
+        }
+    }
+}
+
 /// Byte-length framing preserves newlines and UTF-8 in ZLE observations.
 pub fn read_abbreviation_fields(
     reader: &mut impl BufRead,
@@ -861,6 +932,40 @@ pub fn socket_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_context_contract_validates_capability_and_ranges() {
+        use super::AbbreviationObservation;
+        let mut fields = ["gs -sb", "1", "gs", "0", "2", "1", "gs -sb"].map(str::to_owned);
+        match AbbreviationObservation::decode("accept", &fields).unwrap() {
+            AbbreviationObservation::Accept {
+                target: Some(target),
+                ..
+            } => {
+                assert_eq!(target.trigger, "gs");
+                assert_eq!((target.start, target.end), (0, 2));
+            }
+            _ => panic!("missing verified target"),
+        }
+        fields[1] = "0".into();
+        assert!(AbbreviationObservation::decode("accept", &fields).is_err());
+        fields[5] = "0".into();
+        assert!(matches!(
+            AbbreviationObservation::decode("accept", &fields).unwrap(),
+            AbbreviationObservation::Accept {
+                head: None,
+                target: None,
+                ..
+            }
+        ));
+        assert!(
+            AbbreviationObservation::decode(
+                "select",
+                &["0", "yes", "1", "gs", "0"].map(str::to_owned)
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn abbreviation_fields_preserve_utf8_and_reject_bad_frames() {
