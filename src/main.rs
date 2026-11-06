@@ -288,13 +288,19 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::ExpandAbbreviation {
-            trigger,
+            buffer,
+            prebuffer,
+            token,
+            event,
             command_context,
         } => {
             let config = config::Config::load();
-            let Some(result) = zsh_autocomplete_rs::abbreviation::expand_command_abbreviation(
+            let Some(result) = zsh_autocomplete_rs::abbreviation::expand_enter_line(
                 &config,
-                &trigger,
+                &buffer,
+                &prebuffer,
+                &token,
+                &event,
                 &command_context,
             ) else {
                 process::exit(1);

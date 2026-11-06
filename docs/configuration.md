@@ -86,12 +86,16 @@ daemon reloads the file when its modification time changes.
 
 ### Optional expansion on Enter (Zsh)
 
-To expand an exact command abbreviation when accepting a line, set this Zsh
-variable (in `.zshrc` to keep it across sessions):
+To expand an exact command abbreviation when accepting a line, add this to
+`config.toml`:
 
-```zsh
-ZACRS_ABBR_EXPAND_ON_ENTER=1
+```toml
+[completion]
+expand_abbreviation_on_enter = true
 ```
+
+This replaces the former `ZACRS_ABBR_EXPAND_ON_ENTER` shell variable, which is
+no longer read. Configuration changes take effect on the next Enter.
 
 It is disabled by default. With `gs = "git status"`, typing `gs` then Enter
 rewrites the input to `git status` and executes it; `gs -sb` becomes
@@ -120,7 +124,9 @@ command word or starting a new input line clears that exemption.
 Closing the popup with Space after typing a filter without selecting a candidate
 keeps that typed command eligible for Enter expansion.
 
-The shell uses one CLI lookup per eligible Enter while this option is enabled.
+The shell sends the input and Zsh lexical tokens to Rust on Enter. Rust reads
+the setting and decides whether to edit or accept the line. This uses one CLI
+process per Enter, including when expansion is disabled.
 It reads the current configuration independently of the daemon, so it also
 works with the daemon stopped. A failed lookup accepts the original input.
 Lookup only returns literal text; shell expressions in the resulting line are

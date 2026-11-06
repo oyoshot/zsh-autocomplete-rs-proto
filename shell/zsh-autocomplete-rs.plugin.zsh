@@ -50,7 +50,8 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
-typeset -g _zacrs_enter_selected_command=""
+typeset -ga _zacrs_enter_events=()
+typeset -g _zacrs_enter_last_token=""
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
@@ -77,27 +78,26 @@ _zacrs_reset_cache() {
     _zacrs_restore_self_insert
 }
 
+# Record ZLE observations for Rust to interpret at acceptance. Argument edits
+# do not add events; token changes are retained even if the user later undoes them.
 _zacrs_reset_enter_selection() {
-    _zacrs_enter_selected_command=""
+    _zacrs_enter_events=()
+    _zacrs_enter_last_token=""
 }
 
-# Protect either an explicit popup choice or a placeholder expansion that
-# returned to editing. Record the resulting command, which may differ from
-# the abbreviation trigger.
 _zacrs_record_enter_selection() {
-    local -a _words
-    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
-    _zacrs_enter_selected_command="${_words[1]:-}"
+    _zacrs_enter_events+=("select:${2:-1}:${1:-0}:$BUFFER")
+    _zacrs_update_enter_selection
 }
 
-# Keep the prepared command while arguments are edited. Editing the
-# command itself invalidates the choice; a fresh ZLE line always resets it.
 _zacrs_update_enter_selection() {
-    [[ -n "$_zacrs_enter_selected_command" ]] || return 0
+    (( ${#_zacrs_enter_events} )) || return 0
     local -a _words
     _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
-    if [[ "${_words[1]:-}" != "$_zacrs_enter_selected_command" ]]; then
-        _zacrs_reset_enter_selection
+    local _token="${_words[1]:-}"
+    if [[ "$_token" != "$_zacrs_enter_last_token" ]]; then
+        _zacrs_enter_events+=("edit:$_token")
+        _zacrs_enter_last_token="$_token"
     fi
     return 0
 }
@@ -461,10 +461,8 @@ _zacrs_apply() {
 
     BUFFER="${new_lbuffer}${RBUFFER}"
     _zacrs_update_enter_selection
-    if [[ "$result_code" == (0|2) && -n "$result_text" \
-        && -z "${base//[[:space:]]/}" && -z "${PREBUFFER:-}" ]]; then
-        _zacrs_reset_enter_selection
-        [[ "$selection_applied" == 1 ]] && _zacrs_record_enter_selection
+    if [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+        _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
         CURSOR=$((${#base} + cursor_offset))
@@ -912,8 +910,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     local _keep_editing=0
-    if [[ "${ZACRS_ABBR_EXPAND_ON_ENTER:-0}" == 1 ]] \
-        && _zacrs_expand_command_abbreviation; then
+    if _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
             _zacrs_record_enter_selection

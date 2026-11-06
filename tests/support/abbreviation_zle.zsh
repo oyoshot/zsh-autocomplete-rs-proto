@@ -124,7 +124,7 @@ zpty -b zacrs_enter zsh -di
 wait_file "$HOME/ready" 1
 enter_line gs
 wait_file "$HOME/executed" 'gs:'
-enter_line ZACRS_ABBR_EXPAND_ON_ENTER=1
+enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"'
 enter_line 'gs -sb'
 wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'

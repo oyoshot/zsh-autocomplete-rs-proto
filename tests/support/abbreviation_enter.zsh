@@ -35,12 +35,12 @@ set_buffer() {
     cursor_offset=""
 }
 
-unset ZACRS_ABBR_EXPAND_ON_ENTER
+ZACRS_ABBR_EXPAND_ON_ENTER=1 # Legacy variables must not override TOML.
 set_buffer gs
 _zacrs_accept_line
 [[ "$BUFFER" == gs && "$accepted" == gs ]] || fail 'disabled by default'
 
-ZACRS_ABBR_EXPAND_ON_ENTER=1
+print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
 set_buffer $'  gs\t-sb "日本語 a"  '
 CURSOR=1
 _zacrs_accept_line
@@ -57,6 +57,10 @@ for input in 'gs() print hello' 'gs () print hello' 'gs( ) print hello' 'gs othe
     _zacrs_accept_line
     [[ "$BUFFER" == "$input" && "$accepted" == "$input" ]] || fail 'function declarations must not expand'
 done
+
+set_buffer 'gs>out'
+_zacrs_accept_line
+[[ "$accepted" == 'git status>out' ]] || fail 'attached redirection suffix must be preserved'
 
 # Quoted parentheses are arguments, not function-declaration syntax.
 set_buffer 'gs "()"'
@@ -99,7 +103,7 @@ for trigger in ssh connect; do
     LBUFFER="$BUFFER"
     _zacrs_accept_line
     [[ "$accepted" == 'ssh user@host' ]] || fail 'edited placeholder must execute without expanding again'
-    [[ -z "$_zacrs_enter_selected_command" ]] || fail 'completed placeholder must clear its exemption'
+    (( ${#_zacrs_enter_events} == 0 )) || fail 'completed placeholder must clear its exemption'
 done
 
 set_buffer ssh
@@ -152,6 +156,26 @@ LBUFFER="$BUFFER"
 _zacrs_accept_line
 [[ "$accepted" == gs ]] || fail 'editing the command must invalidate the earlier selection'
 
+for intermediate in g gsx; do
+    set_buffer gs
+    _zacrs_apply 2 2 'gs ' 0 0 '' 1
+    BUFFER="$intermediate"
+    _zacrs_update_enter_selection
+    BUFFER='gs '
+    LBUFFER="$BUFFER"
+    _zacrs_accept_line
+    [[ "$accepted" == 'git status ' ]] || fail 'retyping the selected command must not restore its exemption'
+done
+
+set_buffer gs
+_zacrs_apply 2 2 'gs ' 0 0 '' 1
+LBUFFER='gs old'
+BUFFER="$LBUFFER"
+_zacrs_apply 3 2 'new ' 0 0 '' 1
+LBUFFER="$BUFFER"
+_zacrs_accept_line
+[[ "$accepted" == 'gs new ' ]] || fail 'selecting an argument must retain an earlier command choice'
+
 set_buffer 'gs old'
 _zacrs_apply 3 2 'new ' 0 0 '' 1
 LBUFFER="$BUFFER"
@@ -180,5 +204,11 @@ ZACRS_BIN="$actual_binary"
 set_buffer gs
 _zacrs_accept_line
 [[ "$accepted" == 'git status' ]] || fail 'expansion must work without a daemon'
+
+config_text=$(<"$XDG_CONFIG_HOME/zacrs/config.toml")
+print -r -- "${config_text/expand_abbreviation_on_enter = true/expand_abbreviation_on_enter = false}" > "$XDG_CONFIG_HOME/zacrs/config.toml"
+set_buffer gs
+_zacrs_accept_line
+[[ "$accepted" == gs ]] || fail 'TOML changes must disable expansion on the next Enter'
 
 print -r -- 'ok: Enter abbreviation expansion'

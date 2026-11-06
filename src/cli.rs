@@ -9,10 +9,16 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Resolve a literal, exact command-position abbreviation (no shell evaluation)
+    /// Plan an Enter edit from ZLE input and lexical observations (no evaluation)
     ExpandAbbreviation {
         #[arg(long, allow_hyphen_values = true)]
-        trigger: String,
+        buffer: String,
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        prebuffer: String,
+        #[arg(long, allow_hyphen_values = true)]
+        token: Vec<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        event: Vec<String>,
         #[arg(long, allow_hyphen_values = true)]
         command_context: String,
     },
