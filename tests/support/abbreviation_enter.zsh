@@ -175,6 +175,17 @@ LBUFFER="$BUFFER"
 _zacrs_accept_line
 [[ "$accepted" == 'gs new ' ]] || fail 'selecting an argument must retain an earlier command choice'
 
+for suffix in '; echo hello' '| cat' '|| echo fallback' '& echo done' '&& echo done' '&! echo done' '&| echo done' '() print hello'; do
+    set_buffer gs
+    _zacrs_apply 2 2 'gs ' 0 0 '' 1
+    BUFFER="gs$suffix"
+    _zacrs_update_enter_selection
+    BUFFER=gs
+    LBUFFER="$BUFFER"
+    _zacrs_accept_line
+    [[ "$accepted" == gs ]] || fail 'separator edits must preserve the chosen command'
+done
+
 set_buffer 'gs old'
 _zacrs_apply 3 2 'new ' 0 0 '' 1
 LBUFFER="$BUFFER"
@@ -197,6 +208,22 @@ set_buffer gs
 _zacrs_daemon_available=0
 _zacrs_accept_line
 [[ "$accepted" == gs ]] || fail 'daemon failure must keep the original command'
+# A fallback choice is not recorded while transport is down. Reconnecting to
+# the same daemon must not reactivate its older, unprotected editing session.
+LBUFFER=gs
+_zacrs_apply 2 2 'gs ' 0 0 '' 1
+_zacrs_daemon_available=0
+_zacrs_daemon_next_retry=0
+_zacrs_maybe_retry_daemon
+(( _zacrs_daemon_available == 1 )) || fail 'daemon retry did not reconnect'
+(( _zacrs_enter_enabled == -1 )) || fail 'daemon retry cleared the failure latch'
+LBUFFER="$BUFFER"
+_zacrs_accept_line
+[[ "$accepted" == 'gs ' ]] || fail 'reconnection must preserve a fallback selection'
+set_buffer gs
+_zacrs_accept_line
+[[ "$accepted" == gs ]] || fail 'new lines must not clear the failure latch'
+
 
 source "$ZACRS_PLUGIN"
 set_buffer gs

@@ -112,9 +112,9 @@ _zacrs_command_context() {
 _zacrs_abbreviation_request() {
     local operation="$1" fd item
     shift
-    (( _zacrs_enter_enabled && _zacrs_daemon_available )) || { _zacrs_enter_enabled=0; return 1; }
+    (( _zacrs_enter_enabled > 0 && _zacrs_daemon_available )) || { _zacrs_enter_enabled=-1; return 1; }
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
-        _zacrs_enter_enabled=0
+        _zacrs_enter_enabled=-1
         return 1
     fi
     fd=$REPLY
@@ -125,9 +125,9 @@ _zacrs_abbreviation_request() {
             print -r -u $fd -- "${#item}"
             print -r -u $fd -- "$item"
         done
-        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_enter_enabled=0; return 1; }
-        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_enter_enabled=0; return 1; }
-        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=0; return 1; }
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_enter_enabled=-1; return 1; }
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=-1; return 1; }
     } always {
         exec {fd}<&-
     }

@@ -25,7 +25,7 @@ pub fn observe_selection(state: &str, event: &str) -> Option<String> {
             let suffix = &buffer[leading + word.len()..];
             let boundary = suffix.is_empty()
                 || suffix.starts_with(char::is_whitespace)
-                || suffix.starts_with(['<', '>']);
+                || suffix.starts_with(['<', '>', ';', '|', '&', '(', ')']);
             boundary && selected.as_deref() == Some(word)
         });
         if !unchanged {
@@ -243,6 +243,35 @@ mod tests {
             assert!(
                 enter("gs new", "", &["gs", "new"], &events).is_some(),
                 "{events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_word_survives_separator_edits_but_not_word_edits() {
+        for suffix in [
+            "; echo hello",
+            "| cat",
+            "|| echo fallback",
+            "& echo done",
+            "&& echo done",
+            "&! echo done",
+            "&| echo done",
+            "() print hello",
+            ">out",
+        ] {
+            let state = observe_selection("gs", &format!("buffer:gs{suffix}")).unwrap();
+            assert_eq!(
+                observe_selection(&state, "buffer:gs"),
+                Some("gs".into()),
+                "{suffix}"
+            );
+        }
+        for changed in ["gsx", "gs'hello'", "gs\\x"] {
+            let state = observe_selection("gs", &format!("buffer:{changed}")).unwrap_or_default();
+            assert!(
+                observe_selection(&state, "buffer:gs").is_none(),
+                "{changed}"
             );
         }
     }
