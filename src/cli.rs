@@ -9,6 +9,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Test whether Enter expansion is enabled in the current configuration
+    AbbreviationEnabled,
+    /// Update opaque selection state from a ZLE observation
+    AbbreviationState {
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        state: String,
+        #[arg(long, allow_hyphen_values = true)]
+        event: String,
+    },
     /// Plan an Enter edit from ZLE input and lexical observations (no evaluation)
     ExpandAbbreviation {
         #[arg(long, allow_hyphen_values = true)]
@@ -17,8 +26,8 @@ pub enum Command {
         prebuffer: String,
         #[arg(long, allow_hyphen_values = true)]
         token: Vec<String>,
-        #[arg(long, allow_hyphen_values = true)]
-        event: Vec<String>,
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        selection: String,
         #[arg(long, allow_hyphen_values = true)]
         command_context: String,
     },

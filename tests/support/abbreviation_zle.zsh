@@ -9,6 +9,7 @@ unsetopt MONITOR
 stty rows 24 cols 100
 autoload -Uz compinit
 compinit -i -d "$HOME/.zcompdump"
+_test_load_plugin() {
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
     zmodload() {
         [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
@@ -42,6 +43,8 @@ _zacrs_line_pre_redraw() {
     _zacrs_update_enter_selection
     print -r -- "$BUFFER" > "$HOME/redrawn"
 }
+}
+_test_load_plugin
 git() { print -r -- "git:$*" > "$HOME/executed"; }
 gs() { print -r -- "gs:$*" > "$HOME/executed"; }
 typeset -gi _test_ssh_count=0
@@ -124,7 +127,7 @@ zpty -b zacrs_enter zsh -di
 wait_file "$HOME/ready" 1
 enter_line gs
 wait_file "$HOME/executed" 'gs:'
-enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"'
+enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"; _test_load_plugin'
 enter_line 'gs -sb'
 wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'

@@ -287,11 +287,25 @@ fn run_clear(popup_row: u16, popup_height: u16, cursor_row: u16) -> io::Result<i
 fn main() {
     let cli = Cli::parse();
     match cli.command {
+        Command::AbbreviationEnabled => {
+            process::exit(if config::Config::load().expand_abbreviation_on_enter {
+                0
+            } else {
+                1
+            });
+        }
+        Command::AbbreviationState { state, event } => {
+            if let Some(state) =
+                zsh_autocomplete_rs::abbreviation::observe_selection(&state, &event)
+            {
+                println!("{state}");
+            }
+        }
         Command::ExpandAbbreviation {
             buffer,
             prebuffer,
             token,
-            event,
+            selection,
             command_context,
         } => {
             let config = config::Config::load();
@@ -300,7 +314,7 @@ fn main() {
                 &buffer,
                 &prebuffer,
                 &token,
-                &event,
+                &selection,
                 &command_context,
             ) else {
                 process::exit(1);

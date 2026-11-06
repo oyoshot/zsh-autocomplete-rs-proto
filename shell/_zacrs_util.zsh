@@ -114,9 +114,8 @@ _zacrs_expand_command_abbreviation() {
     _tokens=( ${(z)BUFFER} ) 2>/dev/null || return 1
     local _context="${(j: :)${(@Q)_tokens}}" _item
     [[ "$BUFFER" == *[[:space:]] ]] && _context+=" "
-    _args=(expand-abbreviation --buffer "$BUFFER" --prebuffer "${PREBUFFER:-}" --command-context "$_context")
+    _args=(expand-abbreviation --buffer "$BUFFER" --prebuffer "${PREBUFFER:-}" --command-context "$_context" --selection "$_zacrs_enter_state")
     for _item in "${_tokens[@]}"; do _args+=(--token "$_item"); done
-    for _item in "${_zacrs_enter_events[@]}"; do _args+=(--event "$_item"); done
     local _response
     _response=$("$ZACRS_BIN" "${_args[@]}" 2>/dev/null) || return 1
     local -a _lines=( "${(@f)_response}" )

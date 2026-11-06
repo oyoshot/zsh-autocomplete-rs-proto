@@ -95,7 +95,9 @@ expand_abbreviation_on_enter = true
 ```
 
 This replaces the former `ZACRS_ABBR_EXPAND_ON_ENTER` shell variable, which is
-no longer read. Configuration changes take effect on the next Enter.
+no longer read. Enable it before loading the plugin, or reload the plugin after
+changing this setting. The shell reads the setting once at initialization;
+when disabled, Enter does not tokenize input, launch a helper, or track selections.
 
 It is disabled by default. With `gs = "git status"`, typing `gs` then Enter
 rewrites the input to `git status` and executes it; `gs -sb` becomes
@@ -124,9 +126,10 @@ command word or starting a new input line clears that exemption.
 Closing the popup with Space after typing a filter without selecting a candidate
 keeps that typed command eligible for Enter expansion.
 
-The shell sends the input and Zsh lexical tokens to Rust on Enter. Rust reads
-the setting and decides whether to edit or accept the line. This uses one CLI
-process per Enter, including when expansion is disabled.
+When enabled, the shell sends input and Zsh lexical tokens to Rust on Enter.
+Rust decides whether to edit or accept the line. Rust also updates a bounded,
+opaque selection state on popup application or command-word changes; argument
+edits do not launch a state helper. Zsh holds no growing edit history.
 It reads the current configuration independently of the daemon, so it also
 works with the daemon stopped. A failed lookup accepts the original input.
 Lookup only returns literal text; shell expressions in the resulting line are

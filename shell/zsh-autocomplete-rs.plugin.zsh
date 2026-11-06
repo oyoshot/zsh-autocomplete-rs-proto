@@ -50,7 +50,9 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
-typeset -ga _zacrs_enter_events=()
+typeset -gi _zacrs_enter_enabled=0
+"$ZACRS_BIN" abbreviation-enabled >/dev/null 2>&1 && _zacrs_enter_enabled=1
+typeset -g _zacrs_enter_state=""
 typeset -g _zacrs_enter_last_token=""
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
@@ -78,25 +80,30 @@ _zacrs_reset_cache() {
     _zacrs_restore_self_insert
 }
 
-# Record ZLE observations for Rust to interpret at acceptance. Argument edits
-# do not add events; token changes are retained even if the user later undoes them.
+# Rust owns the selection state. Zsh keeps its opaque value and deduplicates
+# lexical observations, so argument edits do not launch a helper process.
 _zacrs_reset_enter_selection() {
-    _zacrs_enter_events=()
+    _zacrs_enter_state=""
     _zacrs_enter_last_token=""
 }
 
+_zacrs_observe_enter_selection() {
+    _zacrs_enter_state=$("$ZACRS_BIN" abbreviation-state --state "$_zacrs_enter_state" --event "$1" 2>/dev/null) || _zacrs_enter_state="!"
+}
+
 _zacrs_record_enter_selection() {
-    _zacrs_enter_events+=("select:${2:-1}:${1:-0}:$BUFFER")
+    (( _zacrs_enter_enabled )) || return 0
+    _zacrs_observe_enter_selection "select:${2:-1}:${1:-0}:$BUFFER"
     _zacrs_update_enter_selection
 }
 
 _zacrs_update_enter_selection() {
-    (( ${#_zacrs_enter_events} )) || return 0
+    [[ -n "$_zacrs_enter_state" ]] || return 0
     local -a _words
     _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
     local _token="${_words[1]:-}"
     if [[ "$_token" != "$_zacrs_enter_last_token" ]]; then
-        _zacrs_enter_events+=("edit:$_token")
+        _zacrs_observe_enter_selection "edit:$_token"
         _zacrs_enter_last_token="$_token"
     fi
     return 0
@@ -460,8 +467,8 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    _zacrs_update_enter_selection
-    if [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+    (( _zacrs_enter_enabled )) && _zacrs_update_enter_selection
+    if (( _zacrs_enter_enabled )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
         _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
@@ -727,7 +734,7 @@ _zacrs_complete_popup() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
-    _zacrs_update_enter_selection
+    (( _zacrs_enter_enabled )) && _zacrs_update_enter_selection
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
@@ -910,7 +917,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     local _keep_editing=0
-    if _zacrs_expand_command_abbreviation; then
+    if (( _zacrs_enter_enabled )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
             _zacrs_record_enter_selection
@@ -924,13 +931,13 @@ _zacrs_accept_line() {
         zle -R
         return
     fi
-    _zacrs_reset_enter_selection
+    (( _zacrs_enter_enabled )) && _zacrs_reset_enter_selection
     zle .accept-line
 }
 zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
-    _zacrs_reset_enter_selection
+    (( _zacrs_enter_enabled )) && _zacrs_reset_enter_selection
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
     _zacrs_reset_cache
@@ -1004,7 +1011,10 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-add-zle-hook-widget line-init _zacrs_reset_enter_selection
+add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+if (( _zacrs_enter_enabled )); then
+    add-zle-hook-widget line-init _zacrs_reset_enter_selection
+fi
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.

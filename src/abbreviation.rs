@@ -12,30 +12,29 @@ fn bare_command(buffer: &str) -> Option<(&str, usize)> {
     Some((word, buffer.len() - trimmed.len()))
 }
 
-// Events contain observations, not shell-side policy. Replay command changes so
-// deleting a selected command and typing it again does not restore its exemption.
-fn selected_command(events: &[String]) -> Option<String> {
-    let mut selected = None;
-    for event in events {
-        if let Some(word) = event.strip_prefix("edit:") {
-            if selected.as_deref() != Some(word) {
-                selected = None;
-            }
-        } else if let Some(event) = event.strip_prefix("select:") {
-            let mut fields = event.splitn(3, ':');
-            let applied = fields.next() == Some("1");
-            let start = fields.next()?.parse::<usize>().ok()?;
-            let buffer = fields.next()?;
-            let Some((word, leading)) = bare_command(buffer) else {
-                selected = None;
-                continue;
-            };
-            if selected.as_deref() != Some(word) {
-                selected = None;
-            }
-            if start <= buffer[..leading].chars().count() {
-                selected = applied.then(|| word.to_owned());
-            }
+/// Update the opaque selection state from a single ZLE observation.
+/// Offsets in selection observations count characters, as ZLE does.
+/// `!` means observation failed: preserve input until the next ZLE line reset.
+pub fn observe_selection(state: &str, event: &str) -> Option<String> {
+    if state == "!" {
+        return Some(state.to_owned());
+    }
+    let mut selected = (!state.is_empty()).then(|| state.to_owned());
+    if let Some(word) = event.strip_prefix("edit:") {
+        if selected.as_deref() != Some(word) {
+            selected = None;
+        }
+    } else if let Some(event) = event.strip_prefix("select:") {
+        let mut fields = event.splitn(3, ':');
+        let applied = fields.next() == Some("1");
+        let start = fields.next()?.parse::<usize>().ok()?;
+        let buffer = fields.next()?;
+        let (word, leading) = bare_command(buffer)?;
+        if selected.as_deref() != Some(word) {
+            selected = None;
+        }
+        if start <= buffer[..leading].chars().count() {
+            selected = applied.then(|| word.to_owned());
         }
     }
     selected
@@ -48,15 +47,15 @@ pub fn expand_enter_line(
     buffer: &str,
     prebuffer: &str,
     tokens: &[String],
-    events: &[String],
+    selection: &str,
     command_context: &str,
 ) -> Option<TextCompleteResult> {
-    if !config.expand_abbreviation_on_enter || !prebuffer.is_empty() {
+    if !config.expand_abbreviation_on_enter || !prebuffer.is_empty() || selection == "!" {
         return None;
     }
     let (word, leading) = bare_command(buffer)?;
     if tokens.first().map(String::as_str) != Some(word)
-        || selected_command(events).as_deref() == Some(word)
+        || selection == word
         || matches!(
             word,
             "if" | "then"
@@ -165,7 +164,9 @@ mod tests {
             buffer,
             prebuffer,
             &tokens.iter().map(|s| (*s).into()).collect::<Vec<_>>(),
-            &events.iter().map(|s| (*s).into()).collect::<Vec<_>>(),
+            &events.iter().fold(String::new(), |state, event| {
+                observe_selection(&state, event).unwrap_or_default()
+            }),
             buffer,
         )
     }
@@ -239,12 +240,20 @@ mod tests {
     fn enter_default_is_disabled_and_cursor_offset_counts_characters() {
         let mut config = config("git {{cursor}}", AbbreviationWhen::default());
         let tokens = vec!["gs".into()];
-        assert!(expand_enter_line(&config, "gs", "", &tokens, &[], "gs").is_none());
+        assert!(expand_enter_line(&config, "gs", "", &tokens, "", "gs").is_none());
         config.expand_abbreviation_on_enter = true;
-        let result = expand_enter_line(&config, "\u{3000}gs", "", &tokens, &[], "gs").unwrap();
+        let result = expand_enter_line(&config, "\u{3000}gs", "", &tokens, "", "gs").unwrap();
         assert_eq!(result.text, "\u{3000}git ");
         assert_eq!(result.cursor_offset, Some(5));
         assert!(!result.execute);
+    }
+
+    #[test]
+    fn failed_observation_disables_rewriting_until_line_reset() {
+        assert_eq!(observe_selection("!", "edit:gs"), Some("!".into()));
+        let mut config = config("git status", AbbreviationWhen::default());
+        config.expand_abbreviation_on_enter = true;
+        assert!(expand_enter_line(&config, "gs", "", &["gs".into()], "!", "gs").is_none());
     }
 
     fn config(expansion: &str, when: AbbreviationWhen) -> Config {

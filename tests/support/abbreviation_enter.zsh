@@ -36,11 +36,21 @@ set_buffer() {
 }
 
 ZACRS_ABBR_EXPAND_ON_ENTER=1 # Legacy variables must not override TOML.
+_test_unexpected_cli() { print -r -- called >> "$HOME/unexpected-cli"; return 1; }
+ZACRS_BIN=_test_unexpected_cli
 set_buffer gs
 _zacrs_accept_line
 [[ "$BUFFER" == gs && "$accepted" == gs ]] || fail 'disabled by default'
+[[ ! -e "$HOME/unexpected-cli" ]] || fail 'disabled Enter must not start a helper'
+ZACRS_BIN="$actual_binary"
 
 print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
+zmodload() {
+    [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
+    builtin zmodload "$@"
+}
+source "$ZACRS_PLUGIN"
+unfunction zmodload
 set_buffer $'  gs\t-sb "日本語 a"  '
 CURSOR=1
 _zacrs_accept_line
@@ -103,7 +113,7 @@ for trigger in ssh connect; do
     LBUFFER="$BUFFER"
     _zacrs_accept_line
     [[ "$accepted" == 'ssh user@host' ]] || fail 'edited placeholder must execute without expanding again'
-    (( ${#_zacrs_enter_events} == 0 )) || fail 'completed placeholder must clear its exemption'
+    [[ -z "$_zacrs_enter_state" ]] || fail 'completed placeholder must clear its exemption'
 done
 
 set_buffer ssh
@@ -200,6 +210,14 @@ _zacrs_accept_line
 [[ "$accepted" == gs ]] || fail 'lookup failure must keep the original command'
 
 ZACRS_BIN="$actual_binary"
+set_buffer gs
+ZACRS_BIN=false
+_zacrs_apply 2 2 'gs ' 0 0 '' 1
+ZACRS_BIN="$actual_binary"
+LBUFFER="$BUFFER"
+_zacrs_accept_line
+[[ "$accepted" == 'gs ' ]] || fail 'failed state update must preserve an explicit choice'
+
 [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'this test must not start a daemon'
 set_buffer gs
 _zacrs_accept_line
