@@ -4,7 +4,7 @@ TRAPZERR() { print -u2 -r -- "unexpected failure: ${funcfiletrace[*]}"; }
 # Exercise the actual daemon and shell adapter, observing acceptance without
 # executing commands from the test. Real ZLE keyboard input is checked separately.
 zle() {
-    if [[ "$1" == _zacrs_abbreviation_context || ( "$1" == (-C|-D) && "$2" == _zacrs_abbreviation_context ) ]]; then
+    if [[ ( "$1" == _zacrs_compsys && ${_zacrs_abbr_context_only:-0} == 1 ) || ( "$1" == (-C|-D) && "$2" == _zacrs_compsys ) ]]; then
         builtin zle "$@"
     elif [[ "$1" == .accept-line ]]; then
         accepted="$BUFFER"
@@ -44,6 +44,9 @@ print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONF
 source "$ZACRS_PLUGIN"
 # Count actual adapter requests. Redraw and line-init are driven separately in
 # the real ZLE test; acceptance itself must not observe or reset a second time.
+functions[_test_saved_compinit]=$functions[_zacrs_ensure_compinit]
+_zacrs_ensure_compinit() { fail 'context-only query must not initialize compsys or gather candidates'; }
+_zacrs_captured=('context-query-must-preserve-candidates')
 typeset -a test_requests=()
 functions[_test_original_abbreviation_request]=$functions[_zacrs_abbreviation_request]
 _zacrs_abbreviation_request() {
@@ -61,6 +64,9 @@ _zacrs_apply 2 2 'gs ' 0 0 '' 1
 CURSOR=${#BUFFER}
 _zacrs_accept_line
 [[ "${(j:,:)test_requests}" == select,accept && "$accepted" == 'gs ' ]] || fail 'selected Enter must not send a duplicate observation or reset'
+[[ "$_zacrs_captured[1]" == context-query-must-preserve-candidates ]] || fail 'context query changed existing completion state'
+functions[_zacrs_ensure_compinit]=$functions[_test_saved_compinit]
+unfunction _test_saved_compinit
 functions[_zacrs_abbreviation_request]=$functions[_test_original_abbreviation_request]
 unfunction _test_original_abbreviation_request
 set_buffer $'  gs\t-sb "日本語 a"  '
@@ -186,11 +192,10 @@ for intermediate in g gsx; do
     set_buffer gs
     _zacrs_apply 2 2 'gs ' 0 0 '' 1
     BUFFER="$intermediate"
-    _zacrs_update_enter_selection
     BUFFER='gs '
     CURSOR=${#BUFFER}
     _zacrs_accept_line
-    [[ "$accepted" == 'git status ' ]] || fail 'retyping the selected command must not restore its exemption'
+    [[ "$accepted" == 'gs ' ]] || fail 'the same selected word must remain protected for this input line'
 done
 
 set_buffer gs
@@ -206,7 +211,6 @@ for suffix in '; echo hello' '| cat' '|| echo fallback' '& echo done' '&& echo d
     set_buffer gs
     _zacrs_apply 2 2 'gs ' 0 0 '' 1
     BUFFER="gs$suffix"
-    _zacrs_update_enter_selection
     BUFFER=gs
     CURSOR=${#BUFFER}
     _zacrs_accept_line
@@ -222,6 +226,7 @@ _zacrs_accept_line
 set_buffer gs
 _zacrs_apply 2 2 'gs ' 0 0 '' 1
 _zacrs_send_break
+_zacrs_reset_enter_selection # Real ZLE runs line-init after .send-break.
 BUFFER=gs
 CURSOR=${#BUFFER}
 _zacrs_accept_line

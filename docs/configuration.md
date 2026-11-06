@@ -122,20 +122,27 @@ executes that prepared command without expanding it again, even if its name is
 also an abbreviation trigger (for example, `ssh = "ssh user@{{cursor}}"`).
 Expansion happens once per Enter, and a candidate
 explicitly selected in the popup is accepted without a second expansion.
-This also applies after selecting with Space and editing arguments; editing the
-command word or starting a new input line clears that exemption.
+This also applies after selecting with Space and editing arguments. The choice
+is compared with the command word when selecting another candidate or accepting
+the line. Returning to the same selected word during the same input line keeps
+its protection; intermediate keystrokes are not tracked. A different final word
+or a new input line clears the exemption.
 Closing the popup with Space after typing a filter without selecting a candidate
 keeps that typed command eligible for Enter expansion.
 
 When enabled, the daemon owns the editing session and selection protection.
-Zsh forwards buffer observations and applies the edit returned on Enter; it holds
-no abbreviation selection state or edit journal. These requests use the existing
-Unix socket and launch no helper processes. The Zsh adapter uses a native completion widget to verify the target and supplies
+Zsh sends facts only when applying a candidate or accepting a line, and resets the
+session when ZLE starts a new input line. It holds no abbreviation selection state
+or edit journal and sends no per-redraw abbreviation observations. These requests
+use the existing Unix socket and launch no helper processes. The Zsh adapter uses
+the existing completion widget in context-only mode to verify the target and supplies
 its literal word and character range. Rust validates the range and performs
 exact lookup and editing without parsing shell syntax. This widget runs only
-when Enter expansion is enabled, calls no candidate providers, and restores the
-buffer and cursor after querying. Other shell adapters must establish their own
-native context capability; there is no shared Zsh grammar heuristic.
+when Enter expansion is enabled and calls no candidate providers. No extra
+completion widget is registered and no deliberate cursor repositioning is needed;
+if the native query changes the editor state, the adapter restores it. Other
+shell adapters must establish their own native context capability; there is no
+shared Zsh grammar heuristic.
 
 Enter expansion requires a compatible running daemon. If communication fails,
 the original input is accepted and expansion is disabled until the plugin is

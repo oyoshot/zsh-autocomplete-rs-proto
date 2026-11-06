@@ -95,15 +95,6 @@ _zacrs_record_enter_selection() {
     return 0
 }
 
-_zacrs_update_enter_selection() {
-    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    (( _zacrs_enter_enabled > 0 )) || return 0
-    local -a reply _zacrs_abbr_words
-    _zacrs_abbreviation_words
-    _zacrs_abbreviation_request observe "$reply[1]" "$reply[2]" || true
-    return 0
-}
-
 _zacrs_restore_self_insert() {
     if (( _zacrs_self_insert_wrapped )); then
         zle -A _zacrs_saved_self_insert self-insert
@@ -198,7 +189,7 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
     }
     # Apply configuration only during plugin initialization. Routine daemon
     # retries return handshake metadata without changing the failure latch.
-    if _zacrs_ensure_daemon && [[ "$REPLY" == OK* && " $REPLY " == *' enter_expansion=1 '* && " $REPLY " == *' edit_context=1 '* ]]; then
+    if _zacrs_ensure_daemon && [[ "$REPLY" == OK* && " $REPLY " == *' enter_expansion=1 '* && " $REPLY " == *' edit_context=2 '* ]]; then
         _zacrs_enter_enabled=1
     fi
 fi
@@ -470,12 +461,8 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    if (( _zacrs_enter_enabled > 0 )); then
-        if [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
-            _zacrs_record_enter_selection ${#base} "$selection_applied"
-        else
-            _zacrs_update_enter_selection
-        fi
+    if (( _zacrs_enter_enabled > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+        _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
         CURSOR=$((${#base} + cursor_offset))
@@ -740,7 +727,6 @@ _zacrs_complete_popup() {
 # === Auto-trigger via line-pre-redraw hook ===
 
 _zacrs_line_pre_redraw() {
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_update_enter_selection
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
@@ -942,7 +928,6 @@ _zacrs_accept_line() {
 zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_reset_enter_selection
     _zacrs_clear_popup
     _zacrs_prev_lbuffer=""
     _zacrs_reset_cache
@@ -1019,7 +1004,6 @@ autoload -Uz add-zle-hook-widget
 add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
-    zle -C _zacrs_abbreviation_context complete-word _zacrs_abbreviation_context_func
     add-zle-hook-widget line-init _zacrs_reset_enter_selection
 fi
 add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw

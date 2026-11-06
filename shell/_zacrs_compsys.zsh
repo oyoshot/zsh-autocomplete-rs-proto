@@ -106,6 +106,12 @@ _zacrs_path_candidate_kind() {
 }
 
 _zacrs_compsys_func() {
+    # Reuse the native completion widget without running candidate providers,
+    # initializing compsys, or mutating its captured-candidate state.
+    if (( ${_zacrs_abbr_context_only:-0} )); then
+        _zacrs_abbreviation_context_func
+        return 0
+    fi
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
     typeset -gi _zacrs_ctx_valid=0

@@ -39,8 +39,7 @@ _zacrs_apply() {
     print -r -- "$BUFFER" > "$HOME/applied"
 }
 _zacrs_line_pre_redraw() {
-    # Keep selection tracking active without opening an unrelated auto popup.
-    _zacrs_update_enter_selection
+    # Avoid unrelated auto popups while observing real ZLE readiness.
     print -r -- "$BUFFER" > "$HOME/redrawn"
 }
 }
@@ -209,6 +208,27 @@ for trigger in gs zacrs_next; do
 done
 enter_line gs
 wait_file "$HOME/executed" 'git:status'
+
+# Both terminal interruption and the send-break widget begin a fresh ZLE line.
+# The sole line-init notification must clear a previously selected native word.
+for abort_key in $'\x03' $'\x07'; do
+    : > "$HOME/editor"
+    : > "$HOME/applied"
+    : > "$HOME/redrawn"
+    zpty -w -n zacrs_enter $'gs\x19'
+    wait_file "$HOME/editor" gs
+    pty_output=''
+    zpty -w -n zacrs_enter $'\t'
+    wait_popup gs
+    zpty -w -n zacrs_enter ' '
+    wait_file "$HOME/applied" 'gs '
+    wait_file "$HOME/redrawn" 'gs '
+    next_ready=$(( $(<"$HOME/ready") + 1 ))
+    zpty -w -n zacrs_enter "$abort_key"
+    wait_file "$HOME/ready" "$next_ready"
+    enter_line gs
+    wait_file "$HOME/executed" 'git:status'
+done
 
 enter_line 'gs() print hello'
 wait_file "$HOME/last-command" 'gs() print hello'

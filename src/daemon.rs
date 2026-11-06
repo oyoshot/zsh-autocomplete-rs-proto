@@ -442,7 +442,6 @@ impl DaemonServer {
         // Unknown sessions (restart or eviction) cannot reinterpret a prior choice.
         let session = self.abbreviation_sessions.get_mut(key)?;
         match event {
-            Event::Observe { head } => session.observe(head),
             Event::Select {
                 edit_start,
                 applied,
@@ -1065,7 +1064,7 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=1",
+                    "OK enter_expansion={} edit_context=2",
                     u8::from(self.config.expand_abbreviation_on_enter)
                 );
                 let _ = writer.flush();
@@ -2158,7 +2157,7 @@ mod tests {
                 head_start: 0,
             },
         );
-        server.abbreviation_event("one", Event::Observe { head: Some("gs") });
+
         assert!(server.abbreviation_event("one", accept()).is_none());
         assert_eq!(
             server.abbreviation_event("two", accept()).unwrap().text,
@@ -2174,7 +2173,15 @@ mod tests {
                 head_start: 0,
             },
         );
-        server.abbreviation_event("one", Event::Observe { head: Some("gsx") });
+        server.abbreviation_event(
+            "one",
+            Event::Select {
+                edit_start: 4,
+                applied: true,
+                head: Some("gsx"),
+                head_start: 0,
+            },
+        );
         assert!(server.abbreviation_event("one", accept()).is_some());
         assert!(server.abbreviation_event("one", accept()).is_none());
         for n in 0..140 {

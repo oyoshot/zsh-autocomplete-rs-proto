@@ -150,14 +150,20 @@ _zacrs_abbreviation_words() {
 _zacrs_abbreviation_context_func() {
     compstate[insert]=''
     compstate[list]=''
-    [[ "${compstate[context]}" == command && -z "${compstate[quote]:-}${QIPREFIX}${QISUFFIX}" ]] || return 0
-    (( CURRENT == 1 && ${#words} == ${#_zacrs_abbr_words} )) || return 0
+    [[ "${compstate[context]}" == command ]] || return 0
+    local -a native_words=( "${words[@]}" )
+    # Zsh adds an empty current word at an insertion point between words.
+    # Remove that native cursor marker, not a quoted empty argument.
+    if (( ${#native_words} == ${#_zacrs_abbr_words} + 1 )) && [[ -z "${native_words[CURRENT]:-}" ]]; then
+        native_words[CURRENT]=()
+    fi
+    (( ${#native_words} == ${#_zacrs_abbr_words} )) || return 0
     local head="$reply[2]"
-    [[ -n "$head" && "$PREFIX$SUFFIX" == "$head" ]] || return 0
+    [[ -n "$head" && "${(Q)head}" == "$head" ]] || return 0
     (( ${reswords[(Ie)$head]} == 0 )) || return 0
     local -i i
-    for ((i=1; i<=${#words}; i++)); do
-        [[ "$words[i]" == "${_zacrs_abbr_words[i]}" ]] || return 0
+    for ((i=1; i<=${#native_words}; i++)); do
+        [[ "$native_words[i]" == "${_zacrs_abbr_words[i]}" ]] || return 0
     done
     _zacrs_abbr_valid=1
 }
@@ -165,15 +171,14 @@ _zacrs_abbreviation_context_func() {
 _zacrs_expand_command_abbreviation() {
     local -a reply _zacrs_abbr_words
     _zacrs_abbreviation_words
-    local -i _zacrs_abbr_valid=0
+    local -i _zacrs_abbr_valid=0 _zacrs_abbr_context_only=1
     local original_buffer="$BUFFER" original_cursor=$CURSOR
     if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
         {
-            CURSOR=$reply[4]
-            zle _zacrs_abbreviation_context 2>/dev/null || true
+            zle _zacrs_compsys 2>/dev/null || true
         } always {
-            BUFFER="$original_buffer"
-            CURSOR=$original_cursor
+            [[ "$BUFFER" == "$original_buffer" ]] || BUFFER="$original_buffer"
+            (( CURSOR == original_cursor )) || CURSOR=$original_cursor
         }
     fi
     local context="${(j: :)${(@Q)_zacrs_abbr_words}}"

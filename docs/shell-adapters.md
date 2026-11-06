@@ -12,12 +12,16 @@ Unavailable context means no edit. An unknown word identity invalidates selectio
 tracking for the current editing session; it cannot silently restore protection
 after later edits. A fresh line starts a fresh session.
 
-Zsh uses its native lexer for word identity and a native completion widget for
-target context. The widget compares the parser's command words with the complete
-lexical input and rejects quoted words and native reserved words. It never calls
-`_main_complete` or candidate providers. The adapter restores `BUFFER` and `CURSOR`
-after this query. Redirections and any other context this query cannot establish
-are currently unsupported for Enter expansion. Function declarations and command
+Zsh uses its native lexer for word identity and reuses its existing completion
+widget in context-only mode for target context at the current cursor position.
+The mode returns before candidate state initialization, `compinit`, or candidate
+providers. It compares the parser's command words with the complete lexical input
+and rejects quoted command words and native reserved words. Zsh's synthetic empty
+current word at a whitespace insertion point is excluded from this comparison.
+No extra completion widget or deliberate cursor repositioning is needed. The
+adapter restores `BUFFER` and `CURSOR` only if the native query changed them.
+Redirections and any other context this query cannot establish are currently
+unsupported for Enter expansion. Function declarations and command
 lists do not pass the complete-word-coverage check. Continuation prompts never
 offer targets. These checks belong to the Zsh adapter, not to the shared engine.
 
@@ -27,7 +31,7 @@ establish that capability. Passing a different shell's raw tokens into a common
 reserved-word or operator list is not supported. The portable candidate and edit
 model continues to work independently of optional Enter expansion.
 
-The daemon advertises `edit_context=1` in the startup handshake. The Zsh adapter
+The daemon advertises `edit_context=2` in the startup handshake. The Zsh adapter
 activates Enter integration only when the configuration opt-in and this protocol
 capability are both present. Its framed observations carry these shell-neutral
 facts:
@@ -35,13 +39,16 @@ facts:
 | Operation | Fields |
 | --- | --- |
 | `reset` | No fields |
-| `observe` | Word identity known (`0`/`1`), opaque native word identity |
 | `select` | Edit start, selection applied (`0`/`1`), identity known, word identity, word start |
 | `accept` | Buffer, identity known, word identity, word start, word end, verified target available (`0`/`1`), normalized command context |
 
 Word identity denotes the shell's literal first token, not the value after
-expansion. An empty known identity denotes no command word. Selection application
-and acceptance include the current identity, so separate observations are not
+expansion. Identity is checked only during selection and acceptance. If the user
+edits away from a selected word and returns to it before either operation, that
+word remains protected. This conservative same-line rule avoids per-keystroke
+tracking and per-redraw requests. Line-init is the sole new lifecycle hook; it
+also resets state after terminal interruption or send-break. An empty known
+identity denotes no command word. Selection application and acceptance include the current identity, so separate observations are not
 needed immediately before them. Placeholder edits are followed by a selection
 observation of the prepared command, whose identity only the adapter can supply.
 

@@ -429,9 +429,6 @@ impl Response {
 /// reserved words are interpreted by the daemon.
 pub enum AbbreviationObservation<'a> {
     Reset,
-    Observe {
-        head: Option<&'a str>,
-    },
     Select {
         edit_start: usize,
         applied: bool,
@@ -461,9 +458,6 @@ impl<'a> AbbreviationObservation<'a> {
         };
         match (operation, fields) {
             ("reset", []) => Ok(Self::Reset),
-            ("observe", [known, head]) => Ok(Self::Observe {
-                head: flag(known)?.then_some(head),
-            }),
             ("select", [start, applied, known, head, head_start]) => Ok(Self::Select {
                 edit_start: number(start)?,
                 applied: flag(applied)?,
@@ -947,6 +941,7 @@ mod tests {
             }
             _ => panic!("missing verified target"),
         }
+        assert!(AbbreviationObservation::decode("observe", &["1".into(), "gs".into()]).is_err());
         fields[1] = "0".into();
         assert!(AbbreviationObservation::decode("accept", &fields).is_err());
         fields[5] = "0".into();
