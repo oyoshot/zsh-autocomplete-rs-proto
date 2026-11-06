@@ -51,9 +51,6 @@ typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
 typeset -gi _zacrs_enter_enabled=0
-"$ZACRS_BIN" abbreviation-enabled >/dev/null 2>&1 && _zacrs_enter_enabled=1
-typeset -g _zacrs_enter_state=""
-typeset -g _zacrs_enter_last_token=""
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
@@ -80,32 +77,23 @@ _zacrs_reset_cache() {
     _zacrs_restore_self_insert
 }
 
-# Rust owns the selection state. Zsh keeps its opaque value and deduplicates
-# lexical observations, so argument edits do not launch a helper process.
+# Only enabled shells send observations; the daemon owns the editing session.
 _zacrs_reset_enter_selection() {
-    _zacrs_enter_state=""
-    _zacrs_enter_last_token=""
-}
-
-_zacrs_observe_enter_selection() {
-    _zacrs_enter_state=$("$ZACRS_BIN" abbreviation-state --state "$_zacrs_enter_state" --event "$1" 2>/dev/null) || _zacrs_enter_state="!"
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    (( _zacrs_enter_enabled )) && _zacrs_abbreviation_request reset || true
+    return 0
 }
 
 _zacrs_record_enter_selection() {
-    (( _zacrs_enter_enabled )) || return 0
-    _zacrs_observe_enter_selection "select:${2:-1}:${1:-0}:$BUFFER"
-    _zacrs_update_enter_selection
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    (( _zacrs_enter_enabled )) && _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$BUFFER" || true
+    return 0
 }
 
 _zacrs_update_enter_selection() {
-    [[ -n "$_zacrs_enter_state" ]] || return 0
-    local -a _words
-    _words=( ${(z)BUFFER} ) 2>/dev/null || _words=()
-    local _token="${_words[1]:-}"
-    if [[ "$_token" != "$_zacrs_enter_last_token" ]]; then
-        _zacrs_observe_enter_selection "edit:$_token"
-        _zacrs_enter_last_token="$_token"
-    fi
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    (( _zacrs_enter_enabled )) || return 0
+    _zacrs_abbreviation_request observe "$BUFFER" || true
     return 0
 }
 
@@ -155,23 +143,26 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         _zacrs_daemon_next_retry=$(( SECONDS + 1 ))
     }
 
+    _zacrs_ping_daemon() {
+        local fd resp
+        zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+        fd=$REPLY
+        print -r -u $fd -- 'ping shell'
+        IFS= read -r -u $fd resp
+        exec {fd}<&-
+        [[ "$resp" == OK* ]] || return 1
+        [[ "$resp" == *'enter_expansion=1'* ]] && _zacrs_enter_enabled=1
+        return 0
+    }
+
     _zacrs_ensure_daemon() {
         # Already confirmed available this session
         (( _zacrs_daemon_available )) && return 0
-        # Check if daemon is running via zsocket ping
-        local fd
-        if zsocket "$_zacrs_socket_path" 2>/dev/null; then
-            fd=$REPLY
-            print -u $fd "ping"
-            local resp
-            read -r -u $fd resp 2>/dev/null
-            exec {fd}<&-
-            if [[ "$resp" == OK* ]]; then
-                _zacrs_daemon_available=1
-                _zacrs_daemon_started=0
-                _zacrs_daemon_next_retry=0
-                return 0
-            fi
+        if _zacrs_ping_daemon; then
+            _zacrs_daemon_available=1
+            _zacrs_daemon_started=0
+            _zacrs_daemon_next_retry=0
+            return 0
         fi
         # Start daemon
         "$ZACRS_BIN" daemon start &!
@@ -184,6 +175,7 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         if [[ -S "$_zacrs_socket_path" ]]; then
             _zacrs_daemon_available=1
             _zacrs_daemon_started=1
+            _zacrs_ping_daemon || true
             _zacrs_daemon_next_retry=0
             return 0
         fi
@@ -920,7 +912,6 @@ _zacrs_accept_line() {
     if (( _zacrs_enter_enabled )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
-            _zacrs_record_enter_selection
         fi
     fi
     _zacrs_prev_lbuffer="$LBUFFER"

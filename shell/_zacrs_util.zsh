@@ -107,24 +107,46 @@ _zacrs_command_context() {
     return 0
 }
 
+# Byte-length fields preserve multiline input without evaluation or encoders.
+# Failed communication disables expansion until plugin reload.
+_zacrs_abbreviation_request() {
+    local operation="$1" fd item
+    shift
+    (( _zacrs_enter_enabled && _zacrs_daemon_available )) || { _zacrs_enter_enabled=0; return 1; }
+    if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
+        _zacrs_enter_enabled=0
+        return 1
+    fi
+    fd=$REPLY
+    local LC_ALL=C
+    {
+        print -r -u $fd -- "abbreviation $$ $operation $#"
+        for item in "$@"; do
+            print -r -u $fd -- "${#item}"
+            print -r -u $fd -- "$item"
+        done
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_enter_enabled=0; return 1; }
+        IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_enter_enabled=0; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=0; return 1; }
+    } always {
+        exec {fd}<&-
+    }
+}
+
 # Zsh supplies lexical facts; Rust owns eligibility, selection policy and edits.
 _zacrs_expand_command_abbreviation() {
     _zacrs_update_enter_selection
-    local -a _tokens _args
+    local -a _tokens
     _tokens=( ${(z)BUFFER} ) 2>/dev/null || return 1
-    local _context="${(j: :)${(@Q)_tokens}}" _item
+    local _context="${(j: :)${(@Q)_tokens}}"
     [[ "$BUFFER" == *[[:space:]] ]] && _context+=" "
-    _args=(expand-abbreviation --buffer "$BUFFER" --prebuffer "${PREBUFFER:-}" --command-context "$_context" --selection "$_zacrs_enter_state")
-    for _item in "${_tokens[@]}"; do _args+=(--token "$_item"); done
-    local _response
-    _response=$("$ZACRS_BIN" "${_args[@]}" 2>/dev/null) || return 1
-    local -a _lines=( "${(@f)_response}" )
-    (( ${#_lines} == 2 )) || return 1
-    [[ "${_lines[1]}" == 'DONE 0 '* || "${_lines[1]}" == 'DONE 0' ]] || return 1
-    [[ "${_lines[2]}" == 'APPLY '* ]] || return 1
+    local _zacrs_abbreviation_header _zacrs_abbreviation_apply
+    _zacrs_abbreviation_request accept "$BUFFER" "${PREBUFFER:-}" "$_context" "${_tokens[@]}" || return 1
+    [[ "$_zacrs_abbreviation_header" == 'DONE 0 '* || "$_zacrs_abbreviation_header" == 'DONE 0' ]] || return 1
+    [[ "$_zacrs_abbreviation_apply" == 'APPLY '* ]] || return 1
     local result_code result_text chain execute restore_text cursor_offset selection_applied
-    _zacrs_parse_done_line "${_lines[1]}"
-    _zacrs_parse_apply_line "${_lines[2]}"
+    _zacrs_parse_done_line "$_zacrs_abbreviation_header"
+    _zacrs_parse_apply_line "$_zacrs_abbreviation_apply"
     BUFFER="$result_text"
     CURSOR=${cursor_offset:-${#BUFFER}}
     REPLY="$execute"

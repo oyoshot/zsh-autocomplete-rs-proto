@@ -92,6 +92,12 @@ pub enum TextRequest {
     Complete(TextCompleteRequest),
     Clear(TextClearRequest),
     Ping,
+    ShellPing,
+    Abbreviation {
+        key: String,
+        operation: String,
+        fields: usize,
+    },
     Shutdown,
 }
 
@@ -419,10 +425,60 @@ impl Response {
     }
 }
 
+/// Byte-length framing preserves newlines and UTF-8 in ZLE observations.
+pub fn read_abbreviation_fields(
+    reader: &mut impl BufRead,
+    count: usize,
+) -> io::Result<Vec<String>> {
+    if count > 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "too many fields",
+        ));
+    }
+    let mut fields = Vec::new();
+    let mut total = 0usize;
+    for _ in 0..count {
+        let mut length = String::new();
+        reader.read_line(&mut length)?;
+        let size = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid field size"))?;
+        total = total
+            .checked_add(size)
+            .filter(|n| *n <= 1_048_576)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "fields too large"))?;
+        let mut bytes = vec![0; size];
+        reader.read_exact(&mut bytes)?;
+        let mut newline = [0];
+        reader.read_exact(&mut newline)?;
+        if newline != *b"\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing field terminator",
+            ));
+        }
+        fields.push(
+            String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+    }
+    Ok(fields)
+}
+
 impl TextRequest {
     pub fn parse_header(line: &str) -> Option<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
+            ["ping", "shell"] => Some(Self::ShellPing),
+            ["abbreviation", key, operation, fields] => {
+                let fields = fields.parse::<usize>().ok()?;
+                (fields <= 1024 && key.len() <= 128).then(|| Self::Abbreviation {
+                    key: key.to_string(),
+                    operation: operation.to_string(),
+                    fields,
+                })
+            }
             [
                 "render",
                 cursor_row,
@@ -805,6 +861,25 @@ pub fn socket_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abbreviation_fields_preserve_utf8_and_reject_bad_frames() {
+        let text = "gs\n日本語 ";
+        let wire = format!("{}\n{}\n0\n\n", text.len(), text);
+        assert_eq!(
+            super::read_abbreviation_fields(&mut std::io::Cursor::new(wire), 2).unwrap(),
+            vec![text, ""]
+        );
+        for wire in ["1048577\n", "nope\n", "3\nxy", "1\nx!"] {
+            assert!(super::read_abbreviation_fields(&mut std::io::Cursor::new(wire), 1).is_err());
+        }
+        assert!(super::read_abbreviation_fields(&mut std::io::Cursor::new(""), 1025).is_err());
+        assert!(matches!(
+            super::TextRequest::parse_header("ping shell"),
+            Some(super::TextRequest::ShellPing)
+        ));
+        assert!(super::TextRequest::parse_header("abbreviation shell accept 1025").is_none());
+    }
 
     #[test]
     fn render_request_roundtrip() {

@@ -128,6 +128,13 @@ wait_file "$HOME/ready" 1
 enter_line gs
 wait_file "$HOME/executed" 'gs:'
 enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"; _test_load_plugin'
+if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
+    enter_line gs
+    wait_file "$HOME/executed" 'gs:'
+    [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'offline shell started daemon'
+    print -r -- 'ok: no daemon accepts the original input'
+    exit 0
+fi
 enter_line 'gs -sb'
 wait_file "$HOME/executed" 'git:status -sb'
 enter_line 'fc -ln -1 > "$HOME/history"'

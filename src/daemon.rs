@@ -181,6 +181,7 @@ struct DaemonServer {
     /// Most recent auto-popup payload per shell session.
     active_popups: HashMap<String, ActivePopupEntry>,
     active_popup_order: Vec<String>,
+    abbreviation_sessions: HashMap<String, String>,
 }
 
 impl DaemonServer {
@@ -200,6 +201,7 @@ impl DaemonServer {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            abbreviation_sessions: HashMap::new(),
         }
     }
 }
@@ -239,6 +241,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         candidate_cache_order: Vec::new(),
         active_popups: HashMap::new(),
         active_popup_order: Vec::new(),
+        abbreviation_sessions: HashMap::new(),
     };
     let params = CompleteParams {
         prefix,
@@ -411,6 +414,73 @@ impl DaemonServer {
             self.key_bindings = self.config.key_bindings();
             self.config_mtime = current_mtime;
             info!(reloaded = true, "reloaded config");
+        }
+    }
+
+    fn abbreviation_event(
+        &mut self,
+        key: &str,
+        operation: &str,
+        fields: &[String],
+    ) -> Option<TextCompleteResult> {
+        self.maybe_reload_config();
+        if !self.config.expand_abbreviation_on_enter {
+            self.abbreviation_sessions.remove(key);
+            return None;
+        }
+        if operation == "reset" {
+            if self.abbreviation_sessions.len() >= 128
+                && !self.abbreviation_sessions.contains_key(key)
+                && let Some(oldest) = self.abbreviation_sessions.keys().next().cloned()
+            {
+                self.abbreviation_sessions.remove(&oldest);
+            }
+            self.abbreviation_sessions
+                .insert(key.to_owned(), String::new());
+            return None;
+        }
+        // A restart or evicted session must not reinterpret a previous choice.
+        let state = self.abbreviation_sessions.get(key)?.clone();
+        match (operation, fields) {
+            ("observe", [buffer]) => {
+                let state =
+                    crate::abbreviation::observe_selection(&state, &format!("buffer:{buffer}"))
+                        .unwrap_or_default();
+                self.abbreviation_sessions.insert(key.to_owned(), state);
+                None
+            }
+            ("select", [start, applied, buffer]) => {
+                let state = crate::abbreviation::observe_selection(
+                    &state,
+                    &format!("select:{applied}:{start}:{buffer}"),
+                )
+                .unwrap_or_default();
+                self.abbreviation_sessions.insert(key.to_owned(), state);
+                None
+            }
+            ("accept", fields) if fields.len() >= 3 => {
+                let result = crate::abbreviation::expand_enter_line(
+                    &self.config,
+                    &fields[0],
+                    &fields[1],
+                    &fields[3..],
+                    &state,
+                    &fields[2],
+                );
+                self.abbreviation_sessions.remove(key);
+                if let Some(result) = &result
+                    && !result.execute
+                {
+                    let state = crate::abbreviation::observe_selection(
+                        "",
+                        &format!("select:1:0:{}", result.text),
+                    )
+                    .unwrap_or_default();
+                    self.abbreviation_sessions.insert(key.to_owned(), state);
+                }
+                result
+            }
+            _ => None,
         }
     }
 
@@ -944,6 +1014,7 @@ impl DaemonServer {
                     candidate_cache_order: Vec::new(),
                     active_popups: HashMap::new(),
                     active_popup_order: Vec::new(),
+                    abbreviation_sessions: HashMap::new(),
                 };
                 let params = CompleteParams {
                     prefix,
@@ -997,6 +1068,32 @@ impl DaemonServer {
                         let _ = writeln!(writer, "ERROR clear failed");
                     }
                 }
+                false
+            }
+            TextRequest::ShellPing => {
+                self.maybe_reload_config();
+                let _ = writeln!(
+                    writer,
+                    "OK enter_expansion={}",
+                    u8::from(self.config.expand_abbreviation_on_enter)
+                );
+                let _ = writer.flush();
+                false
+            }
+            TextRequest::Abbreviation {
+                key,
+                operation,
+                fields,
+            } => {
+                let result = protocol::read_abbreviation_fields(reader, fields)
+                    .ok()
+                    .and_then(|fields| self.abbreviation_event(&key, &operation, &fields));
+                if let Some(result) = result {
+                    let _ = result.write_to(&mut writer);
+                } else {
+                    let _ = writeln!(writer, "DONE 1\nAPPLY chain=0 execute=1 restore_hex=");
+                }
+                let _ = writer.flush();
                 false
             }
             TextRequest::Ping => {
@@ -1995,7 +2092,60 @@ mod tests {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            abbreviation_sessions: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn abbreviation_sessions_isolate_choices_and_fail_closed_after_loss() {
+        let mut server = test_server();
+        server.config_mtime = super::config_file_mtime();
+        server.config.expand_abbreviation_on_enter = true;
+        server
+            .config
+            .abbreviations
+            .push(crate::config::Abbreviation {
+                trigger: "gs".into(),
+                expansion: "git status".into(),
+                description: String::new(),
+                when: Default::default(),
+            });
+        let fields = |s: &[&str]| s.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let accept = fields(&["gs", "", "gs", "gs"]);
+        assert!(
+            server
+                .abbreviation_event("lost", "accept", &accept)
+                .is_none()
+        );
+        server.abbreviation_event("one", "reset", &[]);
+        server.abbreviation_event("two", "reset", &[]);
+        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
+        server.abbreviation_event("one", "observe", &fields(&["gs -sb"]));
+        assert!(
+            server
+                .abbreviation_event("one", "accept", &accept)
+                .is_none()
+        );
+        assert_eq!(
+            server
+                .abbreviation_event("two", "accept", &accept)
+                .unwrap()
+                .text,
+            "git status"
+        );
+        server.abbreviation_event("one", "reset", &[]);
+        server.abbreviation_event("one", "select", &fields(&["0", "1", "gs "]));
+        server.abbreviation_event("one", "observe", &fields(&["gsx"]));
+        server.abbreviation_event("one", "observe", &fields(&["gs"]));
+        assert!(
+            server
+                .abbreviation_event("one", "accept", &accept)
+                .is_some()
+        );
+        for n in 0..140 {
+            server.abbreviation_event(&format!("session{n}"), "reset", &[]);
+        }
+        assert!(server.abbreviation_sessions.len() <= 128);
     }
 
     fn assert_passthrough_key(prefix: &str, key: &[u8], expected_done: &str) {

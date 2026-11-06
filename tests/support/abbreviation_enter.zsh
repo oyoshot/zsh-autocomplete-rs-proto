@@ -1,6 +1,7 @@
 set -eu
+TRAPZERR() { print -u2 -r -- "unexpected failure: ${funcfiletrace[*]}"; }
 
-# Exercise the actual CLI and shell adapter, observing acceptance without
+# Exercise the actual daemon and shell adapter, observing acceptance without
 # executing commands from the test. Real ZLE keyboard input is checked separately.
 zle() {
     if [[ "$1" == .accept-line ]]; then
@@ -14,13 +15,7 @@ bindkey() { :; }
 autoload() { :; }
 add-zle-hook-widget() { :; }
 add-zsh-hook() { :; }
-# The CLI lookup needs no sockets. Keep real non-network Zsh modules available.
-zmodload() {
-    [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
-    builtin zmodload "$@"
-}
 source "$ZACRS_PLUGIN"
-unfunction zmodload
 actual_binary="$ZACRS_BIN"
 
 fail() { print -u2 -r -- "not ok: $* (buffer=${(qqq)BUFFER})"; exit 1; }
@@ -45,12 +40,7 @@ _zacrs_accept_line
 ZACRS_BIN="$actual_binary"
 
 print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
-zmodload() {
-    [[ "$1" == (zsh/net/socket|zsh/net/unix) ]] && return 1
-    builtin zmodload "$@"
-}
 source "$ZACRS_PLUGIN"
-unfunction zmodload
 set_buffer $'  gs\t-sb "日本語 a"  '
 CURSOR=1
 _zacrs_accept_line
@@ -113,7 +103,6 @@ for trigger in ssh connect; do
     LBUFFER="$BUFFER"
     _zacrs_accept_line
     [[ "$accepted" == 'ssh user@host' ]] || fail 'edited placeholder must execute without expanding again'
-    [[ -z "$_zacrs_enter_state" ]] || fail 'completed placeholder must clear its exemption'
 done
 
 set_buffer ssh
@@ -205,23 +194,23 @@ _zacrs_accept_line
 [[ "$accepted" == 'git status' ]] || fail 'completed selections must not leak into a new edit'
 
 set_buffer gs
-ZACRS_BIN=false
+_zacrs_daemon_available=0
 _zacrs_accept_line
-[[ "$accepted" == gs ]] || fail 'lookup failure must keep the original command'
+[[ "$accepted" == gs ]] || fail 'daemon failure must keep the original command'
 
-ZACRS_BIN="$actual_binary"
+source "$ZACRS_PLUGIN"
 set_buffer gs
-ZACRS_BIN=false
+_zacrs_daemon_available=0
 _zacrs_apply 2 2 'gs ' 0 0 '' 1
-ZACRS_BIN="$actual_binary"
+_zacrs_daemon_available=1
 LBUFFER="$BUFFER"
 _zacrs_accept_line
 [[ "$accepted" == 'gs ' ]] || fail 'failed state update must preserve an explicit choice'
 
-[[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'this test must not start a daemon'
+source "$ZACRS_PLUGIN"
 set_buffer gs
 _zacrs_accept_line
-[[ "$accepted" == 'git status' ]] || fail 'expansion must work without a daemon'
+[[ "$accepted" == 'git status' ]] || fail 'expansion must recover after plugin reload'
 
 config_text=$(<"$XDG_CONFIG_HOME/zacrs/config.toml")
 print -r -- "${config_text/expand_abbreviation_on_enter = true/expand_abbreviation_on_enter = false}" > "$XDG_CONFIG_HOME/zacrs/config.toml"

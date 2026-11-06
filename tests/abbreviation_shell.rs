@@ -56,7 +56,7 @@ fn run_shell(command: &mut Command, timeout: Duration) -> (Output, bool) {
 
 #[test]
 fn zsh_enter_abbreviation_is_opt_in_and_preserves_input() {
-    run_abbreviation_test(include_str!("support/abbreviation_enter.zsh"), false);
+    run_abbreviation_test(include_str!("support/abbreviation_enter.zsh"), true);
 }
 
 #[test]

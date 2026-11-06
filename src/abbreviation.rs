@@ -20,7 +20,18 @@ pub fn observe_selection(state: &str, event: &str) -> Option<String> {
         return Some(state.to_owned());
     }
     let mut selected = (!state.is_empty()).then(|| state.to_owned());
-    if let Some(word) = event.strip_prefix("edit:") {
+    if let Some(buffer) = event.strip_prefix("buffer:") {
+        let unchanged = bare_command(buffer).is_some_and(|(word, leading)| {
+            let suffix = &buffer[leading + word.len()..];
+            let boundary = suffix.is_empty()
+                || suffix.starts_with(char::is_whitespace)
+                || suffix.starts_with(['<', '>']);
+            boundary && selected.as_deref() == Some(word)
+        });
+        if !unchanged {
+            selected = None;
+        }
+    } else if let Some(word) = event.strip_prefix("edit:") {
         if selected.as_deref() != Some(word) {
             selected = None;
         }
