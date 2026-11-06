@@ -122,9 +122,12 @@ for input in g gss ./gs ../gs /tmp/gs '~/gs' '"gs"' "'gs'" '\gs' 'gs | cat' 'gs;
 done
 
 for input in 'gs() print hello' 'gs () print hello' 'gs( ) print hello' 'gs other() print hello' 'function gs print hello' 'gs() { print hello; }'; do
-    set_buffer "$input"
-    _zacrs_accept_line
-    [[ "$BUFFER" == "$input" && "$accepted" == "$input" ]] || fail 'function declarations must not expand'
+    for (( position=0; position<=${#input}; position++ )); do
+        set_buffer "$input"
+        CURSOR=$position
+        _zacrs_accept_line
+        [[ "$BUFFER" == "$input" && "$accepted" == "$input" ]] && (( CURSOR == position )) || fail "function declarations must not expand at cursor $position"
+    done
 done
 
 set_buffer 'gs>out'

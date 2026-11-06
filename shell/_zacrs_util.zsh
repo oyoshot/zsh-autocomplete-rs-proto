@@ -150,10 +150,7 @@ _zacrs_abbreviation_words() {
 _zacrs_abbreviation_context_func() {
     compstate[insert]=''
     compstate[list]=''
-    # The cursor may complete a parameter in an argument while words still
-    # describes the whole command. Only the command position needs command
-    # completion context; argument positions are checked by full word coverage.
-    [[ "${compstate[context]}" == command ]] || (( CURRENT > 1 )) || return 0
+    [[ "${compstate[context]}" == command ]] || return 0
     local -a native_words=( "${words[@]}" )
     # Zsh adds an empty current word at an insertion point between words.
     # Remove that native cursor marker, not a quoted empty argument.
@@ -180,6 +177,9 @@ _zacrs_expand_command_abbreviation() {
     local original_buffer="$BUFFER" original_cursor=$CURSOR
     if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
         {
+            # Query the command word, independent of the editing cursor. Inside
+            # function parentheses Zsh can expose the whole line as plain words.
+            CURSOR=$reply[4]
             # Complete the literal alias name; restore caller options immediately.
             () {
                 setopt localoptions completealiases

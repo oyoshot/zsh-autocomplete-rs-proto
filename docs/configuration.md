@@ -141,9 +141,9 @@ the existing completion widget in context-only mode to verify the target and sup
 its literal word and character range. Rust validates the range and performs
 exact lookup and editing without parsing shell syntax. This widget runs only
 when Enter expansion is enabled and calls no candidate providers. No extra
-completion widget is registered and no deliberate cursor repositioning is needed;
-if the native query changes the editor state, the adapter restores it. Other
-shell adapters must establish their own native context capability; there is no
+completion widget is registered. The query temporarily places the cursor at the
+end of the command word, then restores the editor state before applying any edit.
+Other shell adapters must establish their own native context capability; there is no
 shared Zsh grammar heuristic.
 
 Enter expansion requires a compatible running daemon. If communication fails,

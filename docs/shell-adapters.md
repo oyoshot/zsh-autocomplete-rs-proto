@@ -13,19 +13,20 @@ tracking for the current editing session; it cannot silently restore protection
 after later edits. A fresh line starts a fresh session.
 
 Zsh uses its native lexer for word identity and reuses its existing completion
-widget in context-only mode for target context at the current cursor position.
+widget in context-only mode with the query cursor at the end of the command word.
+The query position is independent of the editing cursor: inside function
+parentheses, Zsh can otherwise report a declaration as plain command words.
 The mode returns before candidate state initialization, `compinit`, or candidate
 providers. During this query only, locally enabled `COMPLETE_ALIASES` keeps
 literal alias names intact. Caller options are restored immediately afterward.
 It compares the parser's command words with the complete lexical input and
 requires native literal quoting to leave the command word unchanged. This
 excludes quoted words, substitutions, and patterns independently of the cursor's
-completion context. Native reserved words are also rejected. The cursor may be
-completing a parameter in an argument; that does not invalidate the first command
-word when the native word array still covers the complete lexical input. Zsh's synthetic empty
+completion context. Native reserved words are also rejected. Variables in
+arguments do not change the command-position query. Zsh's synthetic empty
 current word at a whitespace insertion point is excluded from this comparison.
-No extra completion widget or deliberate cursor repositioning is needed. The
-adapter restores `BUFFER` and `CURSOR` only if the native query changed them.
+No extra completion widget is needed. The adapter restores the editing cursor
+after the query and restores `BUFFER` if the native query changed it.
 Redirections and any other context this query cannot establish are currently
 unsupported for Enter expansion. Function declarations and command
 lists do not pass the complete-word-coverage check. Continuation prompts never
