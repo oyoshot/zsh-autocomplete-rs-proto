@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793969750173,
+  "lastUpdate": 1793971755572,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -17591,6 +17591,282 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 763,
             "range": "± 2",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "093fafeb2dc35f563bf0e116f69f0af088db6e27",
+          "message": "fix(config): retain valid settings during hot reload (#152)",
+          "timestamp": "2026-11-06T22:20:04+09:00",
+          "tree_id": "45549cdc7a62d7ce4c99217da457090bdf8140cc",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/093fafeb2dc35f563bf0e116f69f0af088db6e27"
+        },
+        "date": 1793971755164,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 9348,
+            "range": "± 488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 97602,
+            "range": "± 2002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1261069,
+            "range": "± 20967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 304819,
+            "range": "± 1259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 142546,
+            "range": "± 658",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 98610,
+            "range": "± 268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 35977,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 32399,
+            "range": "± 510",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 29901,
+            "range": "± 191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 248972,
+            "range": "± 990",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 250763,
+            "range": "± 1037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 254023,
+            "range": "± 4439",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 241174,
+            "range": "± 745",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 23664,
+            "range": "± 273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 249183,
+            "range": "± 2834",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 2637197,
+            "range": "± 22087",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 264884,
+            "range": "± 1924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 201217,
+            "range": "± 1934",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 972310,
+            "range": "± 4538",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 337069,
+            "range": "± 10196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 335232,
+            "range": "± 2273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 77475,
+            "range": "± 35171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 148991,
+            "range": "± 63150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 725940,
+            "range": "± 10268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 694812,
+            "range": "± 2959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 633,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 92,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 29,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 89,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 80,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 21,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 36,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 43,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 349970,
+            "range": "± 1916",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 241754,
+            "range": "± 4345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 132,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 849,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7508,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 838,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
