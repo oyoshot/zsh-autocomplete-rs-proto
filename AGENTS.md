@@ -13,35 +13,39 @@ Rust is intentional: implementing everything in Zsh is difficult to maintain wit
 - Treat startup and completion overhead as design constraints. Avoid unnecessary per-keystroke work, synchronous helper processes, and IPC. Check performance when adding work to these paths; using Rust alone does not eliminate integration overhead.
 - Keep abbreviation definitions declarative. Gathering and displaying them must not evaluate their expansions or install hooks. Additional shell integration, such as automatic expansion, must be explicit and optional; disabled features should add no feature-specific work to input handling.
 
-## Project Structure & Module Organization
+## Repository Map
 
-`src/` contains the Rust crate: `cli.rs` defines the Clap CLI, `main.rs` dispatches the CLI subcommands (`complete`, `render`, `clear`, `daemon`), `lib.rs` re-exports modules, and core behavior lives in files such as `app.rs`, `candidate.rs`, `config.rs`, `fuzzy.rs`, `handoff.rs`, `input.rs`, and `ui/`. Daemon and transport code lives in `client.rs`, `daemon.rs`, `protocol.rs`, and `tty.rs`. `handoff.rs` owns the reuse-token logic shared by render and daemon flows. `shell/` holds the Zsh plugin entrypoint and helper scripts, all using the `_zacrs_*` prefix. `benches/` contains Criterion benchmarks for fuzzy matching, rendering, startup, daemon, protocol, input, and handoff behavior, with shared fixtures in `benches/helpers/`. Treat `tmp/` as scratch or reference material, not primary source.
+`src/` contains the Rust engine, CLI, daemon, and protocol; `shell/` contains the Zsh adapter. Tests live in `tests/` and `shell/tests/`, benchmarks in `benches/`, and disposable sessions in `dev/`. Treat `tmp/` as scratch, not primary source. See `docs/shell-adapters.md` for adapter boundaries, `docs/configuration.md` for behavior, and `docs/development.md` for native and container verification.
 
-## Build, Test, and Development Commands
+## Agent Workflow
 
-Use a workspace-local target dir when possible:
+- Read the relevant implementation, tests, and design documents before changing behavior. Verify current responsibilities in code.
+- Prefer the smallest coherent change that satisfies the requirement without accumulating avoidable architectural debt.
+- Update Rust and shell together when changing IPC, popup metadata, or reuse-token handoff; keep protocols and cached state aligned.
+- Preserve regression coverage and fallback behavior. If a test expectation or fallback must change, explain the intended behavior and why the previous expectation was wrong or is superseded; do not relax checks merely to pass tests.
+- Report what was verified, relevant checks not completed and why, and remaining integration or performance uncertainty. Distinguish environmental restrictions from test failures.
 
-- `CARGO_TARGET_DIR=target cargo build` builds the binary at `target/debug/zsh-autocomplete-rs`.
-- `CARGO_TARGET_DIR=target cargo test` runs the unit tests embedded under `src/`.
-- `zsh shell/tests/compsys_options.zsh` runs the shell-side `compadd` option parsing regression tests.
-- `cargo fmt --check` verifies Rust formatting before review.
-- `cargo clippy --all-targets --all-features -- -D warnings` matches the CI lint configuration.
-- `cargo bench` runs Criterion benchmarks in `benches/`.
-- `CARGO_TARGET_DIR=target cargo run -- complete --prefix gi --cursor-row 5 --cursor-col 2` performs a focused interactive popup check.
-- `CARGO_TARGET_DIR=target cargo run -- render --prefix gi --cursor-row 5 --cursor-col 2` draws the popup once and prints popup metadata for follow-up `clear` testing.
-- `CARGO_TARGET_DIR=target cargo run -- daemon start|status|stop` exercises the optional daemon flow used by the Zsh plugin.
+## Commands and Style
 
-For focused manual CLI checks, pipe tab-separated candidates into the `complete` or `render` subcommands.
+Prefer `CARGO_TARGET_DIR=target`. Native integration tests require Zsh on `PATH`, PTYs, and Unix sockets.
 
-## Coding Style & Naming Conventions
+- `cargo build`: build the debug binary.
+- `cargo test`: run Rust unit and integration tests.
+- `sh shell/tests/run.sh`: run shell regressions with temporary application directories.
+- `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings`: match CI formatting and lint checks.
+- `cargo bench --bench <name>`: run the relevant benchmark from `benches/`; CI tracks `fuzzy_bench` and `text_processing_bench`.
+- `dev/shell`: open a disposable manual session using Podman or Docker; restart after source edits.
 
-Follow standard Rust formatting with `rustfmt` and 4-space indentation. Use `snake_case` for functions, modules, and test names; `CamelCase` for types; `SCREAMING_SNAKE_CASE` for constants. Keep modules small and responsibility-focused, matching the current layout (`ui/render.rs`, `ui/popup.rs`, `ui/theme.rs`, etc.). In Zsh scripts, preserve the `_zacrs_*` function and file prefix pattern. When changing daemon IPC, popup metadata, or reuse-token handoff behavior, update Rust and shell sides together so the protocol and cache/snapshot logic stay aligned.
+Follow rustfmt, Rust naming conventions, and existing shell indentation. Use `_zacrs_*` for shell internals. Keep modules responsibility-focused and name tests for observable behavior. CI also checks spelling and unused dependencies.
 
-## Testing Guidelines
+## Verification
 
-Shell changes should cover state restoration and plugin coexistence. Exercise native context acquisition in real ZLE when changing syntax or editing-context checks; mocks alone cannot establish native parser behavior. Isolate runtime state with temporary directories. Check startup and completion overhead when adding work to those paths.
-Prefer unit tests colocated with the implementation under `#[cfg(test)]`. Name tests for observable behavior, for example `common_prefix_shared` or `new_filters_candidates`. Add or update tests for filtering, popup layout, config parsing, daemon protocol handling, reuse-token stability, and shell-facing edge cases whenever behavior changes. For UI or terminal-control changes, run a focused `cargo run -- complete` or `render` check in a real terminal, and verify the daemon path as well when touching `client.rs`, `daemon.rs`, `handoff.rs`, `protocol.rs`, or the shell plugin.
+- For code changes, run focused regressions, then `cargo test`, shell regressions when shell behavior is affected, formatting, and Clippy. Documentation-only changes need content, command/link accuracy, and whitespace checks.
+- For shell editing or context changes, add regressions using real ZLE, covering relevant cursor positions and state restoration. For lifecycle changes, cover cancellation, reload, and failure paths. Automated PTY-driven ZLE tests qualify; CLI tests and mocked widgets alone do not establish ZLE correctness.
+- For hooks, widgets, or option changes, check coexistence with the affected plugin behavior or a representative competing hook/widget, including load order where relevant. Isolate configuration and runtime state with temporary directories.
+- Verify the daemon path for shell/protocol changes. For terminal/UI changes, check relevant resizing, cancellation, and Unicode behavior in a real terminal. If PTY, socket, or interactive verification is unavailable, report the exact unverified behavior and reason.
+- When adding work to startup, completion, or input handling, compare the affected paths before and after under the same build profile, machine, shell/plugin configuration, and workload. Measure Zsh startup to input readiness, completion request to visible candidates, or added ZLE key-handling latency as applicable. Distinguish daemon startup from reuse; record the baseline revision, measurement method, repetitions, variability, and any regression. Use relevant existing benchmarks, but do not treat Rust benchmark success as proof of shell performance or claim improvements without measurements.
 
-## Commit & Pull Request Guidelines
+## Commits and Pull Requests
 
-Recent history follows scoped Conventional Commit prefixes such as `fix(shell): ...`, `feat(daemon): ...`, `refactor(ui): ...`, and `test: ...`. Keep subjects imperative and concise; add a scope when it clarifies the affected area. PRs should describe user-visible behavior, list verification steps run, and note any shell integration, daemon/socket, or terminal-specific risks. Include screenshots or terminal captures only when the popup rendering changes.
+Use scoped Conventional Commit subjects such as `fix(shell): preserve selected commands`. Keep commits focused. PRs should describe the problem, resulting behavior, validation and its limits, and relevant issues. Update affected documentation and describe added shell interference or performance costs. Include terminal captures for visible popup changes.
