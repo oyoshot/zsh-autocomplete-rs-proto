@@ -95,3 +95,12 @@ Containers share the host kernel and relay the terminal through a PTY, so macOS,
 kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
 intended runtimes, rather than rebuilding it in each container.
+
+When a reload finds a wrapped ZLE hook, zacrs preserves its delegation through
+an additional wrapper. A small observer in the standard dispatcher records
+whether that dispatcher actually ran; only a missing dispatch triggers a
+fallback. This avoids both recursion through active aliases and lost completion
+through stale aliases. It adds shell function calls on wrapped hook invocations,
+but no helper process or IPC. Delegates remain immutable so other plugins can
+save and wrap them across further reloads. The public widget identity can change;
+the competing wrapper still surrounds its original dispatcher calls.
