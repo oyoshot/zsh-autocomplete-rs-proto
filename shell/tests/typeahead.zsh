@@ -150,6 +150,26 @@ _zacrs_test_failure_and_reload() {
 }
 zle -N _zacrs_test_failure_and_reload
 bindkey "^F" _zacrs_test_failure_and_reload
+_zacrs_test_late_redraw() {
+    print -r -- "late:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+_zacrs_test_late_init() {
+    print -r -- "late-init:ok" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+_zacrs_test_register_later() {
+    add-zle-hook-widget line-pre-redraw _zacrs_test_late_redraw
+    add-zle-hook-widget line-init _zacrs_test_late_init
+}
+zle -N _zacrs_test_register_later
+bindkey "^B" _zacrs_test_register_later
+_zacrs_test_last_widget() {
+    print -r -- "last:$LASTWIDGET:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+_zacrs_test_register_context_probe() {
+    _zacrs_add_zle_hook line-pre-redraw _zacrs_test_last_widget
+}
+zle -N _zacrs_test_register_context_probe
+bindkey "^G" _zacrs_test_register_context_probe
 FUNCNEST=100
 
 # A printed prompt can precede ZLE entering raw mode on the PTY.
@@ -316,3 +336,56 @@ wait_for_marker "failure:preserved"
 wait_for_marker "reattached:tu"
 stop_shell
 print -r -- "ok: new hooks and nested fallback wrappers recover after cancellation and failure"
+
+start_shell
+zpty -w -n zacrs_typeahead $'\x18q'
+wait_for_marker "reloaded:q"
+zpty -w -n zacrs_typeahead $'\x02r'
+wait_for_marker "late:qr"
+wait_for_marker "reloaded:qr"
+wait_for_marker "outer-after:qr"
+[[ $(grep -Fxc "late:qr" "$ZACRS_TYPEAHEAD_MARKER") == 1 &&
+   $(grep -Fxc "reloaded:qr" "$ZACRS_TYPEAHEAD_MARKER") == 1 ]] || return 1
+redraw_order=("${(@f)$(grep -E "^(outer-before|reloaded|outer-after|late):qr$" "$ZACRS_TYPEAHEAD_MARKER")}")
+[[ "${(j:,:)redraw_order}" == "outer-before:qr,reloaded:qr,late:qr,outer-after:qr" ]] || return 1
+# Duplicate registration must also remain safe.
+zpty -w -n zacrs_typeahead $'\x02s'
+wait_for_marker "late:qrs"
+[[ $(grep -Fxc "late:qrs" "$ZACRS_TYPEAHEAD_MARKER") == 1 ]] || return 1
+zpty -w -n zacrs_typeahead $'\x03'
+wait_for_marker "late-init:ok"
+wait_for_marker "line-init:reloaded"
+stop_shell
+print -r -- "ok: standard hook registration after reload preserves wrappers without recursion"
+
+start_shell
+zpty -w -n zacrs_typeahead $'\x18q'
+wait_for_marker "reloaded:q"
+zpty -w -n zacrs_typeahead $'\x16r'
+wait_for_marker "reattached:qr"
+zpty -w -n zacrs_typeahead $'\x02s'
+wait_for_marker "late:qrs"
+[[ $(grep -Fxc "reattached:qrs" "$ZACRS_TYPEAHEAD_MARKER") == 1 &&
+   $(grep -Fxc "new:qrs" "$ZACRS_TYPEAHEAD_MARKER") == 1 &&
+   $(grep -Fxc "late:qrs" "$ZACRS_TYPEAHEAD_MARKER") == 1 ]] || return 1
+zpty -w -n zacrs_typeahead $'\x17t'
+wait_for_marker "second-after:qrst"
+zpty -w -n zacrs_typeahead $'\x02u'
+wait_for_marker "late:qrstu"
+[[ $(grep -Fxc "reattached:qrstu" "$ZACRS_TYPEAHEAD_MARKER") == 1 &&
+   $(grep -Fxc "new:qrstu" "$ZACRS_TYPEAHEAD_MARKER") == 1 &&
+   $(grep -Fxc "late:qrstu" "$ZACRS_TYPEAHEAD_MARKER") == 1 ]] || return 1
+stop_shell
+print -r -- "ok: later standard registration runs plain and nested fallback hooks once"
+
+start_shell
+zpty -w -n zacrs_typeahead $'\x18q'
+wait_for_marker "reloaded:q"
+zpty -w -n zacrs_typeahead $'\x16r'
+wait_for_marker "reattached:qr"
+zpty -w -n zacrs_typeahead $'\x07'
+wait_for_marker "last:_zacrs_test_register_context_probe:qr"
+zpty -w -n zacrs_typeahead s
+wait_for_marker "last:self-insert:qrs"
+stop_shell
+print -r -- "ok: fallback dispatch preserves the last editing widget"

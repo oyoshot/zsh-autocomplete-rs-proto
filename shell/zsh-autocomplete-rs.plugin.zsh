@@ -1068,21 +1068,40 @@ _zacrs_dispatch_zle_hook() {
     # Do not use -w: add-zle-hook-widget looks up its styles using the public
     # WIDGET name, including when called through another plugin's saved alias.
     local -i result=0
-    zle "$delegate" -- "${@:3}" || result=$?
+    zle "$delegate" -f nolast -- "${@:3}" || result=$?
     (( result == 0 )) || return $result
     if (( ! ${_zacrs_seen_zle_hooks[$_zacrs_current_zle_hook]:-0} )); then
-        zle "$dispatcher" -- "${@:3}"
+        zle "$dispatcher" -f nolast -- "${@:3}"
         return $?
     fi
     return $result
 }
 typeset -gi _zacrs_zle_hook_generation=${_zacrs_zle_hook_generation:-0}
+# add-zle-hook-widget recognizes the dispatcher by its widget function name.
+# Keep that public identity, or later registrations would capture our fallback
+# as a dispatcher child. Freeze aliases before changing its implementation so
+# plugins that saved it retain the exact delegate chain they originally wrapped.
+_zacrs_publish_zle_hook() {
+    local hook="$1" body="$2" widget
+    local -a saved
+    saved=( ${${(k)widgets[(R)user:azhw:$hook]}:#$hook} )
+    if (( ${#saved} )); then
+        local snapshot="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))"
+        functions[$snapshot]="${functions[azhw:$hook]}"
+        for widget in "${saved[@]}"; do
+            zle -N "$widget" "$snapshot"
+        done
+    fi
+    functions[azhw:$hook]="$body"
+    zle -N "$hook" "azhw:$hook"
+}
 _zacrs_add_zle_hook() {
     emulate -L zsh
     local hook="zle-$1" fn="$2" entry
+    local standard="_zacrs_standard_zle_$1"
     local -a entries
     local -i index=0
-    if [[ -z ${(k)widgets[(R)user:azhw:$hook]} ]]; then
+    if (( ! ${+functions[$standard]} )) && [[ -z ${(k)widgets[(R)user:azhw:$hook]} ]]; then
         # With no saved dispatcher there can be no recursive delegation.
         # Remove our retained entry first: otherwise the standard helper exits
         # early for a duplicate and never records a newly captured plain hook.
@@ -1101,12 +1120,15 @@ _zacrs_add_zle_hook() {
         fi
         (( ${+widgets[$fn]} )) || zle -N "$fn"
     fi
-    # The standard dispatcher needs no additional wrapper. Nor does a fallback
-    # we already installed and which is still the public widget.
-    [[ ${widgets[$hook]:-} == user:azhw:$hook ||
-       ${widgets[$hook]:-} == user:_zacrs_zle_hook_<-> ]] && return 0
+    # Includes our fallback published under the standard dispatcher identity.
+    [[ ${widgets[$hook]:-} == user:azhw:$hook ]] && return 0
+    # Save the native implementation once, before publishing any fallback.
+    if (( ! ${+functions[$standard]} )); then
+        functions[$standard]="${functions[azhw:$hook]}"
+        zle -N "$standard"
+    fi
     if (( ! ${+widgets[$hook]} )); then
-        zle -N "$hook" "azhw:$hook"
+        _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
         return
     fi
     zstyle -a "$hook" widgets entries || entries=()
@@ -1114,7 +1136,7 @@ _zacrs_add_zle_hook() {
     # directly, even if unused dispatcher aliases remain from an old wrapper.
     for entry in "${entries[@]#<->:}"; do
         if [[ ${widgets[$entry]:-} == ${widgets[$hook]} ]]; then
-            zle -N "$hook" "azhw:$hook"
+            _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
             return
         fi
     done
@@ -1122,14 +1144,10 @@ _zacrs_add_zle_hook() {
         zle -N _zacrs_observe_zle_hook
         zstyle "$hook" widgets "0:_zacrs_observe_zle_hook" "${entries[@]}"
     fi
-    # Immutable delegates are required: another plugin may save this fallback
-    # and wrap it again before the next reload. Reusing its alias would recurse.
-    local wrapper="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))"
-    local delegate="${wrapper}_delegate" dispatcher="${wrapper}_dispatcher"
+    local delegate="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))_delegate"
     zle -A "$hook" "$delegate"
-    zle -N "$dispatcher" "azhw:$hook"
-    functions[$wrapper]="_zacrs_dispatch_zle_hook ${(q)delegate} ${(q)dispatcher} \"\$@\""
-    zle -N "$hook" "$wrapper"
+    _zacrs_publish_zle_hook "$hook" \
+        "_zacrs_dispatch_zle_hook ${(q)delegate} ${(q)standard} \"\$@\""
 }
 
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
