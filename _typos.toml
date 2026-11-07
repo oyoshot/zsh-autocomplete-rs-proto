@@ -3,3 +3,5 @@
 fo = "fo"
 caf = "caf"
 ba = "ba"
+# Intentional transposed query used to verify typo rescue and highlighting
+gti = "gti"

@@ -2129,5 +2129,6 @@ dependencies = [
  "tracing-subscriber",
  "unicode-casefold",
  "unicode-normalization",
+ "unicode-segmentation",
  "unicode-width",
 ]
