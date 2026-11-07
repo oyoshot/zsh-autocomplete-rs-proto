@@ -7,8 +7,11 @@ The configuration file is read from `$XDG_CONFIG_HOME/zacrs/config.toml`, or
 
 The popup uses the terminal's background and foreground, with ANSI cyan for the
 filter label and matched characters. Matches are also bold; selected rows retain
-their selection colors and use bold alone for matches. Candidate rows have one
-space of padding on each side when space permits.
+their selection colors and use bold alone for matches. A cyan `▸` marks the
+selected row in a separate gutter. The border uses ANSI dark grey. When some
+candidates are outside the visible area, the bottom border shows the visible
+range, for example `1–10 / 42`. The marker and range are omitted when the terminal
+is too narrow to fit them.
 
 Override colors in the `[theme]` table:
 
@@ -16,16 +19,18 @@ Override colors in the `[theme]` table:
 [theme]
 filter = "cyan"
 match = "cyan"
+selected-marker = "cyan"
+border = "dark-grey"
 description = "dark-grey"
-# border = "blue"
 # candidate = "white"
 # selected-fg = "black"
 # selected-bg = "cyan"
 ```
 
 Colors accept ANSI names, `ansi:0` through `ansi:255`, `rgb:255,128,0`, or
-`default` for the terminal's default color. Set both `filter` and `match` to
-`default` for a neutral palette with bold match emphasis.
+`default` for the terminal's default color. Set `filter`, `match`,
+`selected-marker`, and `border` to `default` for a neutral palette with bold
+match emphasis.
 
 ## Abbreviations
 

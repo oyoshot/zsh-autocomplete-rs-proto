@@ -316,6 +316,8 @@ struct ThemeRaw {
     selected_fg: Option<String>,
     #[serde(rename = "selected-bg")]
     selected_bg: Option<String>,
+    #[serde(rename = "selected-marker")]
+    selected_marker: Option<String>,
     description: Option<String>,
     filter: Option<String>,
     candidate: Option<String>,
@@ -446,6 +448,7 @@ pub struct Theme {
     pub border: Option<Color>,
     pub selected_fg: Option<Color>,
     pub selected_bg: Option<Color>,
+    pub selected_marker: Color,
     pub description: Color,
     pub filter: Option<Color>,
     pub candidate: Option<Color>,
@@ -455,9 +458,10 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Theme {
-            border: None,
+            border: Some(Color::DarkGrey),
             selected_fg: None,
             selected_bg: None,
+            selected_marker: Color::Cyan,
             description: Color::DarkGrey,
             filter: Some(Color::Cyan),
             candidate: None,
@@ -553,9 +557,21 @@ impl Config {
 
     pub fn theme(&self) -> Theme {
         Theme {
-            border: self.theme_raw.border.as_deref().and_then(parse_color),
+            border: Some(
+                self.theme_raw
+                    .border
+                    .as_deref()
+                    .and_then(parse_color)
+                    .unwrap_or(Color::DarkGrey),
+            ),
             selected_fg: self.theme_raw.selected_fg.as_deref().and_then(parse_color),
             selected_bg: self.theme_raw.selected_bg.as_deref().and_then(parse_color),
+            selected_marker: self
+                .theme_raw
+                .selected_marker
+                .as_deref()
+                .and_then(parse_color)
+                .unwrap_or(Color::Cyan),
             description: self
                 .theme_raw
                 .description
@@ -849,9 +865,10 @@ mod tests {
     #[test]
     fn theme_defaults() {
         let theme = Config::default().theme();
-        assert_eq!(theme.border, None);
+        assert_eq!(theme.border, Some(Color::DarkGrey));
         assert_eq!(theme.selected_fg, None);
         assert_eq!(theme.selected_bg, None);
+        assert_eq!(theme.selected_marker, Color::Cyan);
         assert_eq!(theme.description, Color::DarkGrey);
         assert_eq!(theme.filter, Some(Color::Cyan));
         assert_eq!(theme.match_fg, Color::Cyan);
@@ -865,6 +882,7 @@ mod tests {
                 border: Some("blue".to_string()),
                 selected_fg: Some("black".to_string()),
                 selected_bg: Some("cyan".to_string()),
+                selected_marker: Some("green".to_string()),
                 description: Some("dark-grey".to_string()),
                 filter: Some("green".to_string()),
                 candidate: Some("white".to_string()),
@@ -876,6 +894,7 @@ mod tests {
         assert_eq!(theme.border, Some(Color::Blue));
         assert_eq!(theme.selected_fg, Some(Color::Black));
         assert_eq!(theme.selected_bg, Some(Color::Cyan));
+        assert_eq!(theme.selected_marker, Color::Green);
         assert_eq!(theme.description, Color::DarkGrey);
         assert_eq!(theme.filter, Some(Color::Green));
         assert_eq!(theme.candidate, Some(Color::White));
@@ -1076,19 +1095,21 @@ when.command = "["
             ..Config::default()
         };
         let theme = config.theme();
-        assert_eq!(theme.border, None);
+        assert_eq!(theme.border, Some(Color::DarkGrey));
         assert_eq!(theme.description, Color::DarkGrey);
     }
 
     #[test]
     fn theme_can_use_terminal_default_for_accents() {
         let file: ConfigFile =
-            toml::from_str("[theme]\nfilter = 'default'\nmatch = 'default'").unwrap();
+            toml::from_str("[theme]\nfilter = 'default'\nmatch = 'default'\nselected-marker = 'default'\nborder = 'default'").unwrap();
         let config = Config {
             theme_raw: file.theme,
             ..Config::default()
         };
         assert_eq!(config.theme().filter, Some(Color::Reset));
         assert_eq!(config.theme().match_fg, Color::Reset);
+        assert_eq!(config.theme().selected_marker, Color::Reset);
+        assert_eq!(config.theme().border, Some(Color::Reset));
     }
 }

@@ -151,7 +151,8 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let visible = app.visible_candidate_indices();
     let highlight_idx = app.visible_selected_index();
     let padding = usize::from(inner >= 2);
-    let content_width = inner.saturating_sub(2 * padding);
+    let gutter = if inner >= 4 { 2 } else { padding };
+    let content_width = inner.saturating_sub(gutter + padding);
     let mut matcher = FuzzyMatcher::new();
     // Only abbreviations can coexist with rescue candidates from a hidden row.
     let rescue_active = app.filter_text.chars().count() >= 3
@@ -172,6 +173,11 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
 
         if Some(i) == highlight_idx {
             print_colored(buf, "│", theme.border)?;
+            if gutter == 2 {
+                print_colored(buf, "▸ ", Some(theme.selected_marker))?;
+            } else {
+                crossterm::queue!(buf, Print(&spaces[..gutter]))?;
+            }
             let use_explicit = theme.selected_fg.is_some() || theme.selected_bg.is_some();
             if use_explicit {
                 if let Some(c) = theme.selected_fg {
@@ -183,7 +189,6 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             } else {
                 crossterm::queue!(buf, SetAttribute(Attribute::Reverse))?;
             }
-            crossterm::queue!(buf, Print(&spaces[..padding]))?;
             print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, true)?;
             crossterm::queue!(
                 buf,
@@ -199,7 +204,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             print_colored(buf, "│", theme.border)?;
         } else {
             print_colored(buf, "│", theme.border)?;
-            crossterm::queue!(buf, Print(&spaces[..padding]))?;
+            crossterm::queue!(buf, Print(&spaces[..gutter]))?;
             print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, false)?;
 
             if !layout.description.is_empty() {
@@ -225,11 +230,21 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         buf,
         cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
     )?;
+    let range_label = Popup::range_label(app);
+    let range_width = UnicodeWidthStr::width(range_label.as_str());
+    let range_label = if range_width <= inner {
+        range_label.as_str()
+    } else {
+        ""
+    };
+    let remaining = inner - UnicodeWidthStr::width(range_label);
     print_colored(
         buf,
-        format_args!("└{}┘", &dashes[..inner * dash_byte_len]),
+        format_args!("└{}", &dashes[..remaining * dash_byte_len]),
         theme.border,
     )?;
+    print_colored(buf, range_label, Some(theme.description))?;
+    print_colored(buf, "┘", theme.border)?;
     crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     Ok(popup)
@@ -484,8 +499,44 @@ mod tests {
                 let text = printed_text(&bytes);
                 let row = text.split('│').nth(1).unwrap();
                 assert_eq!(UnicodeWidthStr::width(row), popup.width as usize - 2);
-                assert!(row.starts_with(' ') && row.ends_with(' '));
+                if selected && popup.width >= 6 {
+                    assert!(row.starts_with("▸ "));
+                } else {
+                    assert!(row.starts_with(' '));
+                }
+                assert!(row.ends_with(' '));
             }
+        }
+    }
+
+    #[test]
+    fn popup_range_tracks_scrolling_and_filtering_without_overflow() {
+        for cols in [8, 20, 80] {
+            let candidates = (0..42)
+                .map(|i| Candidate {
+                    text: format!("item-{i:02}"),
+                    description: String::new(),
+                    kind: String::new(),
+                    insert_text: None,
+                    cursor_offset: None,
+                })
+                .collect();
+            let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
+            app.max_visible = 8;
+            for (selected, label) in [(0, " 1–8 / 42 "), (41, " 35–42 / 42 ")] {
+                app.set_selected(selected);
+                let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+                let text = printed_text(&bytes);
+                let footer = text.rsplit_once('└').unwrap().1;
+                assert_eq!(UnicodeWidthStr::width(footer), popup.width as usize - 1);
+                assert_eq!(footer.contains(label), cols >= 20);
+                assert_eq!(text.matches('▸').count(), 1);
+            }
+            app.filter_text = "item-00".into();
+            app.update_filter();
+            let (bytes, _) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+            let text = printed_text(&bytes);
+            assert!(!text.rsplit_once('└').unwrap().1.contains('/'));
         }
     }
 

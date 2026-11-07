@@ -2164,7 +2164,7 @@ mod tests {
         fs::write(&path, "").unwrap();
         server.maybe_reload_config();
         assert!(server.config.auto_insert_unambiguous);
-        assert_eq!(server.theme.border, None);
+        assert_eq!(server.theme.border, Config::default().theme().border);
         assert_eq!(server.key_bindings.tab, Action::MoveDown);
         assert!(server.config.abbreviations.is_empty());
     }
