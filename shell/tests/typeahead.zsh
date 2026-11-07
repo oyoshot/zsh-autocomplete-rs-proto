@@ -53,13 +53,36 @@ probe() {
 _zacrs_test_outer_self_insert() {
     zle _zacrs_test_outer_original -w
 }
+_zacrs_test_outer_pre_redraw() {
+    zle _zacrs_test_original_pre_redraw
+}
+_zacrs_test_outer_line_init() {
+    zle _zacrs_test_original_line_init
+}
 _zacrs_test_wrap_and_reload() {
     _zacrs_defer_redraw
     zle -A self-insert _zacrs_test_outer_original
     zle -N self-insert _zacrs_test_outer_self_insert
+    # Autosuggestions wraps the hook dispatcher after startup. Registering the
+    # hook again must not save this wrapper as a child of that same dispatcher.
+    zle -A zle-line-pre-redraw _zacrs_test_original_pre_redraw
+    zle -N zle-line-pre-redraw _zacrs_test_outer_pre_redraw
+    # Also cover removing the last line-init entry, then enabling it again.
+    _zacrs_add_zle_hook line-init _zacrs_test_line_init
+    zle -A zle-line-init _zacrs_test_original_line_init
+    zle -N zle-line-init _zacrs_test_outer_line_init
+    add-zle-hook-widget -d line-init _zacrs_test_line_init
     source "$ZACRS_TYPEAHEAD_PLUGIN"
+    _zacrs_add_zle_hook line-init _zacrs_test_line_init
+    _zacrs_test_line_init() {
+        print -r -- "line-init:reloaded" >> "$ZACRS_TYPEAHEAD_MARKER"
+    }
     [[ "$widgets[self-insert]" == user:_zacrs_test_outer_self_insert ]] \
         && print -r -- "wrapper:preserved" >> "$ZACRS_TYPEAHEAD_MARKER"
+    [[ "$widgets[zle-line-pre-redraw]" == user:_zacrs_test_outer_pre_redraw ]] \
+        && print -r -- "hook-wrapper:preserved" >> "$ZACRS_TYPEAHEAD_MARKER"
+    [[ "$widgets[zle-line-init]" == user:_zacrs_test_outer_line_init ]] \
+        && print -r -- "line-init-wrapper:preserved" >> "$ZACRS_TYPEAHEAD_MARKER"
     _zacrs_line_pre_redraw() {
         print -r -- "reloaded:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
     }
@@ -157,9 +180,13 @@ print -r -- "ok: batched Tab restores self-insert for the next command"
 start_shell
 zpty -w -n zacrs_typeahead $'\x18q'
 wait_for_marker "wrapper:preserved"
+wait_for_marker "hook-wrapper:preserved"
+wait_for_marker "line-init-wrapper:preserved"
 wait_for_marker "reloaded:q"
 zpty -w -n zacrs_typeahead r
 wait_for_marker "reloaded:qr"
+zpty -w -n zacrs_typeahead $'\x03'
+wait_for_marker "line-init:reloaded"
 drain_pty
 if [[ "$pty_output" == *"maximum nested function level"* ]]; then
     print -u2 -r -- "not ok: reloading with another self-insert wrapper caused recursion"
@@ -167,3 +194,4 @@ if [[ "$pty_output" == *"maximum nested function level"* ]]; then
 fi
 stop_shell
 print -r -- "ok: reload preserves another plugin wrapper without recursive self-insert"
+print -r -- "ok: reload preserves a wrapped hook dispatcher without recursive redraw"

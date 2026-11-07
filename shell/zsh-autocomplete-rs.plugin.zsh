@@ -1051,12 +1051,40 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+# Keep this across reloads, including when disabling a hook removes its last
+# style entry. Its dispatcher may still be wrapped by another plugin.
+typeset -gA _zacrs_managed_zle_hooks
+_zacrs_add_zle_hook() {
+    emulate -L zsh
+    local hook="zle-$1" fn="$2" entry
+    local -a entries
+    local -i index=0
+    if zstyle -a "$hook" widgets entries || (( ${_zacrs_managed_zle_hooks[$hook]:-0} )); then
+        # add-zle-hook-widget would capture a wrapped dispatcher as a new hook,
+        # making dispatcher -> wrapper -> dispatcher recurse. Update its list
+        # directly so autosuggestions/highlighting keep their outer wrappers.
+        if [[ -z ${(M)entries:#(<->:|)$fn} ]]; then
+            for entry in "${entries[@]}"; do
+                if [[ "$entry" == <->:* ]] && (( ${entry%%:*} > index )); then
+                    index=${entry%%:*}
+                fi
+            done
+            entries+=("$(( index + 1 )):$fn")
+            zstyle "$hook" widgets "${entries[@]}"
+        fi
+        (( ${+widgets[$fn]} )) || zle -N "$fn"
+    else
+        add-zle-hook-widget "$1" "$fn" || return
+    fi
+    _zacrs_managed_zle_hooks[$hook]=1
+}
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
-    add-zle-hook-widget line-init _zacrs_reset_enter_selection
+    _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
+else
+    add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
 fi
-add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
+_zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.
 autoload -Uz add-zsh-hook
