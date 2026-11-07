@@ -13,6 +13,8 @@ candidates are outside the visible area, the bottom border shows the visible
 range, for example `1–10 / 42`. The marker and range are omitted when the terminal
 is too narrow to fit them.
 
+![Popup with cyan matches, selection marker, and visible candidate range](images/popup-ui.png)
+
 Override colors in the `[theme]` table:
 
 ```toml
