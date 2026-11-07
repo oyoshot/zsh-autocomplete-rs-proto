@@ -1,9 +1,24 @@
 # Repository Guidelines
 
+## Design Philosophy
+
+This project began after experience with zsh-autosuggestions exposed unwanted shell side effects, conflicts with other plugins, and overhead in both Zsh startup and completion. Minimizing shell interference, preserving plugin coexistence, and keeping startup and completion fast are core goals.
+
+Rust is intentional: implementing everything in Zsh is difficult to maintain within its language and plugin ecosystem. Keep reusable behavior in a testable Rust engine, with thin adapters for shell-specific integration. Zsh is the current adapter; the project name does not limit future shell support.
+
+- Keep completion, ranking, configuration, UI, and reusable editing policy in Rust. Keep shared models and protocols independent of Zsh syntax and APIs.
+- Let each adapter establish syntax and editing context through its shell's native facilities. Moving a handwritten Zsh parser into Rust does not make it portable. If context cannot be verified, preserve the input. See `docs/shell-adapters.md`.
+- Minimize shell side effects, not just shell code size. Prefer predictable behavior and explicit state. Reuse existing integration where practical; justify additional hooks, widgets, option changes, and buffer or cursor manipulation by the behavior they enable.
+- Scope shell option changes and restore borrowed state. Handle cancellation, reloads, and failures without leaking changes to buffers, cursors, widgets, or other plugins. Preserve explicit user choices.
+- Treat startup and completion overhead as design constraints. Avoid unnecessary per-keystroke work, synchronous helper processes, and IPC. Check performance when adding work to these paths; using Rust alone does not eliminate integration overhead.
+- Keep abbreviation definitions declarative. Gathering and displaying them must not evaluate their expansions or install hooks. Additional shell integration, such as automatic expansion, must be explicit and optional; disabled features should add no feature-specific work to input handling.
+
 ## Project Structure & Module Organization
+
 `src/` contains the Rust crate: `cli.rs` defines the Clap CLI, `main.rs` dispatches the CLI subcommands (`complete`, `render`, `clear`, `daemon`), `lib.rs` re-exports modules, and core behavior lives in files such as `app.rs`, `candidate.rs`, `config.rs`, `fuzzy.rs`, `handoff.rs`, `input.rs`, and `ui/`. Daemon and transport code lives in `client.rs`, `daemon.rs`, `protocol.rs`, and `tty.rs`. `handoff.rs` owns the reuse-token logic shared by render and daemon flows. `shell/` holds the Zsh plugin entrypoint and helper scripts, all using the `_zacrs_*` prefix. `benches/` contains Criterion benchmarks for fuzzy matching, rendering, startup, daemon, protocol, input, and handoff behavior, with shared fixtures in `benches/helpers/`. Treat `tmp/` as scratch or reference material, not primary source.
 
 ## Build, Test, and Development Commands
+
 Use a workspace-local target dir when possible:
 
 - `CARGO_TARGET_DIR=target cargo build` builds the binary at `target/debug/zsh-autocomplete-rs`.
@@ -19,10 +34,14 @@ Use a workspace-local target dir when possible:
 For focused manual CLI checks, pipe tab-separated candidates into the `complete` or `render` subcommands.
 
 ## Coding Style & Naming Conventions
+
 Follow standard Rust formatting with `rustfmt` and 4-space indentation. Use `snake_case` for functions, modules, and test names; `CamelCase` for types; `SCREAMING_SNAKE_CASE` for constants. Keep modules small and responsibility-focused, matching the current layout (`ui/render.rs`, `ui/popup.rs`, `ui/theme.rs`, etc.). In Zsh scripts, preserve the `_zacrs_*` function and file prefix pattern. When changing daemon IPC, popup metadata, or reuse-token handoff behavior, update Rust and shell sides together so the protocol and cache/snapshot logic stay aligned.
 
 ## Testing Guidelines
+
+Shell changes should cover state restoration and plugin coexistence. Exercise native context acquisition in real ZLE when changing syntax or editing-context checks; mocks alone cannot establish native parser behavior. Isolate runtime state with temporary directories. Check startup and completion overhead when adding work to those paths.
 Prefer unit tests colocated with the implementation under `#[cfg(test)]`. Name tests for observable behavior, for example `common_prefix_shared` or `new_filters_candidates`. Add or update tests for filtering, popup layout, config parsing, daemon protocol handling, reuse-token stability, and shell-facing edge cases whenever behavior changes. For UI or terminal-control changes, run a focused `cargo run -- complete` or `render` check in a real terminal, and verify the daemon path as well when touching `client.rs`, `daemon.rs`, `handoff.rs`, `protocol.rs`, or the shell plugin.
 
 ## Commit & Pull Request Guidelines
+
 Recent history follows scoped Conventional Commit prefixes such as `fix(shell): ...`, `feat(daemon): ...`, `refactor(ui): ...`, and `test: ...`. Keep subjects imperative and concise; add a scope when it clarifies the affected area. PRs should describe user-visible behavior, list verification steps run, and note any shell integration, daemon/socket, or terminal-specific risks. Include screenshots or terminal captures only when the popup rendering changes.
