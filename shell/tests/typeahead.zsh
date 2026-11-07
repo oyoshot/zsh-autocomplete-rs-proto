@@ -14,6 +14,12 @@ export ZACRS_TYPEAHEAD_MARKER="$tmp_dir/marker"
 
 print -r -- '
 ZACRS_BIN=false
+# Model a .zshrc that registers its own hook before sourcing zacrs, including
+# when that same configuration is sourced again.
+_zacrs_test_plain_pre_redraw() {
+    print -r -- "plain:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
+}
+zle -N zle-line-pre-redraw _zacrs_test_plain_pre_redraw
 source "$ZACRS_TYPEAHEAD_PLUGIN"
 
 # Keep the test focused on ZLE batching. Candidate generation, cursor queries,
@@ -90,6 +96,15 @@ _zacrs_test_wrap_and_reload() {
 }
 zle -N _zacrs_test_wrap_and_reload
 bindkey "^X" _zacrs_test_wrap_and_reload
+_zacrs_test_replace_and_reload() {
+    zle -N zle-line-pre-redraw _zacrs_test_plain_pre_redraw
+    source "$ZACRS_TYPEAHEAD_PLUGIN"
+    _zacrs_line_pre_redraw() {
+        print -r -- "reattached:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
+    }
+}
+zle -N _zacrs_test_replace_and_reload
+bindkey "^Y" _zacrs_test_replace_and_reload
 FUNCNEST=100
 
 # A printed prompt can precede ZLE entering raw mode on the PTY.
@@ -176,6 +191,16 @@ if [[ "$pty_output" == *"No such widget"* ]]; then
 fi
 stop_shell
 print -r -- "ok: batched Tab restores self-insert for the next command"
+
+start_shell
+zpty -w -n zacrs_typeahead $'\x19q'
+wait_for_marker "reattached:q"
+wait_for_marker "plain:q"
+zpty -w -n zacrs_typeahead $'\x19r'
+wait_for_marker "reattached:qr"
+wait_for_marker "plain:qr"
+stop_shell
+print -r -- "ok: reload reattaches a replaced hook and preserves the plain widget"
 
 start_shell
 zpty -w -n zacrs_typeahead $'\x18q'

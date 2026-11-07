@@ -1051,15 +1051,16 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-# Keep this across reloads, including when disabling a hook removes its last
-# style entry. Its dispatcher may still be wrapped by another plugin.
-typeset -gA _zacrs_managed_zle_hooks
 _zacrs_add_zle_hook() {
     emulate -L zsh
     local hook="zle-$1" fn="$2" entry
     local -a entries
     local -i index=0
-    if zstyle -a "$hook" widgets entries || (( ${_zacrs_managed_zle_hooks[$hook]:-0} )); then
+    # Registration styles outlive replacement (or deletion) of the public
+    # widget. Only bypass installation while the dispatcher is still present,
+    # either publicly or under a delegate saved by a wrapping plugin.
+    if [[ -n ${(k)widgets[(R)user:azhw:$hook]} ]]; then
+        zstyle -a "$hook" widgets entries || entries=()
         # add-zle-hook-widget would capture a wrapped dispatcher as a new hook,
         # making dispatcher -> wrapper -> dispatcher recurse. Update its list
         # directly so autosuggestions/highlighting keep their outer wrappers.
@@ -1076,7 +1077,6 @@ _zacrs_add_zle_hook() {
     else
         add-zle-hook-widget "$1" "$fn" || return
     fi
-    _zacrs_managed_zle_hooks[$hook]=1
 }
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
