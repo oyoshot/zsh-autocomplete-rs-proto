@@ -81,6 +81,9 @@ fn run_abbreviation_test(script: &str, daemon: bool) {
         config_dir.join("config.toml"),
         r#"[abbreviations]
 gs = "git status"
+v = "nvim"
+e = "exit"
+c = "clear"
 "$HOME" = "should-not-expand"
 '${HOME}' = "should-not-expand"
 '$(touch should-not-exist)' = "should-not-expand"

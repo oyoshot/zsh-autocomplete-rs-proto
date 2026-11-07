@@ -142,15 +142,22 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
     }
 
     _zacrs_ping_daemon() {
-        local fd resp
-        zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
-        fd=$REPLY
-        print -r -u $fd -- 'ping shell'
-        IFS= read -r -u $fd resp
-        exec {fd}<&-
-        [[ "$resp" == OK* ]] || return 1
-        REPLY="$resp"
-        return 0
+        local fd resp request
+        # Older daemons close the connection for an unknown request. Confirm
+        # liveness with the original ping before trying to start another daemon.
+        for request in 'ping shell' ping; do
+            zsocket "$_zacrs_socket_path" 2>/dev/null || return 1
+            fd=$REPLY
+            print -r -u $fd -- "$request"
+            resp=''
+            IFS= read -r -t 1 -u $fd resp
+            exec {fd}<&-
+            if [[ "$resp" == OK* ]]; then
+                REPLY="$resp"
+                return 0
+            fi
+        done
+        return 1
     }
 
     _zacrs_ensure_daemon() {
@@ -187,11 +194,49 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         (( SECONDS < _zacrs_daemon_next_retry )) && return 1
         _zacrs_ensure_daemon
     }
-    # Apply configuration only during plugin initialization. Routine daemon
-    # retries return handshake metadata without changing the failure latch.
-    if _zacrs_ensure_daemon && [[ "$REPLY" == OK* && " $REPLY " == *' enter_expansion=1 '* && " $REPLY " == *' edit_context=2 '* ]]; then
-        _zacrs_enter_enabled=1
-    fi
+    _zacrs_initialize_daemon() {
+        # Resolve one command without populating the entire PATH command table.
+        setopt localoptions nohashlistall
+        local handshake executable="$ZACRS_BIN" expected_id=''
+        [[ "$executable" == */* ]] || executable="${commands[$ZACRS_BIN]:-$ZACRS_BIN}"
+        local -A executable_stat
+        # zstat is a builtin module: a warm initialization launches no helper.
+        if zmodload -F zsh/stat b:zstat 2>/dev/null \
+            && zstat -H executable_stat -- "$executable" 2>/dev/null; then
+            expected_id="$executable_stat[device]:$executable_stat[inode]:$executable_stat[size]:$executable_stat[mtime]:$executable_stat[ctime]"
+        fi
+        if [[ -n "$expected_id" ]] && _zacrs_ping_daemon; then
+            handshake="$REPLY"
+            if [[ " $handshake " == *" executable_id=$expected_id "* ]]; then
+                _zacrs_daemon_available=1
+                _zacrs_daemon_next_retry=0
+            fi
+        fi
+        if (( ! _zacrs_daemon_available )); then
+            local ensure_status
+            # Replacement, locking and startup run only for a missing or
+            # obsolete daemon. Retries during editing retain their existing path.
+            if handshake=$("$ZACRS_BIN" daemon ensure 2>/dev/null); then
+                _zacrs_daemon_available=1
+                _zacrs_daemon_started=0
+                _zacrs_daemon_next_retry=0
+            else
+                ensure_status=$?
+                # Directly sourcing a new plugin with an older CLI still works.
+                if (( ensure_status == 2 )) && _zacrs_ensure_daemon; then
+                    handshake="$REPLY"
+                else
+                    _zacrs_mark_daemon_unavailable
+                    return 1
+                fi
+            fi
+        fi
+        if [[ "$handshake" == OK* && " $handshake " == *' enter_expansion=1 '* && " $handshake " == *' edit_context=2 '* ]]; then
+            _zacrs_enter_enabled=1
+        fi
+        return 0
+    }
+    _zacrs_initialize_daemon || true
 fi
 
 # === Render header parsing (shared by daemon + subprocess paths) ===

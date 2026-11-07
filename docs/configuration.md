@@ -167,4 +167,32 @@ reloaded. If the daemon restarts or loses the editing session, the current input
 is left unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
 
+### Daemon updates
+
+Installers should run the newly installed executable with `daemon retire` after
+replacing the binary. This stops an obsolete daemon, leaves a matching daemon
+alone, and does nothing if none is running. It never starts a daemon in the
+installer's environment; the next shell starts one with the user's environment.
+For Home Manager this belongs in activation after package installation, rather
+than the package build. Other package managers can use their post-upgrade hook.
+
+At plugin initialization, Zsh's builtin `zstat` reads the installed executable's
+device, inode, size and timestamps. The existing `ping shell` reply carries the
+running daemon's executable identity. Matching identities reuse the daemon with
+no helper process. A missing daemon or a mismatch invokes `daemon ensure`, which
+also covers updates outside the installer, including local builds and symlink
+changes. Neither the file check nor a helper process runs on normal keystrokes.
+
+Build identity additionally includes the Rust and shell sources, dependency
+lockfile and build settings. `daemon ensure` uses both build and executable
+identity so switching between copies of one build also converges on the installed
+executable. If `zstat` is unavailable, initialization uses the startup helper.
+
+Concurrent shell initializations share a lock, so only one replaces the daemon.
+During replacement, the old process releases its listening socket and lets open
+completion sessions finish while the new process accepts connections. Daemons
+from releases before this handoff support may close an open popup on replacement.
+If the installed CLI predates `daemon ensure`, a locally sourced newer plugin
+falls back to the existing daemon connection behavior.
+
 See [the shell adapter boundary](shell-adapters.md) for the context contract.

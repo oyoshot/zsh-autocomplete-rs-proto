@@ -56,6 +56,86 @@ fn run_shell(command: &mut Command, timeout: Duration) -> (Output, bool) {
 }
 
 #[test]
+fn zsh_reload_reuses_daemon_without_shell_handshake_support() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tempfile::Builder::new()
+        .prefix("zacrs-old.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let listener = UnixListener::bind(runtime.path().join("zacrs.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut requests = Vec::new();
+        while requests.len() < 4 && Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("accept: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut request = String::new();
+            BufReader::new(&stream).read_line(&mut request).unwrap();
+            // Legacy daemons close unknown requests without a response.
+            if request == "ping\n" {
+                stream.write_all(b"OK\n").unwrap();
+            }
+            requests.push(request);
+        }
+        requests
+    });
+    let (output, timed_out) = run_shell(
+        Command::new("zsh")
+            .args([
+                "-dfi",
+                "-c",
+                r#"
+unsetopt MONITOR
+_test_start() {
+    [[ "$*" == 'daemon ensure' ]] && return 2
+    print -r -- unexpected-start >> "$HOME/started"
+}
+ZACRS_BIN=_test_start
+for reload in 1 2; do
+    source "$ZACRS_PLUGIN"
+    (( _zacrs_daemon_available == 1 && _zacrs_daemon_started == 0 )) || exit 1
+    (( _zacrs_enter_enabled == 0 )) || exit 2
+done
+[[ ! -e "$HOME/started" ]]
+"#,
+            ])
+            .env_clear()
+            .env("PATH", env::var_os("PATH").unwrap_or_default())
+            .env("HOME", root.path())
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env(
+                "ZACRS_PLUGIN",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/shell/zsh-autocomplete-rs.plugin.zsh"
+                ),
+            ),
+        Duration::from_secs(5),
+    );
+    let requests = server.join().unwrap();
+    assert!(!timed_out, "{output:?}");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        requests,
+        ["ping shell\n", "ping\n", "ping shell\n", "ping\n"]
+    );
+    assert!(!root.path().join("started").exists());
+}
+
+#[test]
 fn zsh_public_init_starts_a_private_daemon() {
     // Cargo supplies the actual executable, including configured target triples.
     let binary = Path::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"));

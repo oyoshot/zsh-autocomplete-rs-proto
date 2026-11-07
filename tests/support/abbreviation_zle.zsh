@@ -46,6 +46,8 @@ _zacrs_line_pre_redraw() {
 _test_load_plugin
 git() { print -r -- "git:$*" > "$HOME/executed"; }
 gs() { print -r -- "gs:$*" > "$HOME/executed"; }
+nvim() { print -r -- "nvim:$*" > "$HOME/executed"; }
+clear() { print -r -- "clear:$*" > "$HOME/executed"; }
 typeset -gi _test_ssh_count=0
 ssh() {
     print -r -- "ssh:$*" > "$HOME/executed"
@@ -261,4 +263,22 @@ if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
 else
     [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'socket-free test started a daemon'
 fi
-print -r -- "ok: real ZLE Enter, history, cursor, continuation, selection and declarations (daemon=$ZACRS_TEST_DAEMON)"
+# Re-sourcing must preserve Enter expansion for both trigger lengths. Use the
+# real exit builtin last so e is verified without replacing its implementation.
+enter_line '_test_load_plugin; _test_load_plugin'
+for trigger expected in gs 'git:status' v 'nvim:' c 'clear:'; do
+    : > "$HOME/executed"
+    enter_line "$trigger"
+    wait_file "$HOME/executed" "$expected"
+done
+zpty -w -n zacrs_enter $'e\r'
+wait_file "$HOME/last-command" exit
+for attempt in {1..500}; do
+    drain_pty
+    if ! zpty -t zacrs_enter; then
+        print -r -- "ok: real ZLE Enter, history, cursor, continuation, selection, declarations and single-character triggers (daemon=$ZACRS_TEST_DAEMON)"
+        exit 0
+    fi
+    sleep .01
+done
+fail 'e did not exit the interactive shell'
