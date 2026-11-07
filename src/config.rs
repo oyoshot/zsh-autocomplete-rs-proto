@@ -319,6 +319,8 @@ struct ThemeRaw {
     description: Option<String>,
     filter: Option<String>,
     candidate: Option<String>,
+    #[serde(rename = "match")]
+    match_fg: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -400,6 +402,7 @@ fn parse_action(s: &str, default: Action) -> Action {
 pub(crate) fn parse_color(s: &str) -> Option<Color> {
     let s = s.to_lowercase();
     match s.as_str() {
+        "default" => Some(Color::Reset),
         "black" => Some(Color::Black),
         "dark-red" => Some(Color::DarkRed),
         "red" => Some(Color::Red),
@@ -446,6 +449,7 @@ pub struct Theme {
     pub description: Color,
     pub filter: Option<Color>,
     pub candidate: Option<Color>,
+    pub match_fg: Color,
 }
 
 impl Default for Theme {
@@ -455,8 +459,9 @@ impl Default for Theme {
             selected_fg: None,
             selected_bg: None,
             description: Color::DarkGrey,
-            filter: None,
+            filter: Some(Color::Cyan),
             candidate: None,
+            match_fg: Color::Cyan,
         }
     }
 }
@@ -557,8 +562,20 @@ impl Config {
                 .as_deref()
                 .and_then(parse_color)
                 .unwrap_or(Color::DarkGrey),
-            filter: self.theme_raw.filter.as_deref().and_then(parse_color),
+            filter: Some(
+                self.theme_raw
+                    .filter
+                    .as_deref()
+                    .and_then(parse_color)
+                    .unwrap_or(Color::Cyan),
+            ),
             candidate: self.theme_raw.candidate.as_deref().and_then(parse_color),
+            match_fg: self
+                .theme_raw
+                .match_fg
+                .as_deref()
+                .and_then(parse_color)
+                .unwrap_or(Color::Cyan),
         }
     }
 }
@@ -836,7 +853,8 @@ mod tests {
         assert_eq!(theme.selected_fg, None);
         assert_eq!(theme.selected_bg, None);
         assert_eq!(theme.description, Color::DarkGrey);
-        assert_eq!(theme.filter, None);
+        assert_eq!(theme.filter, Some(Color::Cyan));
+        assert_eq!(theme.match_fg, Color::Cyan);
         assert_eq!(theme.candidate, None);
     }
 
@@ -850,6 +868,7 @@ mod tests {
                 description: Some("dark-grey".to_string()),
                 filter: Some("green".to_string()),
                 candidate: Some("white".to_string()),
+                match_fg: Some("yellow".to_string()),
             },
             ..Config::default()
         };
@@ -860,6 +879,7 @@ mod tests {
         assert_eq!(theme.description, Color::DarkGrey);
         assert_eq!(theme.filter, Some(Color::Green));
         assert_eq!(theme.candidate, Some(Color::White));
+        assert_eq!(theme.match_fg, Color::Yellow);
     }
 
     // --- auto_insert_unambiguous TOML parsing ---
@@ -1058,5 +1078,17 @@ when.command = "["
         let theme = config.theme();
         assert_eq!(theme.border, None);
         assert_eq!(theme.description, Color::DarkGrey);
+    }
+
+    #[test]
+    fn theme_can_use_terminal_default_for_accents() {
+        let file: ConfigFile =
+            toml::from_str("[theme]\nfilter = 'default'\nmatch = 'default'").unwrap();
+        let config = Config {
+            theme_raw: file.theme,
+            ..Config::default()
+        };
+        assert_eq!(config.theme().filter, Some(Color::Reset));
+        assert_eq!(config.theme().match_fg, Color::Reset);
     }
 }

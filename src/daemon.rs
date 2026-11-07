@@ -3721,6 +3721,14 @@ mod tests {
         );
 
         let (_, tty) = read_text_ok(&output);
+        // Match styling may place escape sequences inside candidate names.
+        let mut plain = String::new();
+        termwiz::escape::parser::Parser::new().parse(tty.as_bytes(), |action| match action {
+            termwiz::escape::Action::Print(c) => plain.push(c),
+            termwiz::escape::Action::PrintString(s) => plain.push_str(&s),
+            _ => {}
+        });
+        let tty = plain;
         assert!(tty.contains("status"), "tty was: {tty:?}");
         assert!(tty.contains("stash"), "tty was: {tty:?}");
         assert!(!tty.contains("git"), "tty was: {tty:?}");

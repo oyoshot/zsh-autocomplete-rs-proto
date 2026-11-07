@@ -5,6 +5,7 @@ use any_ascii::any_ascii_char;
 use frizbee::{Config as MatchConfig, Matcher, SortStrategy, UnicodeMatching};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub struct FuzzyMatcher {
     matcher: Matcher,
@@ -30,6 +31,48 @@ impl Default for FuzzyMatcher {
 }
 
 impl FuzzyMatcher {
+    /// Return original UTF-8 ranges for display, including whole graphemes after folding.
+    /// This is only needed for visible rows; filtering keeps its cheaper score-only path.
+    pub(crate) fn highlight_ranges(
+        &mut self,
+        candidate: &Candidate,
+        query: &str,
+        rescue_active: bool,
+    ) -> Vec<std::ops::Range<usize>> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let max_typos = if rescue_active && query.chars().count() >= 3 {
+            typo_rescue_max_typos(query)
+        } else {
+            0
+        };
+        let normalize = normalize_for_matching(query) == query;
+        let fold_case = !(max_typos == 0 && query.chars().any(char::is_uppercase));
+        let match_query = normalize_case_for_matching(query, fold_case);
+        let normalized = normalize_candidate_for_matching(&candidate.text, normalize, fold_case);
+        self.ensure_matcher(&match_query, max_typos);
+        let Some(matched) = self.matcher.match_one_indices(normalized.as_ref(), 0) else {
+            return Vec::new();
+        };
+
+        let mut normalized_offset = 0;
+        let mut ranges = Vec::new();
+        for (offset, grapheme) in candidate.text.grapheme_indices(true) {
+            let folded = normalize_candidate_for_matching(grapheme, normalize, fold_case);
+            let end = normalized_offset + folded.len();
+            if matched
+                .indices
+                .iter()
+                .any(|&i| (normalized_offset..end).contains(&(i as usize)))
+            {
+                ranges.push(offset..offset + grapheme.len());
+            }
+            normalized_offset = end;
+        }
+        ranges
+    }
+
     pub fn new() -> Self {
         let config = MatchConfig {
             max_typos: Some(0),
@@ -386,6 +429,46 @@ mod tests {
                 cursor_offset: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn highlight_ranges_follow_fuzzy_alignment_and_unicode_folding() {
+        let mut matcher = FuzzyMatcher::new();
+        for (text, query, expected) in [
+            ("git-log", "gtl", vec![0..1, 2..3, 4..5]),
+            ("café", "cafe", vec![0..1, 1..2, 2..3, 3..5]),
+            ("cafe\u{301}", "café", vec![0..1, 1..2, 2..3, 3..6]),
+            ("日本語.txt", "本", std::iter::once(3..6).collect()),
+            ("Σ.txt", "σ", std::iter::once(0..2).collect()),
+            ("git", "", vec![]),
+            ("git", "G", vec![]),
+        ] {
+            let candidate = make_candidates(&[text]).remove(0);
+            assert_eq!(
+                matcher.highlight_ranges(&candidate, query, false),
+                expected,
+                "{text} / {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlight_ranges_include_typo_rescue_matches() {
+        let mut candidate = make_candidates(&["git"]).remove(0);
+        candidate.kind = "command_rescue".into();
+        let mut matcher = FuzzyMatcher::new();
+        assert!(
+            !matcher
+                .filter_matches(&[candidate.clone()], "gti", None)
+                .is_empty()
+        );
+        let ranges = matcher.highlight_ranges(&candidate, "gti", true);
+        assert!(!ranges.is_empty());
+        assert!(
+            ranges
+                .iter()
+                .all(|r| candidate.text.get(r.clone()).is_some())
+        );
     }
 
     #[test]

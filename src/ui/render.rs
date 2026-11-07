@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::candidate::Candidate;
+use crate::fuzzy::FuzzyMatcher;
 use crate::ui::popup::Popup;
 use crate::ui::theme::Theme;
 use crossterm::cursor;
@@ -76,6 +77,50 @@ fn print_colored(
     }
 }
 
+fn print_candidate(
+    buf: &mut impl Write,
+    text: &str,
+    original: &str,
+    ranges: &[std::ops::Range<usize>],
+    theme: &Theme,
+    selected: bool,
+) -> std::io::Result<()> {
+    let base = theme.candidate.unwrap_or(Color::Reset);
+    if !selected {
+        crossterm::queue!(buf, SetForegroundColor(base))?;
+    }
+    let original_end = if text == original {
+        text.len()
+    } else {
+        text.strip_suffix('…').unwrap_or(text).len()
+    };
+    let mut offset = 0;
+    for range in ranges.iter().filter(|r| r.end <= original_end) {
+        crossterm::queue!(
+            buf,
+            Print(&text[offset..range.start]),
+            SetAttribute(Attribute::Bold)
+        )?;
+        if !selected {
+            crossterm::queue!(buf, SetForegroundColor(theme.match_fg))?;
+        }
+        crossterm::queue!(
+            buf,
+            Print(&text[range.clone()]),
+            SetAttribute(Attribute::NormalIntensity)
+        )?;
+        if !selected {
+            crossterm::queue!(buf, SetForegroundColor(base))?;
+        }
+        offset = range.end;
+    }
+    crossterm::queue!(buf, Print(&text[offset..]))?;
+    if !selected {
+        crossterm::queue!(buf, ResetColor)?;
+    }
+    Ok(())
+}
+
 fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
     let popup = Popup::compute(app);
     let inner = popup.width.saturating_sub(2) as usize;
@@ -88,7 +133,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     crossterm::queue!(buf, cursor::Hide)?;
 
     // Top border with filter text
-    let filter_label = format!(" {} ", app.filter_text);
+    let filter_label = truncate_to_width(&format!(" {} ", app.filter_text), inner);
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
@@ -105,10 +150,23 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     // Candidate rows
     let visible = app.visible_candidate_indices();
     let highlight_idx = app.visible_selected_index();
+    let padding = usize::from(inner >= 2);
+    let content_width = inner.saturating_sub(2 * padding);
+    let mut matcher = FuzzyMatcher::new();
+    // Only abbreviations can coexist with rescue candidates from a hidden row.
+    let rescue_active = app.filter_text.chars().count() >= 3
+        && (visible
+            .iter()
+            .any(|&idx| app.all_candidates[idx].is_typo_rescue())
+            || (visible
+                .iter()
+                .any(|&idx| app.all_candidates[idx].is_user_defined())
+                && app.all_candidates.iter().any(Candidate::is_typo_rescue)));
 
     for (i, &candidate_idx) in visible.iter().enumerate() {
         let candidate = &app.all_candidates[candidate_idx];
-        let layout = layout_candidate(candidate, inner);
+        let layout = layout_candidate(candidate, content_width);
+        let ranges = matcher.highlight_ranges(candidate, &app.filter_text, rescue_active);
 
         crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
@@ -125,11 +183,13 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             } else {
                 crossterm::queue!(buf, SetAttribute(Attribute::Reverse))?;
             }
+            crossterm::queue!(buf, Print(&spaces[..padding]))?;
+            print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, true)?;
             crossterm::queue!(
                 buf,
-                Print(&layout.text),
                 Print(&spaces[..layout.gap]),
                 Print(&layout.description),
+                Print(&spaces[..padding]),
             )?;
             if use_explicit {
                 crossterm::queue!(buf, ResetColor)?;
@@ -139,7 +199,8 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             print_colored(buf, "│", theme.border)?;
         } else {
             print_colored(buf, "│", theme.border)?;
-            print_colored(buf, &layout.text, theme.candidate)?;
+            crossterm::queue!(buf, Print(&spaces[..padding]))?;
+            print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, false)?;
 
             if !layout.description.is_empty() {
                 crossterm::queue!(
@@ -153,6 +214,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
                 crossterm::queue!(buf, Print(&spaces[..layout.gap]))?;
             }
 
+            crossterm::queue!(buf, Print(&spaces[..padding]))?;
             print_colored(buf, "│", theme.border)?;
         }
         crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
@@ -368,11 +430,14 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(s) <= max_width {
         return s.to_string();
     }
+    if max_width == 0 {
+        return String::new();
+    }
     let mut width = 0;
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-        if width + cw > max_width {
+        if width + cw > max_width - 1 {
             result.push('…');
             break;
         }
@@ -389,6 +454,57 @@ mod tests {
 
     // --- truncate_to_width ---
 
+    fn printed_text(bytes: &[u8]) -> String {
+        use termwiz::escape::{Action, parser::Parser};
+        let mut text = String::new();
+        Parser::new().parse(bytes, |action| match action {
+            Action::Print(c) => text.push(c),
+            Action::PrintString(s) => text.push_str(&s),
+            _ => {}
+        });
+        text
+    }
+
+    #[test]
+    fn popup_rows_fit_width_with_padding_and_truncated_unicode() {
+        for cols in [4, 8, 20, 80] {
+            let candidates = vec![Candidate {
+                text: "日本語の長いファイル名.txt".into(),
+                description: "長い説明文です".into(),
+                kind: String::new(),
+                insert_text: None,
+                cursor_offset: None,
+            }];
+            let mut app = App::new_with_term_size(candidates, "日".into(), 1, 0, cols, 24);
+            for selected in [false, true] {
+                if selected {
+                    app.select_first();
+                }
+                let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+                let text = printed_text(&bytes);
+                let row = text.split('│').nth(1).unwrap();
+                assert_eq!(UnicodeWidthStr::width(row), popup.width as usize - 2);
+                assert!(row.starts_with(' ') && row.ends_with(' '));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_matches_keep_selection_colors_and_reset_bold() {
+        let mut buf = Vec::new();
+        print_candidate(
+            &mut buf,
+            "git",
+            "git",
+            std::slice::from_ref(&(0..1)),
+            &Theme::default(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(printed_text(&buf), "git");
+        assert_eq!(String::from_utf8(buf).unwrap(), "\x1b[1mg\x1b[22mit");
+    }
+
     #[test]
     fn ascii_within_limit() {
         assert_eq!(truncate_to_width("hello", 10), "hello");
@@ -401,7 +517,7 @@ mod tests {
 
     #[test]
     fn ascii_exceeds() {
-        assert_eq!(truncate_to_width("hello world", 5), "hello…");
+        assert_eq!(truncate_to_width("hello world", 5), "hell…");
     }
 
     #[test]
@@ -411,7 +527,7 @@ mod tests {
 
     #[test]
     fn zero_width() {
-        assert_eq!(truncate_to_width("hello", 0), "…");
+        assert_eq!(truncate_to_width("hello", 0), "");
     }
 
     #[test]

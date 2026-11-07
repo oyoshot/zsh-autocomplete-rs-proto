@@ -3,6 +3,30 @@
 The configuration file is read from `$XDG_CONFIG_HOME/zacrs/config.toml`, or
 `~/.config/zacrs/config.toml` when `XDG_CONFIG_HOME` is not set.
 
+## Popup appearance
+
+The popup uses the terminal's background and foreground, with ANSI cyan for the
+filter label and matched characters. Matches are also bold; selected rows retain
+their selection colors and use bold alone for matches. Candidate rows have one
+space of padding on each side when space permits.
+
+Override colors in the `[theme]` table:
+
+```toml
+[theme]
+filter = "cyan"
+match = "cyan"
+description = "dark-grey"
+# border = "blue"
+# candidate = "white"
+# selected-fg = "black"
+# selected-bg = "cyan"
+```
+
+Colors accept ANSI names, `ansi:0` through `ansi:255`, `rgb:255,128,0`, or
+`default` for the terminal's default color. Set both `filter` and `match` to
+`default` for a neutral palette with bold match emphasis.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are
