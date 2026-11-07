@@ -195,4 +195,9 @@ from releases before this handoff support may close an open popup on replacement
 If the installed CLI predates `daemon ensure`, a locally sourced newer plugin
 falls back to the existing daemon connection behavior.
 
+When sourcing a development checkout from `zshrc.local`, ensure a deferred loader
+does not subsequently load an older installed `init zsh` script. The deferred
+loader can skip initialization when `_zacrs_complete_popup` is already defined;
+otherwise its embedded plugin replaces the checkout's functions after startup.
+
 See [the shell adapter boundary](shell-adapters.md) for the context contract.
