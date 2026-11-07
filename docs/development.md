@@ -95,3 +95,44 @@ Containers share the host kernel and relay the terminal through a PTY, so macOS,
 kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
 intended runtimes, rather than rebuilding it in each container.
+
+## Benchmark CI
+
+PR performance comparisons rebuild and measure the exact PR base and the tested
+merge revision on the same runner. Both benchmark executables are built with the
+same installed Rust toolchain before any timing begins, then copied so a shared
+Cargo target directory cannot replace a baseline executable. Dependency lockfiles
+are respected. The order is base → PR → PR → base to reduce time-order bias.
+
+Each pass runs `fuzzy_bench` and `text_processing_bench` with a 1-second warmup,
+2-second measurement period, and 30 Criterion samples per case. Comparisons use
+the median of the two run estimates for each revision, with their minimum and
+maximum shown as the range. Within-run spread is retained separately. New or
+removed benchmark cases have no comparable ratio. The existing 200% alert
+threshold remains advisory; alerts do not fail the job. Fork PRs receive the
+comparison in the job summary without attempting to post a comment.
+
+The `benchmark-evidence` artifact retains CPU/VM information from `lscpu`, CPU
+affinity, Rust/Cargo versions, build flags, measured commit IDs, lockfile hashes,
+build logs, individual run logs, Criterion data, and the comparison inputs for
+14 days. Builds finish before measurements, but shared VM load, CPU scheduling,
+compiler layout, and changing benchmark fixtures can still affect results.
+Treat these as Rust microbenchmarks, not shell startup or completion latency.
+
+Main-branch pushes continue to populate the historical GitHub Pages graph.
+Those measurements come from separate runners and are useful as context;
+PR alerts use only the base measurements from the same job.
+
+To repeat a focused comparison locally on Linux with Rust, Python 3, and `lscpu`:
+
+```sh
+git worktree add --detach /tmp/zacrs-bench-base main
+python3 .github/scripts/paired_benchmarks.py compare \
+  --base /tmp/zacrs-bench-base --candidate . --target target \
+  --output /tmp/zacrs-bench-evidence \
+  --bench fuzzy_bench --filter 'filter_scaling/10000'
+```
+
+Use a new output directory for each invocation. The result JSON records the
+revisions actually measured. Runtime depends on build caches and the number of
+cases; the full PR comparison runs four benchmark passes instead of one.

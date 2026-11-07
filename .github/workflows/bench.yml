@@ -25,17 +25,52 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: bench-build
+      - name: Test benchmark comparison tooling
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+      - name: Record runner environment
+        if: github.event_name == 'push'
+        run: python3 .github/scripts/paired_benchmarks.py environment "$RUNNER_TEMP/benchmark-artifacts"
+
       - name: Run benchmarks
+        if: github.event_name == 'push'
         env:
           CRITERION_HOME: ${{ runner.temp }}/criterion
-        run: cargo bench --bench fuzzy_bench --bench text_processing_bench -- --noplot --output-format bencher | tee output.txt
+        run: |
+          cargo bench --locked --bench fuzzy_bench --bench text_processing_bench -- --noplot --output-format bencher \
+            | tee "$RUNNER_TEMP/benchmark-artifacts/main-output.txt"
+
+      - name: Check out PR base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: benchmark-base
+          persist-credentials: false
+
+      - name: Compare on the same runner
+        if: github.event_name == 'pull_request'
+        env:
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          python3 .github/scripts/paired_benchmarks.py compare \
+            --base benchmark-base --candidate . --target target \
+            --output "$RUNNER_TEMP/benchmark-artifacts"
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-evidence-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/benchmark-artifacts
+          retention-days: 14
 
       - name: Store benchmark result (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: cargo
-          output-file-path: output.txt
+          output-file-path: ${{ runner.temp }}/benchmark-artifacts/main-output.txt
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true
@@ -46,11 +81,11 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          tool: cargo
-          output-file-path: output.txt
-          gh-pages-branch: gh-pages
-          benchmark-data-dir-path: dev/bench
-          comment-on-alert: true
+          tool: customSmallerIsBetter
+          output-file-path: ${{ runner.temp }}/benchmark-artifacts/candidate.json
+          external-data-json-path: ${{ runner.temp }}/benchmark-artifacts/baseline.json
+          summary-always: true
+          comment-on-alert: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           alert-threshold: "200%"
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
