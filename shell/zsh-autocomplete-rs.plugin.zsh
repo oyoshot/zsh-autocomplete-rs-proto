@@ -17,17 +17,24 @@ if (( ! ${+_zacrs_embedded_init} )); then
 fi
 
 # Internal state
-# Recover if a previous reload interrupted the temporary type-ahead wrapper.
-# Already-dispatched wrapper calls may still need the saved widget, so keep the
-# alias alive and only restore the public self-insert binding here.
 zmodload zsh/zleparameter 2>/dev/null
-if [[ "${widgets[self-insert]}" == user:_zacrs_deferred_self_insert ]]; then
-    if (( ${+widgets[_zacrs_saved_self_insert]} )); then
-        zle -A _zacrs_saved_self_insert self-insert
-    else
-        zle -A .self-insert self-insert
-    fi
-fi
+
+_zacrs_restore_self_insert() {
+    (( ${1:-0} || ${_zacrs_self_insert_wrapped:-0} )) || return 0
+    local widget original=_zacrs_saved_self_insert
+    (( ${+widgets[$original]} )) || original=.self-insert
+    # Another plugin can save our temporary widget under its own alias and
+    # wrap self-insert around that alias. Restore every such reference before
+    # the saved delegate is reused, preserving the other plugin's outer wrapper.
+    for widget in ${(k)widgets[(R)user:_zacrs_deferred_self_insert]}; do
+        zle -A "$original" "$widget"
+    done
+    _zacrs_self_insert_wrapped=0
+}
+
+# Recover aliases captured during an interrupted batch, even when the public
+# widget is now an autosuggestions/highlighting wrapper rather than our own.
+_zacrs_restore_self_insert 1
 
 typeset -g _zacrs_prev_lbuffer=""
 typeset -g _zacrs_suppressed=0
@@ -93,13 +100,6 @@ _zacrs_record_enter_selection() {
     _zacrs_abbreviation_words
     _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$reply[1]" "$reply[2]" "$reply[3]" || true
     return 0
-}
-
-_zacrs_restore_self_insert() {
-    if (( _zacrs_self_insert_wrapped )); then
-        zle -A _zacrs_saved_self_insert self-insert
-        _zacrs_self_insert_wrapped=0
-    fi
 }
 
 # Temporarily observe the tail of a type-ahead (Shinsoku-typing) batch without
