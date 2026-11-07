@@ -48,6 +48,27 @@ probe() {
     print -r -- "probe:ok" >> "$ZACRS_TYPEAHEAD_MARKER"
 }
 
+# A second plugin may wrap self-insert while zacrs has deferred a redraw.
+# Its saved alias must remain callable after zacrs is sourced and deferred again.
+_zacrs_test_outer_self_insert() {
+    zle _zacrs_test_outer_original -w
+}
+_zacrs_test_wrap_and_reload() {
+    _zacrs_defer_redraw
+    zle -A self-insert _zacrs_test_outer_original
+    zle -N self-insert _zacrs_test_outer_self_insert
+    source "$ZACRS_TYPEAHEAD_PLUGIN"
+    [[ "$widgets[self-insert]" == user:_zacrs_test_outer_self_insert ]] \
+        && print -r -- "wrapper:preserved" >> "$ZACRS_TYPEAHEAD_MARKER"
+    _zacrs_line_pre_redraw() {
+        print -r -- "reloaded:$BUFFER" >> "$ZACRS_TYPEAHEAD_MARKER"
+    }
+    _zacrs_defer_redraw
+}
+zle -N _zacrs_test_wrap_and_reload
+bindkey "^X" _zacrs_test_wrap_and_reload
+FUNCNEST=100
+
 # A printed prompt can precede ZLE entering raw mode on the PTY.
 # Wait for the editor itself before sending a batch of input.
 _zacrs_test_line_init() {
@@ -132,3 +153,17 @@ if [[ "$pty_output" == *"No such widget"* ]]; then
 fi
 stop_shell
 print -r -- "ok: batched Tab restores self-insert for the next command"
+
+start_shell
+zpty -w -n zacrs_typeahead $'\x18q'
+wait_for_marker "wrapper:preserved"
+wait_for_marker "reloaded:q"
+zpty -w -n zacrs_typeahead r
+wait_for_marker "reloaded:qr"
+drain_pty
+if [[ "$pty_output" == *"maximum nested function level"* ]]; then
+    print -u2 -r -- "not ok: reloading with another self-insert wrapper caused recursion"
+    return 1
+fi
+stop_shell
+print -r -- "ok: reload preserves another plugin wrapper without recursive self-insert"

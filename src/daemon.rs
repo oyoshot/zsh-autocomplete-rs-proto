@@ -181,6 +181,7 @@ struct DaemonServer {
     active_popups: HashMap<String, ActivePopupEntry>,
     active_popup_order: Vec<String>,
     abbreviation_sessions: HashMap<String, crate::abbreviation::EditingSession>,
+    workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl DaemonServer {
@@ -200,6 +201,7 @@ impl DaemonServer {
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
             abbreviation_sessions: HashMap::new(),
+            workers: Vec::new(),
         };
         server.maybe_reload_config();
         server
@@ -242,6 +244,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         active_popups: HashMap::new(),
         active_popup_order: Vec::new(),
         abbreviation_sessions: HashMap::new(),
+        workers: Vec::new(),
     };
     let params = CompleteParams {
         prefix,
@@ -262,6 +265,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
 
 pub fn start() -> io::Result<()> {
     init_tracing();
+    let _ = crate::lifecycle::executable_id();
 
     let socket_path = protocol::socket_path();
     info!(socket_path = %socket_path.display(), "starting daemon");
@@ -304,7 +308,16 @@ pub fn start() -> io::Result<()> {
         }
     }
 
+    // Keep the listener open until its path is removed. A concurrent direct
+    // start must not mistake our socket for a stale one, bind a replacement,
+    // and then have that replacement unlinked by this shutdown.
     let _ = fs::remove_file(&server.socket_path);
+    drop(listener);
+    // Release the listener for the replacement while existing popup sockets
+    // finish on this process. Returning from main would terminate their threads.
+    for worker in server.workers {
+        let _ = worker.join();
+    }
     info!(socket_path = %server.socket_path.display(), "daemon stopped");
     Ok(())
 }
@@ -1009,6 +1022,7 @@ impl DaemonServer {
                     active_popups: HashMap::new(),
                     active_popup_order: Vec::new(),
                     abbreviation_sessions: HashMap::new(),
+                    workers: Vec::new(),
                 };
                 let params = CompleteParams {
                     prefix,
@@ -1024,7 +1038,8 @@ impl DaemonServer {
                     reuse_popup: reuse_token.is_some(),
                     shift_tab_sequence,
                 };
-                if let Err(error) = std::thread::Builder::new()
+                self.workers.retain(|worker| !worker.is_finished());
+                match std::thread::Builder::new()
                     .name("zacrs-complete".into())
                     .spawn(move || {
                         use std::io::Read;
@@ -1032,9 +1047,9 @@ impl DaemonServer {
                             BufReader::new(io::Cursor::new(buffered).chain(&session_stream));
                         let mut writer = io::BufWriter::new(&session_stream);
                         session.handle_complete(&mut reader, &mut writer, params, &tsv);
-                    })
-                {
-                    warn!(%error, "failed to start complete session");
+                    }) {
+                    Ok(worker) => self.workers.push(worker),
+                    Err(error) => warn!(%error, "failed to start complete session"),
                 }
                 false
             }
@@ -1068,8 +1083,10 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=2",
-                    u8::from(self.config.expand_abbreviation_on_enter)
+                    "OK enter_expansion={} edit_context=2 build_id={} executable_id={}",
+                    u8::from(self.config.expand_abbreviation_on_enter),
+                    crate::lifecycle::BUILD_ID,
+                    crate::lifecycle::executable_id()
                 );
                 let _ = writer.flush();
                 false
@@ -2100,6 +2117,7 @@ mod tests {
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
             abbreviation_sessions: HashMap::new(),
+            workers: Vec::new(),
         }
     }
 

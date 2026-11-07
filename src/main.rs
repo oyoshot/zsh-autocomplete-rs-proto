@@ -379,6 +379,19 @@ fn main() {
             }
         },
         Command::Daemon { action } => match action {
+            DaemonAction::Retire => {
+                if let Err(error) = zsh_autocomplete_rs::lifecycle::retire() {
+                    eprintln!("daemon retire error: {error}");
+                    process::exit(1);
+                }
+            }
+            DaemonAction::Ensure => match zsh_autocomplete_rs::lifecycle::ensure() {
+                Ok(handshake) => println!("{handshake}"),
+                Err(error) => {
+                    eprintln!("daemon ensure error: {error}");
+                    process::exit(1);
+                }
+            },
             DaemonAction::Start => match daemon::start() {
                 Ok(()) => process::exit(0),
                 Err(e) => {

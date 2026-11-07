@@ -34,14 +34,23 @@ set_buffer() {
 ZACRS_ABBR_EXPAND_ON_ENTER=1 # Legacy variables must not override TOML.
 _test_unexpected_cli() { print -r -- called >> "$HOME/unexpected-cli"; return 1; }
 ZACRS_BIN=_test_unexpected_cli
-set_buffer gs
-_zacrs_accept_line
-[[ "$BUFFER" == gs && "$accepted" == gs ]] || fail 'disabled by default'
+for trigger in gs v e c; do
+    set_buffer "$trigger"
+    _zacrs_accept_line
+    [[ "$BUFFER" == "$trigger" && "$accepted" == "$trigger" ]] || fail 'disabled by default'
+done
 [[ ! -e "$HOME/unexpected-cli" ]] || fail 'disabled Enter must not start a helper'
 ZACRS_BIN="$actual_binary"
 
 print -r -- $'\n[completion]\nexpand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
 source "$ZACRS_PLUGIN"
+# Single-character and longer triggers use the same acceptance path. Observe
+# the accepted line without launching an editor, clearing the terminal or exiting.
+for trigger expected in gs 'git status' v nvim e exit c clear; do
+    set_buffer "$trigger"
+    _zacrs_accept_line
+    [[ "$accepted" == "$expected" ]] || fail "Enter expansion for $trigger"
+done
 # Count actual adapter requests. Redraw and line-init are driven separately in
 # the real ZLE test; acceptance itself must not observe or reset a second time.
 functions[_test_saved_compinit]=$functions[_zacrs_ensure_compinit]

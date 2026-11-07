@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod fuzzy;
 pub mod handoff;
 pub mod input;
+pub mod lifecycle;
 pub mod protocol;
 pub mod tty;
 pub mod ui;
