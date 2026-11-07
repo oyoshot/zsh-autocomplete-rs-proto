@@ -308,8 +308,11 @@ pub fn start() -> io::Result<()> {
         }
     }
 
-    drop(listener);
+    // Keep the listener open until its path is removed. A concurrent direct
+    // start must not mistake our socket for a stale one, bind a replacement,
+    // and then have that replacement unlinked by this shutdown.
     let _ = fs::remove_file(&server.socket_path);
+    drop(listener);
     // Release the listener for the replacement while existing popup sockets
     // finish on this process. Returning from main would terminate their threads.
     for worker in server.workers {
