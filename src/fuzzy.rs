@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
@@ -50,27 +51,38 @@ impl FuzzyMatcher {
         let normalize = normalize_for_matching(query) == query;
         let fold_case = !(max_typos == 0 && query.chars().any(char::is_uppercase));
         let match_query = normalize_case_for_matching(query, fold_case);
-        let normalized = normalize_candidate_for_matching(&candidate.text, normalize, fold_case);
+        let mut graphemes = Vec::new();
+        let normalized = if candidate.text.is_ascii() {
+            Cow::Borrowed(candidate.text.as_str())
+        } else {
+            let (text, origins) = normalize_with_origins(&candidate.text, normalize, fold_case);
+            graphemes = origins;
+            Cow::Owned(text)
+        };
         self.ensure_matcher(&match_query, max_typos);
         let Some(matched) = self.matcher.match_one_indices(normalized.as_ref(), 0) else {
             return Vec::new();
         };
 
-        let mut normalized_offset = 0;
-        let mut ranges = Vec::new();
-        for (offset, grapheme) in candidate.text.grapheme_indices(true) {
-            let folded = normalize_candidate_for_matching(grapheme, normalize, fold_case);
-            let end = normalized_offset + folded.len();
-            if matched
-                .indices
-                .iter()
-                .any(|&i| (normalized_offset..end).contains(&(i as usize)))
-            {
-                ranges.push(offset..offset + grapheme.len());
-            }
-            normalized_offset = end;
+        if candidate.text.is_ascii() {
+            let mut indices = matched.indices;
+            indices.sort_unstable();
+            indices.dedup();
+            return indices
+                .into_iter()
+                .map(|i| i as usize..i as usize + 1)
+                .collect();
         }
-        ranges
+        graphemes
+            .into_iter()
+            .filter(|g| {
+                matched
+                    .indices
+                    .iter()
+                    .any(|&i| g.normalized.contains(&(i as usize)))
+            })
+            .map(|g| g.original)
+            .collect()
     }
 
     pub fn new() -> Self {
@@ -282,14 +294,11 @@ fn normalize_for_matching(text: &str) -> Cow<'_, str> {
         let mut changed = false;
 
         for c in text.nfd() {
-            if is_combining_mark(c) {
-                changed = true;
-                continue;
+            let mapped = latin_normalized_char(c);
+            changed |= mapped != Some(c);
+            if let Some(mapped) = mapped {
+                normalized.push(mapped);
             }
-
-            let mapped = latin_ascii_equivalent(c);
-            changed |= mapped != c;
-            normalized.push(mapped);
         }
 
         if changed {
@@ -298,6 +307,52 @@ fn normalize_for_matching(text: &str) -> Cow<'_, str> {
             Cow::Borrowed(text)
         }
     }
+}
+
+fn latin_normalized_char(c: char) -> Option<char> {
+    (!is_combining_mark(c)).then(|| latin_ascii_equivalent(c))
+}
+
+struct GraphemeOrigin {
+    normalized: Range<usize>,
+    original: Range<usize>,
+}
+
+/// Emit the matching text and its source ranges together. The decision to keep
+/// NFD output is global, just as in normalize_for_matching: an accent elsewhere
+/// can cause Hangul to stay decomposed when smart case skips the NFC pass.
+fn normalize_with_origins(
+    text: &str,
+    normalize: bool,
+    fold_case: bool,
+) -> (String, Vec<GraphemeOrigin>) {
+    let decompose = normalize && text.nfd().any(|c| latin_normalized_char(c) != Some(c));
+    let mut normalized = String::with_capacity(text.len());
+    let mut origins = Vec::new();
+    for (offset, grapheme) in text.grapheme_indices(true) {
+        let latin = if decompose {
+            Cow::Owned(
+                grapheme
+                    .nfd()
+                    .filter_map(latin_normalized_char)
+                    .collect::<String>(),
+            )
+        } else {
+            Cow::Borrowed(grapheme)
+        };
+        let folded = if fold_case {
+            normalize_case_for_matching(&latin, true)
+        } else {
+            Cow::Borrowed(latin.as_ref())
+        };
+        let start = normalized.len();
+        normalized.push_str(&folded);
+        origins.push(GraphemeOrigin {
+            normalized: start..normalized.len(),
+            original: offset..offset + grapheme.len(),
+        });
+    }
+    (normalized, origins)
 }
 
 fn normalize_case_for_matching(text: &str, fold_case: bool) -> Cow<'_, str> {
@@ -448,6 +503,64 @@ mod tests {
                 matcher.highlight_ranges(&candidate, query, false),
                 expected,
                 "{text} / {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlight_normalization_matches_filter_normalization() {
+        for text in [
+            "한ÉchoABCDEFG",
+            "한Écho",
+            "한Echo",
+            "한E\u{301}cho",
+            "한Écho",
+            "Σίσυφος.txt",
+            "İstanbul",
+            "cafe\u{301}",
+            "日本語.txt",
+            "\u{301}É",
+            "👩‍💻Écho",
+        ] {
+            for normalize in [false, true] {
+                for fold_case in [false, true] {
+                    let (normalized, origins) = normalize_with_origins(text, normalize, fold_case);
+                    assert_eq!(
+                        normalized,
+                        normalize_candidate_for_matching(text, normalize, fold_case),
+                        "{text}: normalize={normalize}, fold_case={fold_case}"
+                    );
+                    assert!(
+                        origins
+                            .iter()
+                            .all(|g| text.get(g.original.clone()).is_some()
+                                && normalized.get(g.normalized.clone()).is_some())
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_ranges_keep_offsets_after_hangul_decomposition() {
+        let mut matcher = FuzzyMatcher::new();
+        for text in ["한ÉchoABCDEFG", "한Écho", "한E\u{301}cho"] {
+            let candidate = make_candidates(&[text]).remove(0);
+            assert!(
+                !matcher
+                    .filter_matches(std::slice::from_ref(&candidate), "E", None)
+                    .is_empty()
+            );
+            let ranges = matcher.highlight_ranges(&candidate, "E", false);
+            let highlighted: Vec<_> = ranges.iter().map(|range| &text[range.clone()]).collect();
+            assert_eq!(
+                highlighted,
+                vec![if text.contains('É') {
+                    "É"
+                } else {
+                    "E\u{301}"
+                }],
+                "{text}"
             );
         }
     }

@@ -96,16 +96,15 @@ fn print_candidate(
     };
     let mut offset = 0;
     for range in ranges.iter().filter(|r| r.end <= original_end) {
-        crossterm::queue!(
-            buf,
-            Print(&text[offset..range.start]),
-            SetAttribute(Attribute::Bold)
-        )?;
+        crossterm::queue!(buf, Print(&text[offset..range.start]))?;
         if !selected {
             crossterm::queue!(buf, SetForegroundColor(theme.match_fg))?;
         }
         crossterm::queue!(
             buf,
+            // NO_COLOR makes crossterm's color commands reset all attributes.
+            // Set bold after the foreground so non-color emphasis survives.
+            SetAttribute(Attribute::Bold),
             Print(&text[range.clone()]),
             SetAttribute(Attribute::NormalIntensity)
         )?;
@@ -538,6 +537,58 @@ mod tests {
             let text = printed_text(&bytes);
             assert!(!text.rsplit_once('└').unwrap().1.contains('/'));
         }
+    }
+
+    #[test]
+    fn no_color_preserves_bold_matches() {
+        // Crossterm caches NO_COLOR globally. Use a fresh process instead of
+        // mutating the environment of other concurrently running tests.
+        if std::env::var_os("ZACRS_TEST_NO_COLOR").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ui::render::tests::no_color_preserves_bold_matches",
+                    "--nocapture",
+                ])
+                .env("NO_COLOR", "1")
+                .env("ZACRS_TEST_NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use termwiz::{
+            cell::Intensity,
+            escape::{
+                Action,
+                csi::{CSI, Sgr},
+                parser::Parser,
+            },
+        };
+        let mut buf = Vec::new();
+        print_candidate(
+            &mut buf,
+            "git",
+            "git",
+            std::slice::from_ref(&(0..1)),
+            &Theme::default(),
+            false,
+        )
+        .unwrap();
+        let mut bold = false;
+        let mut printed = Vec::new();
+        Parser::new().parse(&buf, |action| match action {
+            Action::CSI(CSI::Sgr(Sgr::Reset)) => bold = false,
+            Action::CSI(CSI::Sgr(Sgr::Intensity(intensity))) => bold = intensity == Intensity::Bold,
+            Action::Print(c) => printed.push((c, bold)),
+            _ => {}
+        });
+        assert_eq!(printed, vec![('g', true), ('i', false), ('t', false)]);
     }
 
     #[test]

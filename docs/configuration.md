@@ -34,6 +34,8 @@ Colors accept ANSI names, `ansi:0` through `ansi:255`, `rgb:255,128,0`, or
 `selected-marker`, and `border` to `default` for a neutral palette with bold
 match emphasis.
 
+Setting `NO_COLOR` disables colors while preserving bold match emphasis.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are
