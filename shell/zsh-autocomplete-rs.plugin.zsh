@@ -198,7 +198,12 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         # Resolve one command without populating the entire PATH command table.
         setopt localoptions nohashlistall
         local handshake executable="$ZACRS_BIN" expected_id=''
-        [[ "$executable" == */* ]] || executable="${commands[$ZACRS_BIN]:-$ZACRS_BIN}"
+        if [[ "$executable" != */* ]]; then
+            # Zsh 5.9 only exposes cached commands with HASH_LIST_ALL off.
+            # Cache this executable alone before reading its resolved path.
+            builtin hash -- "$executable" 2>/dev/null || true
+            executable="${commands[$ZACRS_BIN]:-$ZACRS_BIN}"
+        fi
         local -A executable_stat
         # zstat is a builtin module: a warm initialization launches no helper.
         if zmodload -F zsh/stat b:zstat 2>/dev/null \
