@@ -102,10 +102,13 @@ by `add-zle-hook-widget`. This keeps later standard registrations from capturing
 the fallback as a dispatcher child. Zacrs saves the native dispatcher function,
 then updates that hook's dispatcher body; aliases saved by other plugins are
 rebound to immutable copies of the previous body before each update.
-A small observer in the native dispatcher records
-whether that dispatcher actually ran; only a missing dispatch triggers a
-fallback. This avoids both recursion through active aliases and lost completion
-through stale aliases. It adds shell function calls on wrapped hook invocations,
+A small observer in the native dispatcher counts invocations by hook name and
+ZLE recursive editing depth. Each wrapper compares the count before and after
+its delegate; only an unchanged count triggers a fallback. Nested wrappers share
+increments, while successive events and recursive editors remain independent.
+The observer preserves the public widget name so another hook cannot mark this
+invocation as dispatched. This avoids recursion through active aliases and lost
+completion through stale aliases. It adds shell function calls on wrapped hook invocations,
 but no helper process or IPC. Delegates remain immutable so other plugins can
 save and wrap them across further reloads. Delegated widget calls use `nolast`
 to preserve `LASTWIDGET` for downstream hooks. The competing wrapper still

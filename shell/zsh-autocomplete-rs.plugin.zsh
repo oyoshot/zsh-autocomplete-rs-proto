@@ -1051,30 +1051,51 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-# Observe the dispatcher at execution time: a saved alias alone cannot tell us
-# whether the public hook still delegates to it. Dynamic scope shares this
-# observation across nested wrappers and discards it even on cancellation.
+# Count dispatches by hook and recursive editing depth. Each wrapper compares
+# its own entry count, sharing increments with its delegate chain without
+# retaining a stale "seen" flag across successive recursive-editor events.
 _zacrs_observe_zle_hook() {
     if (( ${+_zacrs_seen_zle_hooks} )); then
-        _zacrs_seen_zle_hooks[$_zacrs_current_zle_hook]=1
+        (( ++_zacrs_seen_zle_hooks[$WIDGET:$ZLE_RECURSIVE] ))
     fi
     return 0
 }
 _zacrs_dispatch_zle_hook() {
-    local delegate="$1" dispatcher="$2" _zacrs_current_zle_hook="$WIDGET"
+    local delegate="$1" dispatcher="$2" observation="$WIDGET:$ZLE_RECURSIVE"
     if (( ! ${+_zacrs_seen_zle_hooks} )); then
         local -A _zacrs_seen_zle_hooks
     fi
+    local -i before=${_zacrs_seen_zle_hooks[$observation]:-0}
     # Do not use -w: add-zle-hook-widget looks up its styles using the public
     # WIDGET name, including when called through another plugin's saved alias.
     local -i result=0
     zle "$delegate" -f nolast -- "${@:3}" || result=$?
     (( result == 0 )) || return $result
-    if (( ! ${_zacrs_seen_zle_hooks[$_zacrs_current_zle_hook]:-0} )); then
+    if (( ${_zacrs_seen_zle_hooks[$observation]:-0} == before )); then
         zle "$dispatcher" -f nolast -- "${@:3}"
         return $?
     fi
     return $result
+}
+# The user: entry makes the native dispatcher preserve the public WIDGET name
+# for the observer. Migrate styles retained by an already loaded older version,
+# including line-init when Enter integration is being disabled on this reload.
+() {
+    emulate -L zsh
+    local hook entry
+    local -a entries
+    for hook in zle-line-init zle-line-pre-redraw; do
+        zstyle -a "$hook" widgets entries || continue
+        if [[ -n ${(M)entries:#(<->:|)_zacrs_observe_zle_hook} ]]; then
+            for entry in "${entries[@]}"; do
+                if [[ "$entry" == (<->:|)_zacrs_observe_zle_hook ]]; then
+                    entries[${entries[(Ie)$entry]}]="${entry%_zacrs_observe_zle_hook}user:_zacrs_observe_zle_hook"
+                fi
+            done
+            zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
+            zstyle "$hook" widgets "${entries[@]}"
+        fi
+    done
 }
 typeset -gi _zacrs_zle_hook_generation=${_zacrs_zle_hook_generation:-0}
 # add-zle-hook-widget recognizes the dispatcher by its widget function name.
@@ -1140,9 +1161,9 @@ _zacrs_add_zle_hook() {
             return
         fi
     done
-    if [[ -z ${(M)entries:#(<->:|)_zacrs_observe_zle_hook} ]]; then
-        zle -N _zacrs_observe_zle_hook
-        zstyle "$hook" widgets "0:_zacrs_observe_zle_hook" "${entries[@]}"
+    if [[ -z ${(M)entries:#(<->:|)user:_zacrs_observe_zle_hook} ]]; then
+        zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
+        zstyle "$hook" widgets "0:user:_zacrs_observe_zle_hook" "${entries[@]}"
     fi
     local delegate="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))_delegate"
     zle -A "$hook" "$delegate"
