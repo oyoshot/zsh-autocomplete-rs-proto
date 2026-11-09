@@ -3,7 +3,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
 use any_ascii::any_ascii_char;
-use frizbee::{Config as MatchConfig, Matcher, SortStrategy, UnicodeMatching};
+use frizbee::{CaseMatching, Config as MatchConfig, Matcher, SortStrategy, UnicodeMatching};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use unicode_segmentation::UnicodeSegmentation;
@@ -63,9 +63,25 @@ impl FuzzyMatcher {
         let Some(matched) = self.matcher.match_one_indices(normalized.as_ref(), 0) else {
             return Vec::new();
         };
+        // Frizbee can accept a match but lose its traceback across a long gap.
+        // Recover a complete subsequence in the same normalized text, without
+        // altering candidate eligibility or scores. Never show a partial guess.
+        // With typo rescue, a shorter alignment can be intentional.
+        let incomplete = matched.indices.is_empty()
+            || (max_typos == 0 && matched.indices.len() < match_query.len());
+        let mut indices = if incomplete {
+            let case_sensitive = match self.config.casing {
+                CaseMatching::Ignore => false,
+                CaseMatching::Smart => match_query.chars().any(char::is_uppercase),
+                CaseMatching::Respect => true,
+            };
+            subsequence_indices(&match_query, &normalized, case_sensitive)
+                .unwrap_or(matched.indices)
+        } else {
+            matched.indices
+        };
 
         if candidate.text.is_ascii() {
-            let mut indices = matched.indices;
             indices.sort_unstable();
             indices.dedup();
             return indices
@@ -76,8 +92,7 @@ impl FuzzyMatcher {
         graphemes
             .into_iter()
             .filter(|g| {
-                matched
-                    .indices
+                indices
                     .iter()
                     .any(|&i| g.normalized.contains(&(i as usize)))
             })
@@ -437,6 +452,18 @@ fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
         .all(|query_char| chars.any(|c| c == query_char))
 }
 
+fn subsequence_indices(query: &str, haystack: &str, case_sensitive: bool) -> Option<Vec<u32>> {
+    let mut chars = haystack.char_indices();
+    let mut indices = Vec::with_capacity(query.len());
+    for query_char in query.chars() {
+        let (offset, matched) = chars.find(|&(_, c)| {
+            c == query_char || (!case_sensitive && c.eq_ignore_ascii_case(&query_char))
+        })?;
+        indices.extend((offset..offset + matched.len_utf8()).map(|i| i as u32));
+    }
+    Some(indices)
+}
+
 fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
     a.kind_priority()
         .cmp(&b.kind_priority())
@@ -505,6 +532,54 @@ mod tests {
                 "{text} / {query}"
             );
         }
+    }
+
+    #[test]
+    fn highlight_ranges_recover_widely_separated_matches() {
+        let mut matcher = FuzzyMatcher::new();
+        for (text, query, expected) in [
+            ("src/really-long-component-name/main.rs", "sm", "sm"),
+            ("SRC/really-long-component-name/Main.rs", "sm", "Sm"),
+            ("SRC/really-long-component-name/Main.rs", "SM", "SM"),
+            ("śrc/really-long-component-name/main.rs", "sm", "śm"),
+            ("śrc/really-long-component-name/main.rs", "śm", "śm"),
+            ("한śrc/really-long-component-name/main.rs", "sm", "śm"),
+            (
+                "s\u{301}rc/really-long-component-name/main.rs",
+                "sm",
+                "s\u{301}m",
+            ),
+            ("Śrc/really-long-component-name/Main.rs", "SM", "ŚM"),
+            ("日/really-long-component-name/本.rs", "日本", "日本"),
+        ] {
+            let candidate = make_candidates(&[text]).remove(0);
+            assert_eq!(
+                matcher
+                    .filter_matches(std::slice::from_ref(&candidate), query, None)
+                    .len(),
+                1,
+                "{text} / {query}"
+            );
+            let ranges = matcher.highlight_ranges(&candidate, query, false);
+            let highlighted: String = ranges.iter().map(|r| &text[r.clone()]).collect();
+            assert_eq!(highlighted, expected, "{text} / {query}");
+        }
+    }
+
+    #[test]
+    fn highlight_fallback_requires_a_complete_case_consistent_subsequence() {
+        assert_eq!(
+            subsequence_indices("sm", "Src/Main", false),
+            Some(vec![0, 4])
+        );
+        assert_eq!(subsequence_indices("sm", "Src/Main", true), None);
+        assert_eq!(subsequence_indices("SM", "src/main", true), None);
+        assert_eq!(
+            subsequence_indices("SM", "Src/Main", true),
+            Some(vec![0, 4])
+        );
+        assert_eq!(subsequence_indices("ssm", "src/main", false), None);
+        assert_eq!(subsequence_indices("gti", "git", false), None);
     }
 
     #[test]
