@@ -1116,6 +1116,16 @@ _zacrs_publish_zle_hook() {
     functions[azhw:$hook]="$body"
     zle -N "$hook" "azhw:$hook"
 }
+_zacrs_ensure_zle_observer() {
+    local hook="$1"
+    local -a entries
+    (( ${+widgets[user:_zacrs_observe_zle_hook]} )) \
+        || zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
+    zstyle -a "$hook" widgets entries || entries=()
+    if [[ -z ${(M)entries:#(<->:|)user:_zacrs_observe_zle_hook} ]]; then
+        zstyle "$hook" widgets "0:user:_zacrs_observe_zle_hook" "${entries[@]}"
+    fi
+}
 _zacrs_add_zle_hook() {
     emulate -L zsh
     local hook="zle-$1" fn="$2" entry
@@ -1142,7 +1152,14 @@ _zacrs_add_zle_hook() {
         (( ${+widgets[$fn]} )) || zle -N "$fn"
     fi
     # Includes our fallback published under the standard dispatcher identity.
-    [[ ${widgets[$hook]:-} == user:azhw:$hook ]] && return 0
+    if [[ ${widgets[$hook]:-} == user:azhw:$hook ]]; then
+        # A standard -D registration removal also removes our observer. Saved
+        # fallback delegates still need it when dispatching the rebuilt list.
+        if (( ${+functions[$standard]} )); then
+            _zacrs_ensure_zle_observer "$hook"
+        fi
+        return 0
+    fi
     # Save the native implementation once, before publishing any fallback.
     if (( ! ${+functions[$standard]} )); then
         functions[$standard]="${functions[azhw:$hook]}"
@@ -1155,16 +1172,16 @@ _zacrs_add_zle_hook() {
     zstyle -a "$hook" widgets entries || entries=()
     # A plain hook previously captured by the dispatcher can be reattached
     # directly, even if unused dispatcher aliases remain from an old wrapper.
+    # Its user:<function> alias retains the capture identity even if another
+    # plugin has since wrapped that alias with a different widget function.
     for entry in "${entries[@]#<->:}"; do
-        if [[ ${widgets[$entry]:-} == ${widgets[$hook]} ]]; then
+        if (( ${+widgets[$entry]} )) && \
+            [[ "$entry" == "${widgets[$hook]}" || ${widgets[$entry]} == ${widgets[$hook]} ]]; then
             _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
             return
         fi
     done
-    if [[ -z ${(M)entries:#(<->:|)user:_zacrs_observe_zle_hook} ]]; then
-        zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
-        zstyle "$hook" widgets "0:user:_zacrs_observe_zle_hook" "${entries[@]}"
-    fi
+    _zacrs_ensure_zle_observer "$hook"
     local delegate="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))_delegate"
     zle -A "$hook" "$delegate"
     _zacrs_publish_zle_hook "$hook" \
@@ -1176,6 +1193,11 @@ if (( _zacrs_enter_enabled > 0 )); then
     _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
 else
     add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+    # Disabling Enter removes only our callback, not competing hooks reached
+    # through a previously installed line-init fallback.
+    if (( ${+functions[_zacrs_standard_zle_line-init]} )); then
+        _zacrs_ensure_zle_observer zle-line-init
+    fi
 fi
 _zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
 

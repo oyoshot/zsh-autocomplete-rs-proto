@@ -102,6 +102,10 @@ by `add-zle-hook-widget`. This keeps later standard registrations from capturing
 the fallback as a dispatcher child. Zacrs saves the native dispatcher function,
 then updates that hook's dispatcher body; aliases saved by other plugins are
 rebound to immutable copies of the previous body before each update.
+Captured hooks are recognized by their registered alias as well as their current
+widget implementation, so wrapping a captured alias does not add a second path
+to its original hook. Reload also restores the observer if standard hook removal
+cleared it, including an existing line-init fallback with Enter disabled.
 A small observer in the native dispatcher counts invocations by hook name and
 ZLE recursive editing depth. Each wrapper compares the count before and after
 its delegate; only an unchanged count triggers a fallback. Nested wrappers share
