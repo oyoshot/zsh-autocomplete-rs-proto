@@ -153,20 +153,10 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let gutter = if inner >= 4 { 2 } else { padding };
     let content_width = inner.saturating_sub(gutter + padding);
     let mut matcher = FuzzyMatcher::new();
-    // Only abbreviations can coexist with rescue candidates from a hidden row.
-    let rescue_active = app.filter_text.chars().count() >= 3
-        && (visible
-            .iter()
-            .any(|&idx| app.all_candidates[idx].is_typo_rescue())
-            || (visible
-                .iter()
-                .any(|&idx| app.all_candidates[idx].is_user_defined())
-                && app.all_candidates.iter().any(Candidate::is_typo_rescue)));
-
     for (i, &candidate_idx) in visible.iter().enumerate() {
         let candidate = &app.all_candidates[candidate_idx];
         let layout = layout_candidate(candidate, content_width);
-        let ranges = matcher.highlight_ranges(candidate, &app.filter_text, rescue_active);
+        let ranges = matcher.highlight_ranges(candidate, &app.filter_text, app.match_mode());
 
         crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
@@ -477,6 +467,77 @@ mod tests {
             _ => {}
         });
         text
+    }
+
+    fn emphasized_text(app: &App) -> String {
+        use termwiz::{
+            cell::Intensity,
+            escape::{
+                Action,
+                csi::{CSI, Sgr},
+                parser::Parser,
+            },
+        };
+        let (bytes, _) = render_popup_to_bytes(app, &Theme::default()).unwrap();
+        let mut bold = false;
+        let mut text = String::new();
+        Parser::new().parse(&bytes, |action| match action {
+            Action::CSI(CSI::Sgr(Sgr::Reset)) => bold = false,
+            Action::CSI(CSI::Sgr(Sgr::Intensity(intensity))) => bold = intensity == Intensity::Bold,
+            Action::Print(c) if bold => text.push(c),
+            Action::PrintString(s) if bold => text.push_str(&s),
+            _ => {}
+        });
+        text
+    }
+
+    fn rescue_abbreviation_app(prefix: &str) -> App {
+        App::new_with_term_size(
+            vec![
+                Candidate::abbreviation("gti-σΣ".into(), "git status".into(), String::new()),
+                Candidate::parse_line("git\t\tcommand_rescue"),
+            ],
+            prefix.into(),
+            1,
+            0,
+            80,
+            24,
+        )
+    }
+
+    #[test]
+    fn narrowing_and_cached_results_keep_strict_highlighting_after_rescue() {
+        let mut app = rescue_abbreviation_app("gti");
+        assert_eq!(app.filtered_indices.len(), 2);
+        app.type_char('-');
+        assert_eq!(app.filtered_indices, vec![0]);
+        app.type_char('Σ');
+        assert_eq!(emphasized_text(&app), "gti-Σ");
+
+        // Restore the rescue query, then a different strict query, before
+        // revisiting the cached uppercase result.
+        assert!(app.backspace());
+        app.type_char('σ');
+        assert_eq!(emphasized_text(&app), "gti-σ");
+        assert!(app.backspace());
+        app.type_char('Σ');
+        assert_eq!(emphasized_text(&app), "gti-Σ");
+
+        // Backspace also restores the mode of a cached strict result.
+        app.type_char('x');
+        assert!(app.filtered_indices.is_empty());
+        assert!(app.backspace());
+        assert_eq!(emphasized_text(&app), "gti-Σ");
+    }
+
+    #[test]
+    fn full_rescan_keeps_rescue_highlighting_without_a_rescued_result() {
+        let mut app = rescue_abbreviation_app("gti-Σ");
+        assert_eq!(app.filtered_indices, vec![0]);
+        assert_eq!(emphasized_text(&app), "gti-σ");
+        app.type_char('x');
+        assert!(app.backspace());
+        assert_eq!(emphasized_text(&app), "gti-σ");
     }
 
     #[test]

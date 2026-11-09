@@ -25,6 +25,16 @@ pub struct ScoredMatch {
     pub score: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MatchMode {
+    max_typos: u16,
+}
+
+pub(crate) struct FilterResult {
+    pub matches: Vec<ScoredMatch>,
+    pub mode: MatchMode,
+}
+
 impl Default for FuzzyMatcher {
     fn default() -> Self {
         Self::new()
@@ -38,16 +48,12 @@ impl FuzzyMatcher {
         &mut self,
         candidate: &Candidate,
         query: &str,
-        rescue_active: bool,
+        mode: MatchMode,
     ) -> Vec<std::ops::Range<usize>> {
         if query.is_empty() {
             return Vec::new();
         }
-        let max_typos = if rescue_active && query.chars().count() >= 3 {
-            typo_rescue_max_typos(query)
-        } else {
-            0
-        };
+        let max_typos = mode.max_typos;
         let normalize = normalize_for_matching(query) == query;
         let fold_case = !(max_typos == 0 && query.chars().any(char::is_uppercase));
         let match_query = normalize_case_for_matching(query, fold_case);
@@ -135,6 +141,18 @@ impl FuzzyMatcher {
         query: &str,
         fuzzy_scope: Option<&[usize]>,
     ) -> Vec<ScoredMatch> {
+        self.filter_with_mode(candidates, query, fuzzy_scope)
+            .matches
+    }
+
+    /// Keep the matching policy with the result, including when the scope no
+    /// longer contains rescue commands or the result itself contains none.
+    pub(crate) fn filter_with_mode(
+        &mut self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+    ) -> FilterResult {
         if query.is_empty() {
             let mut results: Vec<ScoredMatch> = candidates
                 .iter()
@@ -145,14 +163,22 @@ impl FuzzyMatcher {
                 })
                 .collect();
             sort_empty_query_matches(&mut results, candidates);
-            return results;
+            return FilterResult {
+                matches: results,
+                mode: MatchMode::default(),
+            };
         }
 
-        if query.chars().count() >= 3 && has_typo_rescue_candidates(candidates, fuzzy_scope) {
-            return self.filter_typo_rescue_matches(candidates, query, fuzzy_scope);
+        let max_typos =
+            if query.chars().count() >= 3 && has_typo_rescue_candidates(candidates, fuzzy_scope) {
+                typo_rescue_max_typos(query)
+            } else {
+                0
+            };
+        FilterResult {
+            matches: self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos),
+            mode: MatchMode { max_typos },
         }
-
-        self.filter_frizbee_matches(candidates, query, fuzzy_scope, 0)
     }
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
@@ -180,16 +206,6 @@ fn typo_rescue_max_typos(query: &str) -> u16 {
 }
 
 impl FuzzyMatcher {
-    fn filter_typo_rescue_matches(
-        &mut self,
-        candidates: &[Candidate],
-        query: &str,
-        fuzzy_scope: Option<&[usize]>,
-    ) -> Vec<ScoredMatch> {
-        let max_typos = typo_rescue_max_typos(query);
-        self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos)
-    }
-
     fn filter_frizbee_matches(
         &mut self,
         candidates: &[Candidate],
@@ -514,6 +530,29 @@ mod tests {
     }
 
     #[test]
+    fn filter_result_records_mode_from_the_input_scope() {
+        let candidates = vec![
+            Candidate::abbreviation("gti-σΣ".into(), "git status".into(), String::new()),
+            Candidate::parse_line("git\t\tcommand_rescue"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+        for (query, scope, max_typos) in [
+            ("", None, 0),
+            ("gt", None, 0),
+            ("gti", None, 1),
+            ("gti-Σ", None, 2),
+            ("gti-Σ", Some([0].as_slice()), 0),
+        ] {
+            let result = matcher.filter_with_mode(&candidates, query, scope);
+            assert_eq!(result.mode.max_typos, max_typos, "{query} / {scope:?}");
+            if query == "gti-Σ" {
+                assert_eq!(result.matches.len(), 1);
+                assert_eq!(result.matches[0].candidate_idx, 0);
+            }
+        }
+    }
+
+    #[test]
     fn highlight_ranges_follow_fuzzy_alignment_and_unicode_folding() {
         let mut matcher = FuzzyMatcher::new();
         for (text, query, expected) in [
@@ -527,7 +566,7 @@ mod tests {
         ] {
             let candidate = make_candidates(&[text]).remove(0);
             assert_eq!(
-                matcher.highlight_ranges(&candidate, query, false),
+                matcher.highlight_ranges(&candidate, query, MatchMode::default()),
                 expected,
                 "{text} / {query}"
             );
@@ -560,7 +599,7 @@ mod tests {
                 1,
                 "{text} / {query}"
             );
-            let ranges = matcher.highlight_ranges(&candidate, query, false);
+            let ranges = matcher.highlight_ranges(&candidate, query, MatchMode::default());
             let highlighted: String = ranges.iter().map(|r| &text[r.clone()]).collect();
             assert_eq!(highlighted, expected, "{text} / {query}");
         }
@@ -626,7 +665,7 @@ mod tests {
                     .filter_matches(std::slice::from_ref(&candidate), "E", None)
                     .is_empty()
             );
-            let ranges = matcher.highlight_ranges(&candidate, "E", false);
+            let ranges = matcher.highlight_ranges(&candidate, "E", MatchMode::default());
             let highlighted: Vec<_> = ranges.iter().map(|range| &text[range.clone()]).collect();
             assert_eq!(
                 highlighted,
@@ -650,7 +689,7 @@ mod tests {
                 .filter_matches(&[candidate.clone()], "gti", None)
                 .is_empty()
         );
-        let ranges = matcher.highlight_ranges(&candidate, "gti", true);
+        let ranges = matcher.highlight_ranges(&candidate, "gti", MatchMode { max_typos: 1 });
         assert!(!ranges.is_empty());
         assert!(
             ranges

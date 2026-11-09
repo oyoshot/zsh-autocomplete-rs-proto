@@ -1,14 +1,20 @@
 use crate::candidate::Candidate;
-use crate::fuzzy::FuzzyMatcher;
+use crate::fuzzy::{FuzzyMatcher, MatchMode};
 use std::collections::HashMap;
 
 const DEFAULT_MAX_VISIBLE: usize = 10;
+
+struct CachedFilter {
+    indices: Vec<usize>,
+    mode: MatchMode,
+}
 
 pub struct App {
     pub all_candidates: Vec<Candidate>,
     pub filtered_indices: Vec<usize>,
     // Unbounded; typical session produces few unique queries so no eviction needed
-    cached_filters: HashMap<String, Vec<usize>>,
+    cached_filters: HashMap<String, CachedFilter>,
+    match_mode: MatchMode,
     pub filter_text: String,
     selected: Option<usize>,
     pub scroll_offset: usize,
@@ -72,6 +78,7 @@ impl App {
             all_candidates: candidates,
             filtered_indices: Vec::new(),
             cached_filters: HashMap::new(),
+            match_mode: MatchMode::default(),
             filter_text: lcp,
             selected: None,
             scroll_offset: 0,
@@ -93,28 +100,43 @@ impl App {
     }
 
     fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>) {
-        let scored =
+        let result =
             self.fuzzy
-                .filter_matches(&self.all_candidates, &self.filter_text, fuzzy_scope);
-        self.filtered_indices = scored.into_iter().map(|s| s.candidate_idx).collect();
+                .filter_with_mode(&self.all_candidates, &self.filter_text, fuzzy_scope);
+        self.filtered_indices = result
+            .matches
+            .into_iter()
+            .map(|s| s.candidate_idx)
+            .collect();
+        self.match_mode = result.mode;
         self.selected = None;
         self.scroll_offset = 0;
         self.cache_current_filter();
     }
 
     fn cache_current_filter(&mut self) {
-        self.cached_filters
-            .insert(self.filter_text.clone(), self.filtered_indices.clone());
+        self.cached_filters.insert(
+            self.filter_text.clone(),
+            CachedFilter {
+                indices: self.filtered_indices.clone(),
+                mode: self.match_mode,
+            },
+        );
     }
 
     fn restore_cached_filter(&mut self) -> bool {
-        let Some(filtered_indices) = self.cached_filters.get(&self.filter_text).cloned() else {
+        let Some(cached) = self.cached_filters.get(&self.filter_text) else {
             return false;
         };
-        self.filtered_indices = filtered_indices;
+        self.filtered_indices = cached.indices.clone();
+        self.match_mode = cached.mode;
         self.selected = None;
         self.scroll_offset = 0;
         true
+    }
+
+    pub(crate) fn match_mode(&self) -> MatchMode {
+        self.match_mode
     }
 
     pub fn move_down(&mut self) {
