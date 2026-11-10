@@ -152,7 +152,9 @@ for mode in line-init line-init-native; do
             expected_result=1
         fi
         wait_for_marker "returned:$expected_result::0"
-        wait_for_marker 'dispatch:0::0'
+        # Returning from recursive-edit need not redraw the empty outer buffer
+        # (notably on macOS). Synchronize with the outer line-init callback;
+        # the following input checks depth-0 redraws and restored editor state.
         wait_for_marker 'init:0'
         zpty -w -n zacrs_recursion c
         wait_for_marker 'dispatch:0:c:1'
