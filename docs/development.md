@@ -104,13 +104,17 @@ then updates that hook's dispatcher body; aliases saved by other plugins are
 rebound to immutable copies of the previous body before each update.
 Captured hooks are recognized by their registered alias as well as their current
 widget implementation, so wrapping a captured alias does not add a second path
-to its original hook. Reload also restores the observer if standard hook removal
-cleared it, including an existing line-init fallback with Enter disabled.
-A small observer in the native dispatcher counts invocations by hook name and
-ZLE recursive editing depth. Each wrapper compares the count before and after
-its delegate; only an unchanged count triggers a fallback. Nested wrappers share
-increments, while successive events and recursive editors remain independent.
-The observer preserves the public widget name so another hook cannot mark this
+to its original hook. A small observer at the start of the native dispatcher
+body counts invocations by hook name and ZLE recursive editing depth. It runs
+before user callbacks, even when a callback fails and a surrounding wrapper
+handles that failure. Observation is independent of the callback list, so
+standard hook-list resets and later registrations remain safe without another
+zacrs reload. Removing callbacks does not reinstall them.
+Each wrapper compares the count before and after its delegate; only an unchanged
+count triggers a fallback. Nested wrappers share increments, while successive
+events and recursive editors remain independent. Reload removes legacy observer
+callbacks and upgrades saved native dispatcher bodies from older versions.
+The observer uses the public widget name so another hook cannot mark this
 invocation as dispatched. This avoids recursion through active aliases and lost
 completion through stale aliases. It adds shell function calls on wrapped hook invocations,
 but no helper process or IPC. Delegates remain immutable so other plugins can

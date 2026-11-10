@@ -64,10 +64,11 @@ _zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
 # Model a reload retaining observer styles written by the previous version.
 for hook in zle-line-init zle-line-pre-redraw; do
     zstyle -a "$hook" widgets entries
-    entries=("${(@)entries/:user:_zacrs_observe_zle_hook/:_zacrs_observe_zle_hook}")
-    zstyle "$hook" widgets "${entries[@]}"
+    zstyle "$hook" widgets "0:_zacrs_observe_zle_hook" \
+        "0:user:_zacrs_observe_zle_hook" "${entries[@]}"
 done
 zle -N _zacrs_observe_zle_hook
+zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
 source "$ZACRS_RECURSION_PLUGIN"
 _zacrs_line_pre_redraw() {
     print -r -- "dispatch:$ZLE_RECURSIVE:$BUFFER:$CURSOR" >> "$ZACRS_RECURSION_MARKER"

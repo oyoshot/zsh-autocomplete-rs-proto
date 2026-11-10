@@ -20,8 +20,15 @@ _zacrs_test_ready() {
 _zacrs_test_plain() {
     print -r -- "plain:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
 }
+_aaa_plain() {
+    _zacrs_test_plain
+    return 7
+}
 if [[ $ZACRS_REGISTRATION_MODE == captured ]]; then
     zle -N zle-line-pre-redraw _zacrs_test_plain
+elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
+    # This captured index-0 hook sorts before an index-0 observer callback.
+    zle -N zle-line-pre-redraw _aaa_plain
 fi
 source "$ZACRS_REGISTRATION_PLUGIN"
 zle -A zle-line-pre-redraw _zacrs_test_saved_dispatcher
@@ -38,9 +45,9 @@ if [[ $ZACRS_REGISTRATION_MODE == captured ]]; then
     zle -N user:_zacrs_test_plain _zacrs_test_wrapped_plain
     zle -N zle-line-pre-redraw _zacrs_test_plain
     source "$ZACRS_REGISTRATION_PLUGIN"
-elif [[ $ZACRS_REGISTRATION_MODE == reset ]]; then
+elif [[ $ZACRS_REGISTRATION_MODE == reset* && $ZACRS_REGISTRATION_MODE != reset-init* ]]; then
     # First install a fallback around an active dispatcher delegate, then
-    # remove all registered entries (including zacrs bookkeeping) and reload.
+    # remove all registered entries, with and without another zacrs reload.
     _zacrs_test_outer() {
         print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
         zle _zacrs_test_saved_dispatcher -f nolast
@@ -49,10 +56,22 @@ elif [[ $ZACRS_REGISTRATION_MODE == reset ]]; then
     zle -N zle-line-pre-redraw _zacrs_test_outer
     source "$ZACRS_REGISTRATION_PLUGIN"
     add-zle-hook-widget -D line-pre-redraw '*'
+    if [[ $ZACRS_REGISTRATION_MODE == reset ]]; then
+        source "$ZACRS_REGISTRATION_PLUGIN"
+    fi
+elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
+    _zacrs_test_mask_failure() {
+        print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
+        local -i result=0
+        zle _zacrs_test_saved_dispatcher -f nolast || result=$?
+        (( result == 7 )) || return 1
+        print -r -- "after:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
+    }
+    zle -N zle-line-pre-redraw _zacrs_test_mask_failure
     source "$ZACRS_REGISTRATION_PLUGIN"
 fi
 
-if [[ $ZACRS_REGISTRATION_MODE == reset-init ]]; then
+if [[ $ZACRS_REGISTRATION_MODE == reset-init* ]]; then
     add-zle-hook-widget line-init _zacrs_test_ready
     zle -A zle-line-init _zacrs_test_saved_init
     _zacrs_test_outer_init() {
@@ -66,7 +85,9 @@ if [[ $ZACRS_REGISTRATION_MODE == reset-init ]]; then
     add-zle-hook-widget line-init _zacrs_test_ready
     # Enter integration is disabled by ZACRS_BIN=false; its remaining fallback
     # must still observe calls to the competing line-init callback after reload.
-    source "$ZACRS_REGISTRATION_PLUGIN"
+    if [[ $ZACRS_REGISTRATION_MODE == reset-init ]]; then
+        source "$ZACRS_REGISTRATION_PLUGIN"
+    fi
 fi
 
 # Keep the production hook lifecycle but isolate dispatch from candidate
@@ -121,6 +142,12 @@ assert_event() {
         expected="before:$buffer,plain:$buffer,after:$buffer,complete:$buffer,late:$buffer,done:$buffer"
     elif [[ $ZACRS_REGISTRATION_MODE == reset ]]; then
         expected="before:$buffer,complete:$buffer,late:$buffer,after:$buffer,done:$buffer"
+    elif [[ $ZACRS_REGISTRATION_MODE == reset-live ]]; then
+        # Standard removal intentionally disables zacrs until its next reload.
+        expected="before:$buffer,late:$buffer,after:$buffer,done:$buffer"
+    elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
+        # A failed first callback aborts the list even when its wrapper succeeds.
+        expected="before:$buffer,plain:$buffer,after:$buffer,done:$buffer"
     else
         expected="complete:$buffer,late:$buffer,done:$buffer"
     fi
@@ -142,7 +169,7 @@ typeset -a modes
 if (( $# )); then
     modes=("$@")
 else
-    modes=(captured reset reset-init)
+    modes=(captured reset reset-init reset-live reset-init-live masked-failure)
 fi
 typeset mode
 for mode in "${modes[@]}"; do
