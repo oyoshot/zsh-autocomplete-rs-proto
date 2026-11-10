@@ -65,31 +65,53 @@ impl FuzzyMatcher {
             graphemes = origins;
             Cow::Owned(text)
         };
-        self.ensure_matcher(&match_query, max_typos);
-        let Some(matched) = self.matcher.match_one_indices(normalized.as_ref(), 0) else {
-            return Vec::new();
+        // Typo traceback must preserve whole characters around substitutions.
+        // Strict matches use the cheaper byte traceback, validated below.
+        // Score-only filtering retains its byte matcher and existing ranking.
+        let unicode = if max_typos > 0 && !match_query.is_ascii() {
+            UnicodeMatching::Always
+        } else {
+            UnicodeMatching::Ignore
         };
+        self.ensure_matcher(&match_query, max_typos, unicode);
+        let mut indices = match self.matcher.match_one_indices(normalized.as_ref(), 0) {
+            Some(matched) => matched.indices,
+            None if !match_query.is_ascii() => Vec::new(),
+            None => return Vec::new(),
+        };
+        indices.sort_unstable();
+        indices.dedup();
+        let case_sensitive = match self.config.casing {
+            CaseMatching::Ignore => false,
+            CaseMatching::Smart => match_query.chars().any(char::is_uppercase),
+            CaseMatching::Respect => true,
+        };
+        // Frizbee's long-haystack fallback can still return byte alignments,
+        // even in Unicode mode. Reject split characters and unrelated scalars.
+        let invalid_unicode = !match_query.is_ascii()
+            && !character_alignment_matches(
+                &match_query,
+                &normalized,
+                &indices,
+                case_sensitive,
+                max_typos > 0,
+            );
         // Frizbee can accept a match but lose its traceback across a long gap.
         // Recover a complete subsequence in the same normalized text, without
         // altering candidate eligibility or scores. Never show a partial guess.
         // With typo rescue, a shorter alignment can be intentional.
-        let incomplete = matched.indices.is_empty()
-            || (max_typos == 0 && matched.indices.len() < match_query.len());
-        let mut indices = if incomplete {
-            let case_sensitive = match self.config.casing {
-                CaseMatching::Ignore => false,
-                CaseMatching::Smart => match_query.chars().any(char::is_uppercase),
-                CaseMatching::Respect => true,
-            };
-            subsequence_indices(&match_query, &normalized, case_sensitive)
-                .unwrap_or(matched.indices)
-        } else {
-            matched.indices
-        };
+        let incomplete =
+            indices.is_empty() || (max_typos == 0 && indices.len() < match_query.len());
+        if incomplete || invalid_unicode {
+            if let Some(recovered) = subsequence_indices(&match_query, &normalized, case_sensitive)
+            {
+                indices = recovered;
+            } else if invalid_unicode {
+                indices.clear();
+            }
+        }
 
         if candidate.text.is_ascii() {
-            indices.sort_unstable();
-            indices.dedup();
             return indices
                 .into_iter()
                 .map(|i| i as usize..i as usize + 1)
@@ -121,9 +143,10 @@ impl FuzzyMatcher {
         }
     }
 
-    fn ensure_matcher(&mut self, query: &str, max_typos: u16) {
-        if self.last_max_typos != max_typos {
+    fn ensure_matcher(&mut self, query: &str, max_typos: u16, unicode: UnicodeMatching) {
+        if self.last_max_typos != max_typos || self.config.unicode != unicode {
             self.config.max_typos = Some(max_typos);
+            self.config.unicode = unicode;
             self.matcher.set_config(self.config.clone());
             self.last_max_typos = max_typos;
         }
@@ -270,7 +293,7 @@ impl FuzzyMatcher {
             return Vec::new();
         }
 
-        self.ensure_matcher(&match_query, max_typos);
+        self.ensure_matcher(&match_query, max_typos, UnicodeMatching::Ignore);
         let mut results: Vec<ScoredMatch> = self
             .matcher
             .match_iter(&haystacks)
@@ -468,6 +491,39 @@ fn case_sensitive_subsequence_matches(query: &str, haystack: &str) -> bool {
         .all(|query_char| chars.any(|c| c == query_char))
 }
 
+fn character_alignment_matches(
+    query: &str,
+    haystack: &str,
+    mut indices: &[u32],
+    case_sensitive: bool,
+    allow_typos: bool,
+) -> bool {
+    let mut query_chars = query.chars();
+    while let Some(&start) = indices.first() {
+        let Some(c) = haystack
+            .get(start as usize..)
+            .and_then(|s| s.chars().next())
+        else {
+            return false;
+        };
+        let len = c.len_utf8();
+        if indices.len() < len || !(0..len).all(|i| indices[i] == start + i as u32) {
+            return false;
+        }
+        let matches = |q: char| q == c || (!case_sensitive && q.eq_ignore_ascii_case(&c));
+        let matched = if allow_typos {
+            query_chars.any(matches)
+        } else {
+            query_chars.next().is_some_and(matches)
+        };
+        if !matched {
+            return false;
+        }
+        indices = &indices[len..];
+    }
+    allow_typos || query_chars.next().is_none()
+}
+
 fn subsequence_indices(query: &str, haystack: &str, case_sensitive: bool) -> Option<Vec<u32>> {
     let mut chars = haystack.char_indices();
     let mut indices = Vec::with_capacity(query.len());
@@ -570,6 +626,50 @@ mod tests {
                 expected,
                 "{text} / {query}"
             );
+        }
+    }
+
+    #[test]
+    fn highlight_ranges_trace_complete_unicode_characters() {
+        let mut matcher = FuzzyMatcher::new();
+        for (text, query, expected) in [
+            ("日本語入力.txt", "日.t", "日.t"),
+            ("日本語入力.txt", "本.t", "本.t"),
+            ("日本語入力.txt", "語.t", "語.t"),
+            ("日本語入力.txt", "入力.t", "入力.t"),
+            ("日本語入力.txt", "日力.t", "日力.t"),
+            ("😀😃.txt", "😀.t", "😀.t"),
+        ] {
+            let candidate = make_candidates(&[text]).remove(0);
+            let result = matcher.filter_with_mode(std::slice::from_ref(&candidate), query, None);
+            assert_eq!(result.matches.len(), 1, "{text} / {query}");
+            let score = result.matches[0].score;
+            let ranges = matcher.highlight_ranges(&candidate, query, result.mode);
+            let highlighted: String = ranges.iter().map(|r| &text[r.clone()]).collect();
+            assert_eq!(highlighted, expected, "{text} / {query}");
+            let filtered = matcher.filter_matches(std::slice::from_ref(&candidate), query, None);
+            assert_eq!(filtered.len(), 1);
+            assert_eq!(
+                filtered[0].score, score,
+                "highlighting changed filtering for {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_highlighting_rejects_byte_only_matches_in_long_candidates() {
+        let mut matcher = FuzzyMatcher::new();
+        for padding in [0, 4096] {
+            for (suffix, expected) in [("本早入.txt", ""), ("本早入日.txt", "日.t")] {
+                let text = format!("{}{suffix}", "x".repeat(padding));
+                let candidate = make_candidates(&[&text]).remove(0);
+                let result =
+                    matcher.filter_with_mode(std::slice::from_ref(&candidate), "日.t", None);
+                assert_eq!(result.matches.len(), 1, "{padding} / {suffix}");
+                let ranges = matcher.highlight_ranges(&candidate, "日.t", result.mode);
+                let highlighted: String = ranges.iter().map(|r| &text[r.clone()]).collect();
+                assert_eq!(highlighted, expected, "{padding} / {suffix}");
+            }
         }
     }
 
@@ -696,6 +796,24 @@ mod tests {
                 .iter()
                 .all(|r| candidate.text.get(r.clone()).is_some())
         );
+    }
+
+    #[test]
+    fn unicode_highlighting_keeps_typo_rescue_character_matches() {
+        let mut matcher = FuzzyMatcher::new();
+        for (text, query, expected) in [
+            ("日本", "日x本", "日本"),
+            ("日本語", "日木語", "日語"),
+            ("😀😃x", "😀😄x", "😀x"),
+        ] {
+            let mut candidate = make_candidates(&[text]).remove(0);
+            candidate.kind = "command_rescue".into();
+            let result = matcher.filter_with_mode(std::slice::from_ref(&candidate), query, None);
+            assert_eq!(result.matches.len(), 1, "{text} / {query}");
+            let ranges = matcher.highlight_ranges(&candidate, query, result.mode);
+            let highlighted: String = ranges.iter().map(|r| &text[r.clone()]).collect();
+            assert_eq!(highlighted, expected, "{text} / {query}");
+        }
     }
 
     #[test]

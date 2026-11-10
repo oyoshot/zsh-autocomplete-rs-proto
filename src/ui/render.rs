@@ -506,6 +506,25 @@ mod tests {
     }
 
     #[test]
+    fn unicode_popup_emphasizes_only_complete_matching_characters() {
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("日本語入力.txt\t\tfile"),
+                Candidate::parse_line("本早入.txt\t\tfile"),
+            ],
+            "日.t".into(),
+            1,
+            0,
+            80,
+            24,
+        );
+        // Keep byte-score filtering, including its byte-only match, while
+        // refusing to emphasize unrelated characters in either candidate.
+        assert_eq!(app.filtered_indices.len(), 2);
+        assert_eq!(emphasized_text(&app), "日.t");
+    }
+
+    #[test]
     fn narrowing_and_cached_results_keep_strict_highlighting_after_rescue() {
         let mut app = rescue_abbreviation_app("gti");
         assert_eq!(app.filtered_indices.len(), 2);
