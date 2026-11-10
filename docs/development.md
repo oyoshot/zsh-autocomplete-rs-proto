@@ -114,6 +114,8 @@ Each wrapper compares the count before and after its delegate; only an unchanged
 count triggers a fallback. Nested wrappers share increments, while successive
 events and recursive editors remain independent. Reload removes legacy observer
 callbacks and upgrades saved native dispatcher bodies from older versions.
+The upgrade check matches Zsh's tab-indented function representation so repeated
+reloads keep one observer call per native dispatch.
 The observer uses the public widget name so another hook cannot mark this
 invocation as dispatched. This avoids recursion through active aliases and lost
 completion through stale aliases. It adds shell function calls on wrapped hook invocations,

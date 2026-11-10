@@ -1087,8 +1087,9 @@ _zacrs_dispatch_zle_hook() {
     local -aU dispatchers
     for hook in zle-line-init zle-line-pre-redraw; do
         standard="_zacrs_standard_zle_${hook#zle-}"
+        # Zsh serializes function bodies with a leading tab on each statement.
         if (( ${+functions[$standard]} )) && \
-            [[ ${functions[$standard]} != _zacrs_observe_zle_hook$'\n'* ]]; then
+            [[ ${functions[$standard]} != $'\t_zacrs_observe_zle_hook\n'* ]]; then
             # An older fallback may still hold native snapshots without entry
             # observation. Upgrade those exact bodies before removing its list
             # observer; leave saved fallback/delegate chains intact.
