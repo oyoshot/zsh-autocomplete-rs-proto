@@ -95,3 +95,31 @@ Containers share the host kernel and relay the terminal through a PTY, so macOS,
 kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
 intended runtimes, rather than rebuilding it in each container.
+
+When a reload finds a wrapped ZLE hook, zacrs preserves its delegation through
+a fallback while keeping the public `azhw:zle-*` dispatcher identity recognized
+by `add-zle-hook-widget`. This keeps later standard registrations from capturing
+the fallback as a dispatcher child. Zacrs saves the native dispatcher function,
+then updates that hook's dispatcher body; aliases saved by other plugins are
+rebound to immutable copies of the previous body before each update.
+Captured hooks are recognized by their registered alias as well as their current
+widget implementation, so wrapping a captured alias does not add a second path
+to its original hook. A small observer at the start of the native dispatcher
+body counts invocations by hook name and ZLE recursive editing depth. It runs
+before user callbacks, even when a callback fails and a surrounding wrapper
+handles that failure. Observation is independent of the callback list, so
+standard hook-list resets and later registrations remain safe without another
+zacrs reload. Removing callbacks does not reinstall them.
+Each wrapper compares the count before and after its delegate; only an unchanged
+count triggers a fallback. Nested wrappers share increments, while successive
+events and recursive editors remain independent. Reload removes legacy observer
+callbacks and upgrades saved native dispatcher bodies from older versions.
+The upgrade check matches Zsh's tab-indented function representation so repeated
+reloads keep one observer call per native dispatch.
+The observer uses the public widget name so another hook cannot mark this
+invocation as dispatched. This avoids recursion through active aliases and lost
+completion through stale aliases. It adds shell function calls on wrapped hook invocations,
+but no helper process or IPC. Delegates remain immutable so other plugins can
+save and wrap them across further reloads. Delegated widget calls use `nolast`
+to preserve `LASTWIDGET` for downstream hooks. The competing wrapper still
+surrounds its original dispatcher calls.

@@ -1051,12 +1051,154 @@ bindkey '^I' _zacrs_complete_popup
 
 # Register the auto-trigger hook without rebinding ordinary input keys.
 autoload -Uz add-zle-hook-widget
-add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
+# Count dispatches by hook and recursive editing depth. Each wrapper compares
+# its own entry count, sharing increments with its delegate chain without
+# retaining a stale "seen" flag across successive recursive-editor events.
+_zacrs_observe_zle_hook() {
+    if (( ${+_zacrs_seen_zle_hooks} )); then
+        (( ++_zacrs_seen_zle_hooks[$WIDGET:$ZLE_RECURSIVE] ))
+    fi
+    return 0
+}
+_zacrs_dispatch_zle_hook() {
+    local delegate="$1" dispatcher="$2" observation="$WIDGET:$ZLE_RECURSIVE"
+    if (( ! ${+_zacrs_seen_zle_hooks} )); then
+        local -A _zacrs_seen_zle_hooks
+    fi
+    local -i before=${_zacrs_seen_zle_hooks[$observation]:-0}
+    # Do not use -w: add-zle-hook-widget looks up its styles using the public
+    # WIDGET name, including when called through another plugin's saved alias.
+    local -i result=0
+    zle "$delegate" -f nolast -- "${@:3}" || result=$?
+    (( result == 0 )) || return $result
+    if (( ${_zacrs_seen_zle_hooks[$observation]:-0} == before )); then
+        zle "$dispatcher" -f nolast -- "${@:3}"
+        return $?
+    fi
+    return $result
+}
+# Observation belongs to the dispatcher body, not its removable callback list.
+# Drop observer entries retained by an older version, including line-init when
+# Enter integration is being disabled on this reload.
+() {
+    emulate -L zsh
+    local hook standard native fn
+    local -a entries
+    local -aU dispatchers
+    for hook in zle-line-init zle-line-pre-redraw; do
+        standard="_zacrs_standard_zle_${hook#zle-}"
+        # Zsh serializes function bodies with a leading tab on each statement.
+        if (( ${+functions[$standard]} )) && \
+            [[ ${functions[$standard]} != $'\t_zacrs_observe_zle_hook\n'* ]]; then
+            # An older fallback may still hold native snapshots without entry
+            # observation. Upgrade those exact bodies before removing its list
+            # observer; leave saved fallback/delegate chains intact.
+            native="${functions[$standard]}"
+            dispatchers=("$standard" "azhw:$hook"
+                ${${(v)widgets[(R)user:_zacrs_zle_hook_<->]}#user:})
+            for fn in "${dispatchers[@]}"; do
+                if [[ ${functions[$fn]:-} == "$native" ]]; then
+                    functions[$fn]=$'_zacrs_observe_zle_hook\n'"$native"
+                fi
+            done
+        fi
+        zstyle -a "$hook" widgets entries || continue
+        if [[ -n ${(M)entries:#(<->:|)(user:|)_zacrs_observe_zle_hook} ]]; then
+            entries=("${(@)entries:#(<->:|)(user:|)_zacrs_observe_zle_hook}")
+            if (( ${#entries} )); then
+                zstyle "$hook" widgets "${entries[@]}"
+            else
+                zstyle -d "$hook" widgets
+            fi
+        fi
+    done
+}
+typeset -gi _zacrs_zle_hook_generation=${_zacrs_zle_hook_generation:-0}
+# add-zle-hook-widget recognizes the dispatcher by its widget function name.
+# Keep that public identity, or later registrations would capture our fallback
+# as a dispatcher child. Freeze aliases before changing its implementation so
+# plugins that saved it retain the exact delegate chain they originally wrapped.
+_zacrs_publish_zle_hook() {
+    local hook="$1" body="$2" widget
+    local -a saved
+    saved=( ${${(k)widgets[(R)user:azhw:$hook]}:#$hook} )
+    if (( ${#saved} )); then
+        local snapshot="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))"
+        functions[$snapshot]="${functions[azhw:$hook]}"
+        for widget in "${saved[@]}"; do
+            zle -N "$widget" "$snapshot"
+        done
+    fi
+    functions[azhw:$hook]="$body"
+    zle -N "$hook" "azhw:$hook"
+}
+_zacrs_add_zle_hook() {
+    emulate -L zsh
+    local hook="zle-$1" fn="$2" entry
+    local standard="_zacrs_standard_zle_$1"
+    local -a entries
+    local -i index=0
+    if (( ! ${+functions[$standard]} )) && [[ -z ${(k)widgets[(R)user:azhw:$hook]} ]]; then
+        # With no saved dispatcher there can be no recursive delegation.
+        # Remove our retained entry first: otherwise the standard helper exits
+        # early for a duplicate and never records a newly captured plain hook.
+        add-zle-hook-widget -d "$1" "$fn" || return
+        add-zle-hook-widget "$1" "$fn" || return
+    else
+        zstyle -a "$hook" widgets entries || entries=()
+        if [[ -z ${(M)entries:#(<->:|)$fn} ]]; then
+            for entry in "${entries[@]}"; do
+                if [[ "$entry" == <->:* ]] && (( ${entry%%:*} > index )); then
+                    index=${entry%%:*}
+                fi
+            done
+            entries+=("$(( index + 1 )):$fn")
+            zstyle "$hook" widgets "${entries[@]}"
+        fi
+        (( ${+widgets[$fn]} )) || zle -N "$fn"
+    fi
+    # Includes our fallback published under the standard dispatcher identity.
+    if [[ ${widgets[$hook]:-} == user:azhw:$hook ]]; then
+        return 0
+    fi
+    # Save the native implementation once, before publishing any fallback.
+    if (( ! ${+functions[$standard]} )); then
+        # Observe entry before any callback can abort dispatch. Instrument the
+        # native body before freezing saved aliases in _zacrs_publish_zle_hook,
+        # so both native delegates and fallback calls survive hook-list resets.
+        functions[$standard]=$'_zacrs_observe_zle_hook\n'"${functions[azhw:$hook]}"
+        zle -N "$standard"
+        functions[azhw:$hook]="${functions[$standard]}"
+    fi
+    if (( ! ${+widgets[$hook]} )); then
+        _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
+        return
+    fi
+    zstyle -a "$hook" widgets entries || entries=()
+    # A plain hook previously captured by the dispatcher can be reattached
+    # directly, even if unused dispatcher aliases remain from an old wrapper.
+    # Its user:<function> alias retains the capture identity even if another
+    # plugin has since wrapped that alias with a different widget function.
+    for entry in "${entries[@]#<->:}"; do
+        if (( ${+widgets[$entry]} )) && \
+            [[ "$entry" == "${widgets[$hook]}" || ${widgets[$entry]} == ${widgets[$hook]} ]]; then
+            _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
+            return
+        fi
+    done
+    local delegate="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))_delegate"
+    zle -A "$hook" "$delegate"
+    _zacrs_publish_zle_hook "$hook" \
+        "_zacrs_dispatch_zle_hook ${(q)delegate} ${(q)standard} \"\$@\""
+}
+
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
-    add-zle-hook-widget line-init _zacrs_reset_enter_selection
+    _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
+else
+    add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
 fi
-add-zle-hook-widget line-pre-redraw _zacrs_line_pre_redraw
+_zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.
 autoload -Uz add-zsh-hook
