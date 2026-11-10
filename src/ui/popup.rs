@@ -2,7 +2,7 @@ use crate::app::App;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_POPUP_WIDTH: u16 = 60;
-const PADDING: u16 = 2;
+const PADDING: u16 = 3; // Two cells for the selection gutter, one on the right.
 
 /// Returns `true` if `s` is safe to embed as a space-delimited header token.
 /// Rejects empty strings, spaces, and ASCII control characters.
@@ -18,6 +18,21 @@ pub struct Popup {
 }
 
 impl Popup {
+    pub(crate) fn range_label(app: &App) -> String {
+        let visible = app.visible_candidate_indices().len();
+        let total = app.filtered_indices.len();
+        if visible == 0 || visible == total {
+            String::new()
+        } else {
+            format!(
+                " {}–{} / {} ",
+                app.scroll_offset + 1,
+                app.scroll_offset + visible,
+                total
+            )
+        }
+    }
+
     /// Format metadata string for shell consumption (used by both daemon and subprocess paths).
     pub fn format_metadata(
         &self,
@@ -62,10 +77,12 @@ impl Popup {
                 text_w + desc_w
             })
             .max()
-            .unwrap_or(0)
-            .max(UnicodeWidthStr::width(filter_display.as_str()) as u16);
+            .unwrap_or(0);
 
-        let inner_width = max_content_width + PADDING;
+        let inner_width = max_content_width
+            .saturating_add(PADDING)
+            .max(UnicodeWidthStr::width(filter_display.as_str()) as u16)
+            .max(UnicodeWidthStr::width(Self::range_label(app).as_str()) as u16);
         let width = (inner_width + 2).min(MAX_POPUP_WIDTH).min(term_cols);
 
         let num_visible = visible.len() as u16;

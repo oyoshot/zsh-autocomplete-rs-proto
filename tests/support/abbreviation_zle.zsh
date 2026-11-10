@@ -110,10 +110,13 @@ wait_file() {
     fail "waiting for ${filename:t} = ${(qqq)expected}"
 }
 wait_popup() {
+    setopt localoptions extendedglob
     local title="$1" attempt
     for attempt in {1..500}; do
         drain_pty
-        [[ "$pty_output" == *"┌ $title "* ]] && return 0
+        # The title uses theme colors; ignore SGR when checking visible text.
+        local plain_output=${pty_output//$'\e'\[[0-9\;]#m/}
+        [[ "$plain_output" == *"┌ $title "* ]] && return 0
         sleep 0.01
     done
     fail "waiting for popup title ${(qqq)title}"
