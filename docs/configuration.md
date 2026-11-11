@@ -42,10 +42,13 @@ Static abbreviations are portable completion candidates. By default they are
 offered only at command position. Expansions are inserted literally without
 running shell evaluation while candidates are being gathered or displayed.
 
-Abbreviations use the same matching score as other candidates, without an extra
-priority boost. For equal scores and text lengths, files, directories, and
-commands precede abbreviations. With an empty query, candidates are ordered by
-kind, so those native candidates also appear before abbreviations.
+Abbreviations use the same matching score as other candidates. For equal scores
+and text lengths, the kind order is directories, files, abbreviations, then
+commands and other native candidates. For example, an abbreviation
+`mkdir = "mkdir -p"` appears before the `mkdir` command for both `mkd` and
+`mkdir`. Better matches and shorter candidate text still take precedence.
+With an empty query, the same kind order keeps paths before abbreviations,
+including at argument positions such as `nvim <Tab>` and `mv <Tab>`.
 
 For simple entries, use the `[abbreviations]` table:
 
