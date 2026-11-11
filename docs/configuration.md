@@ -1,5 +1,7 @@
 # Configuration
 
+For installation and shell loading, see [installation.md](installation.md).
+
 The configuration file is read from `$XDG_CONFIG_HOME/zacrs/config.toml`, or
 `~/.config/zacrs/config.toml` when `XDG_CONFIG_HOME` is not set.
 

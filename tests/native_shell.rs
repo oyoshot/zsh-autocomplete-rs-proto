@@ -7,6 +7,8 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 struct ShellGroup(Child);
 
 impl Drop for ShellGroup {
@@ -136,7 +138,13 @@ done
 }
 
 #[test]
-fn zsh_public_init_starts_a_private_daemon() {
+fn zsh_installed_plugin_starts_a_private_daemon() {
+    for compiled in [false, true] {
+        installed_plugin_starts_a_private_daemon(compiled);
+    }
+}
+
+fn installed_plugin_starts_a_private_daemon(compiled: bool) {
     // Cargo supplies the actual executable, including configured target triples.
     let binary = Path::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"));
     let root = tempfile::Builder::new()
@@ -149,6 +157,7 @@ fn zsh_public_init_starts_a_private_daemon() {
         .tempdir_in("/tmp")
         .unwrap();
     fs::create_dir(root.path().join("config")).unwrap();
+    let plugin = support::install_zsh_plugin(root.path(), compiled);
     let parent_path = env::var_os("PATH").unwrap_or_default();
     let path = env::join_paths(
         std::iter::once(binary.parent().unwrap().to_path_buf())
@@ -166,7 +175,7 @@ fn zsh_public_init_starts_a_private_daemon() {
 trap 'zsh-autocomplete-rs daemon stop >/dev/null 2>&1' EXIT
 autoload -Uz compinit
 compinit
-eval "$(zsh-autocomplete-rs init zsh)"
+source "$ZACRS_PLUGIN"
 for attempt in {1..100}; do
     [[ "$(zsh-autocomplete-rs daemon status)" == running ]] && break
     sleep 0.05
@@ -183,6 +192,7 @@ done
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("TMPDIR", root.path())
             .env("TERM", "xterm-256color")
+            .env("ZACRS_PLUGIN", plugin)
             .current_dir(root.path()),
         Duration::from_secs(15),
     );

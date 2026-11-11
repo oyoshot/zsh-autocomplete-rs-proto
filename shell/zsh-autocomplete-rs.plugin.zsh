@@ -6,15 +6,13 @@
 
 ZACRS_BIN="${ZACRS_BIN:-zsh-autocomplete-rs}"
 
-# Source helpers for file-based installation. `init zsh` embeds them before this
-# file so startup does not need additional filesystem lookups.
-if (( ! ${+_zacrs_embedded_init} )); then
-    _zacrs_dir="${0:A:h}"
-    source "${_zacrs_dir}/_zacrs_util.zsh"
-    source "${_zacrs_dir}/_zacrs_gather.zsh"
-    source "${_zacrs_dir}/_zacrs_compsys.zsh"
-    source "${_zacrs_dir}/_zacrs_protocol.zsh"
-fi
+# Packages keep the helpers beside this entry point, with optional adjacent .zwc
+# files. Zsh selects compiled code when sourcing each file.
+_zacrs_dir="${0:A:h}"
+source "${_zacrs_dir}/_zacrs_util.zsh"
+source "${_zacrs_dir}/_zacrs_gather.zsh"
+source "${_zacrs_dir}/_zacrs_compsys.zsh"
+source "${_zacrs_dir}/_zacrs_protocol.zsh"
 
 # Internal state
 zmodload zsh/zleparameter 2>/dev/null

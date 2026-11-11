@@ -32,6 +32,12 @@ artifact_log=$(mktemp /tmp/zacrs-build.XXXXXX)
     binary=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "zsh-autocomplete-rs" and .executable != null) | .executable' "$artifact_log")
     test -n "$binary"
     install -m 755 "$binary" "$HOME/.local/bin/zsh-autocomplete-rs"
+    shell_dir="$HOME/.local/share/zsh-autocomplete-rs"
+    mkdir -p "$shell_dir"
+    install -m 644 shell/*.zsh "$shell_dir/"
+    for shell_file in "$shell_dir"/*.zsh; do
+        zsh -dfc 'zcompile -U "$1"' _ "$shell_file"
+    done
 ) 9> "$CARGO_TARGET_DIR/.zacrs-manual-build.lock"
 
 # Stop the old listener after installing the binary; the shell starts a new one.
