@@ -6,5 +6,5 @@ HISTSIZE=1000
 SAVEHIST=1000
 bindkey -e
 
-source "$HOME/.local/share/zacrs/init.zsh"
+eval "$(zsh-autocomplete-rs init zsh)"
 PROMPT='%F{cyan}[zacrs-container]%f %~ %# '

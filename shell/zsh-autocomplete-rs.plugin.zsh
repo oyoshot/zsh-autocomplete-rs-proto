@@ -57,6 +57,11 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
+# Preserve initialization across reloads so a selected command stays protected.
+# Older adapters lack this flag but declare _zacrs_enter_enabled. Its presence
+# identifies a reload with a potentially protected session, even when disabled
+# or unavailable. Capture it before declaring the capability state below.
+typeset -gi _zacrs_enter_session_initialized=${_zacrs_enter_session_initialized:-${+_zacrs_enter_enabled}}
 # 0: disabled; 1: enabled; -1: invalid response; -2: transport unavailable.
 # Only a fresh editing line may recover transport; invalid responses need reload.
 typeset -gi _zacrs_enter_enabled=0
@@ -89,14 +94,18 @@ _zacrs_reset_cache() {
 # Only enabled shells send observations; the daemon owns the editing session.
 _zacrs_reset_enter_selection() {
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset || true
+    if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
+        _zacrs_enter_session_initialized=1
+    fi
     if (( _zacrs_enter_enabled == -2 )); then
         # A new line has no selection to preserve. Reconnect here, never in the
         # middle of accepting or applying a user's existing input.
         _zacrs_enter_enabled=0
         _zacrs_daemon_available=0
         if _zacrs_initialize_daemon; then
-            (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset || true
+            if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
+                _zacrs_enter_session_initialized=1
+            fi
         else
             _zacrs_enter_enabled=-2
         fi
@@ -1192,6 +1201,12 @@ _zacrs_add_zle_hook() {
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 if (( _zacrs_enter_enabled > 0 )); then
     _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
+    # An idle loader can source us after this line's line-init has already run.
+    # Normal startup leaves initialization to line-init; reload must not reset
+    # an existing session and lose its explicit selection protection.
+    if (( ! _zacrs_enter_session_initialized )) && zle; then
+        _zacrs_reset_enter_selection
+    fi
 else
     add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
 fi

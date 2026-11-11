@@ -132,34 +132,6 @@ fn concurrent_initializations_share_one_daemon() {
 }
 
 #[test]
-fn compiled_init_keeps_configuration_dynamic_and_has_source_fallback() {
-    let fixture = Fixture::new();
-    fixture.shell(
-        std::path::Path::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs")),
-        r#"
-"$ZACRS_BIN" init zsh > "$HOME/init.zsh" || exit 1
-zcompile -U "$HOME/init.zsh" || exit 2
-source "$HOME/init.zsh"
-(( _zacrs_daemon_available == 1 && _zacrs_enter_enabled == 0 )) || exit 3
-# Neither settings nor completion registrations are frozen into the .zwc.
-mkdir -p "$XDG_CONFIG_HOME/zacrs"
-print -rl -- '[completion]' 'expand_abbreviation_on_enter = true' > "$XDG_CONFIG_HOME/zacrs/config.toml"
-source "$HOME/init.zsh"
-(( _zacrs_enter_enabled == 1 )) || exit 4
-autoload -Uz compinit
-compinit -i -d "$HOME/compdump"
-_test_new_cli() { :; }
-compdef _test_new_cli new-cli
-[[ "$_comps[new-cli]" == _test_new_cli ]] || exit 5
-# The ordinary source remains usable when bytecode is unavailable.
-rm "$HOME/init.zsh.zwc"
-source "$HOME/init.zsh"
-(( _zacrs_daemon_available == 1 && _zacrs_enter_enabled == 1 )) || exit 6
-"#,
-    );
-}
-
-#[test]
 fn warm_shell_reload_launches_no_helper() {
     let fixture = Fixture::new();
     fixture.ensure();
@@ -221,20 +193,22 @@ source "$ZACRS_PLUGIN"
 
 #[test]
 fn stop_is_idempotent_and_stops_even_a_matching_daemon() {
-    let fixture = Fixture::new();
-    for running in [false, true, false] {
-        if running {
-            fixture.ensure();
+    for action in ["stop", "retire"] {
+        let fixture = Fixture::new();
+        for running in [false, true, false] {
+            if running {
+                fixture.ensure();
+            }
+            assert!(
+                fixture
+                    .command()
+                    .args(["daemon", action])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!fixture.runtime.path().join("zacrs.sock").exists());
         }
-        assert!(
-            fixture
-                .command()
-                .args(["daemon", "stop"])
-                .status()
-                .unwrap()
-                .success()
-        );
-        assert!(!fixture.runtime.path().join("zacrs.sock").exists());
     }
 }
 

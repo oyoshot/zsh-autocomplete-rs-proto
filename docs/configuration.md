@@ -194,6 +194,12 @@ end of the command word, then restores the editor state before applying any edit
 Other shell adapters must establish their own native context capability; there is no
 shared Zsh grammar heuristic.
 
+If the plugin is first enabled inside an active ZLE widget, it initializes that
+line immediately with one reset request. Reloading preserves an initialized
+session and its explicit selection protection. Reloading an older adapter also
+leaves any existing session untouched. This does not make the feature available
+before the plugin has loaded.
+
 Enter expansion requires a compatible running daemon. If transport fails, the
 original input is preserved and expansion stays disabled for the current line.
 The existing line-init hook reconnects and resets the editing session on the
@@ -202,53 +208,34 @@ If the daemon restarts or loses the editing session, the current input is left
 unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
 
-### Installation and updates
+### Daemon updates
 
-Generate and compile the shell code during installation, using the target Zsh:
+After successfully switching the installed zacrs executable, the installer or
+package activation must run the newly installed executable with `daemon stop`.
+Stop only when the zacrs package changes, including rollbacks; unrelated package
+or configuration updates should not stop the daemon. For Home Manager, run this
+after package installation, never inside a package build. Other package managers
+can use their post-upgrade hook. Installation does not start a replacement daemon
+in the installer's environment.
 
-```sh
-# shell_dir is the package's share directory, or another installation directory.
-mkdir -p "$shell_dir"
-zsh-autocomplete-rs init zsh > "$shell_dir/init.zsh"
-zsh -dfc 'zcompile -U "$1"' _ "$shell_dir/init.zsh"
-zsh-autocomplete-rs daemon stop
-```
+`daemon stop` is idempotent and waits for the listening socket to be released.
+Existing popup sessions can finish on their open connections. A subsequent shell
+initialization or completion request starts a daemon with the shell's environment.
+Normal shell startup reuses a running daemon and retrieves capabilities; it does
+not search PATH to compare binaries, compute build fingerprints, or inspect
+executable metadata. `daemon ensure` serializes startup when a daemon is missing;
+it does not replace a running daemon. `daemon retire` remains an alias for stop
+for older update hooks.
 
-Load the installed source path from `.zshrc`:
-
-```zsh
-source /path/to/share/zacrs/init.zsh
-```
-
-Zsh selects the adjacent `init.zsh.zwc` automatically when usable. Keep the
-source alongside it for Zsh's native source fallback. Generate both artifacts
-again when zacrs or the target Zsh changes. Packages such as Nix can prepare
-these files in their build, then run `daemon stop` during activation; never
-start or stop a user's daemon inside a package build.
-
-Only zacrs's code is compiled. Configuration, `fpath`, `compdef` registrations
-and third-party completion definitions remain runtime inputs. This does not
-compile a user's `.zshrc` or manage their completion-system cache.
-
-Stop the daemon after installing an updated binary and shell code. `daemon stop`
-is idempotent and waits for the listening socket to be released. Existing popup
-sessions can finish on their open connections. The next shell starts a daemon
-with its interactive environment. Normal startup reuses a running daemon and
-retrieves capabilities; it does not search PATH to compare binaries, compute
-build fingerprints, or inspect executable metadata. `daemon ensure` serializes
-startup only when a daemon is missing; it does not replace a running daemon.
-`daemon retire` remains an alias for stop for older update hooks.
-
-Manual builds and symlink changes also require an explicit `daemon stop`.
+The installer or package activation owns this stop; zacrs cannot automatically
+run it for arbitrary installation methods. Manual installs and symlink changes
+require an explicit `daemon stop` after switching the installed executable.
+Stopping the daemon does not reload shell code in existing shells; restart the
+shell when an update changes the shell/daemon protocol incompatibly.
 Settings continue to hot-reload without restarting the process. Existing shells
 may temporarily lose completion when the daemon stops. Enter expansion preserves
 the current input and reconnects at the next line through its existing line-init
 hook. No extra hook, polling or per-keystroke health check is installed. Malformed
 responses still require plugin reload.
-
-When sourcing a development checkout from `zshrc.local`, ensure a deferred loader
-does not subsequently load an older installed `init zsh` script. The deferred
-loader can skip initialization when `_zacrs_complete_popup` is already defined;
-otherwise its embedded plugin replaces the checkout's functions after startup.
 
 See [the shell adapter boundary](shell-adapters.md) for the context contract.

@@ -9,9 +9,9 @@ dev/shell
 ```
 
 This builds the current checkout in a Debian 13 / Rust 1.98.0 container and opens
-Zsh as a non-root user. The launcher installs the binary, generates shell code with
-`zsh-autocomplete-rs init zsh`, and compiles it using Zsh's `zcompile` builtin.
-Zsh sources that prepared file; a missing daemon is started during initialization. The host needs
+Zsh as a non-root user. After installing the binary, the launcher stops any
+existing daemon in the disposable session. Zsh loads the built binary through
+`zsh-autocomplete-rs init zsh`, which starts the session's daemon. The host needs
 no Rust or Zsh installation. The first run downloads the image and dependencies.
 
 On macOS, start Docker Desktop or a Podman machine first. The engine must be able
