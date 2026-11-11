@@ -36,6 +36,39 @@ match emphasis.
 
 Setting `NO_COLOR` disables colors while preserving bold match emphasis.
 
+## Candidate order
+
+With a nonempty query, candidates are ordered by matching score, shorter
+candidate text, kind priority, then text. With an empty query, kind priority
+comes first, followed by shorter text and text order.
+
+Customize kind priority in `[completion]`. This is the default order:
+
+```toml
+[completion]
+kind_order = ["directory", "file", "abbreviation", "command", "alias", "builtin", "function", "other"]
+```
+
+Earlier entries have higher priority. Omitted kinds follow the listed ones in
+their default order; `kind_order = []` and omitting the setting both use the
+default. For example, `kind_order = ["command"]` puts commands first for empty
+queries and equal-score/equal-length matches. To prefer commands over
+abbreviations while keeping paths first, use
+`kind_order = ["directory", "file", "command"]`.
+
+`other` groups all remaining candidate kinds, including options and candidates
+without a kind. Typo-rescue candidates use their base kind, such as `command`.
+Unknown names, repeated names, and non-string entries make the configuration
+invalid. A running daemon keeps its last valid settings; an initial load falls
+back to defaults. Changes apply to subsequent requests, including cached native
+candidates, while an open interactive popup retains its starting order.
+
+This setting changes only kind priority. It does not override a better matching
+score or shorter text, or change which abbreviations are eligible in the
+current context. The default keeps paths first at empty argument positions such
+as `nvim <Tab>` and `mv <Tab>`; explicitly putting `abbreviation` first also
+prioritizes eligible argument abbreviations there.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are
@@ -43,11 +76,11 @@ offered only at command position. Expansions are inserted literally without
 running shell evaluation while candidates are being gathered or displayed.
 
 Abbreviations use the same matching score as other candidates. For equal scores
-and text lengths, the kind order is directories, files, abbreviations, then
+and text lengths, the default kind order is directories, files, abbreviations, then
 commands and other native candidates. For example, an abbreviation
 `mkdir = "mkdir -p"` appears before the `mkdir` command for both `mkd` and
 `mkdir`. Better matches and shorter candidate text still take precedence.
-With an empty query, the same kind order keeps paths before abbreviations,
+With an empty query, the default kind order keeps paths before abbreviations,
 including at argument positions such as `nvim <Tab>` and `mv <Tab>`.
 
 For simple entries, use the `[abbreviations]` table:
@@ -131,8 +164,8 @@ are used. To restore defaults, save an empty file. Removing the file keeps the
 running daemon's current settings until it restarts or a valid file reappears.
 
 Abbreviations are added to native candidates using the current configuration on
-each request, including requests that reuse cached native candidates. Reloading
-does not change their matching or ranking rules. The Zsh initialization setting
+each request, including requests that reuse cached native candidates. The configured
+kind order applies to these candidates too. The Zsh initialization setting
 for optional Enter expansion below still requires a plugin reload.
 
 ### Optional expansion on Enter (Zsh)

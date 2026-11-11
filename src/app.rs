@@ -28,6 +28,10 @@ pub struct App {
 }
 
 impl App {
+    pub(crate) fn kind_order(&self) -> crate::config::KindOrder {
+        self.fuzzy.kind_order()
+    }
+
     pub fn new(
         candidates: Vec<Candidate>,
         prefix: String,

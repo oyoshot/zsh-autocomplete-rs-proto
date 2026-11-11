@@ -55,6 +55,11 @@ fn run_shell(command: &mut Command, timeout: Duration) -> (Output, bool) {
 }
 
 #[test]
+fn zsh_cli_kind_order_without_daemon() {
+    run_abbreviation_test(include_str!("support/kind_order_cli.zsh"), false);
+}
+
+#[test]
 fn zsh_enter_abbreviation_is_opt_in_and_preserves_input() {
     run_abbreviation_test(include_str!("support/abbreviation_adapter.zsh"), true);
 }

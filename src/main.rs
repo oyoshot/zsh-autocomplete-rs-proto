@@ -228,7 +228,11 @@ fn run_render(
         return Ok(1);
     }
 
-    let mut app = App::new(candidates, prefix, cursor_row, cursor_col);
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new().with_kind_order(config.kind_order);
+    let mut app = App::new_with_matcher(
+        candidates, prefix, cursor_row, cursor_col, cols, rows, fuzzy,
+    );
     if app.filtered_indices.is_empty() {
         return Ok(1);
     }

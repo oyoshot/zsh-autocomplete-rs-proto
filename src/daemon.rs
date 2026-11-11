@@ -1212,7 +1212,11 @@ impl DaemonServer {
         }
 
         // Take fuzzy matcher out to reuse, put it back after
-        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let fuzzy = self
+            .fuzzy
+            .take()
+            .unwrap_or_default()
+            .with_kind_order(self.config.kind_order);
         let mut app = App::new_with_matcher(
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
@@ -1324,7 +1328,11 @@ impl DaemonServer {
             return None;
         }
 
-        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let fuzzy = self
+            .fuzzy
+            .take()
+            .unwrap_or_default()
+            .with_kind_order(self.config.kind_order);
         let mut app = App::new_with_matcher(
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
@@ -2202,6 +2210,119 @@ mod tests {
         let (header, tty) = read_text_ok(&output);
         assert!(header.contains("filtered_count=1"), "{header}");
         assert!(!tty.contains("git status"), "{tty:?}");
+    }
+
+    #[test]
+    fn kind_order_reload_reorders_cached_candidates_and_preserves_valid_settings() {
+        use crate::config::ConfigReloader;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut server = test_server();
+        server.config_reloader = Some(ConfigReloader::new(path.clone()));
+        server.store_cached_tsv(
+            "ctx",
+            "gs".into(),
+            "gs\tcommand-label\tcommand\ngs\tfile-label\tfile\n".into(),
+        );
+        let mut previous_token = None;
+        for (value, expected_index, changes) in [
+            ("[]", 1, true),
+            ("['abbreviation']", 2, true),
+            ("['command']", 0, true),
+            ("['file', 'file']", 0, false),
+            ("[]", 1, true),
+        ] {
+            fs::write(
+                &path,
+                format!("[completion]\nkind_order = {value}\n[abbreviations]\ngs = 'git status'\n"),
+            )
+            .unwrap();
+            server.maybe_reload_config();
+            let output = run_text_request(
+                &mut server,
+                text_request_input(
+                    "render 5 2 80 24 selected=0 context_key=ctx command_position=1",
+                    "gs",
+                    None,
+                ),
+            );
+            let (header, _) = read_text_ok(&output);
+            assert!(
+                header.contains(&format!("selected_original_idx={expected_index}")),
+                "{header}"
+            );
+            let token = header
+                .split_whitespace()
+                .find(|part| part.starts_with("reuse_token="))
+                .unwrap()
+                .to_string();
+            if let Some(previous) = previous_token {
+                assert_eq!(token != previous, changes, "{value}");
+            }
+            previous_token = Some(token);
+        }
+    }
+
+    #[test]
+    fn complete_session_retains_kind_order_during_reload() {
+        use crate::config::ConfigReloader;
+        use std::fs;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut server = test_server();
+        server.config_reloader = Some(ConfigReloader::new(path.clone()));
+        fs::write(
+            &path,
+            "[completion]\nkind_order = ['abbreviation']\n[abbreviations]\ngs = 'git status'",
+        )
+        .unwrap();
+        server.maybe_reload_config();
+        let (mut client, connection) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .write_all(&text_request_input(
+                "complete 5 2 80 24 command_position=1",
+                "gs",
+                Some("gs\t\tcommand\n"),
+            ))
+            .unwrap();
+        assert!(!server.handle_connection(connection));
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        let _ = read_frame(&mut reader);
+
+        fs::write(
+            &path,
+            "[completion]\nkind_order = ['command']\n[abbreviations]\ngs = 'git status'",
+        )
+        .unwrap();
+        server.maybe_reload_config();
+        client.write_all(b"KEY 1\n\r").unwrap();
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 0 git status"), "{done}");
+        for worker in server.workers.drain(..) {
+            worker.join().unwrap();
+        }
+        let mut output = Vec::new();
+        let (app, _) = server
+            .setup_session(
+                &mut output,
+                "gs".into(),
+                5,
+                2,
+                80,
+                24,
+                "gs\t\tcommand\n",
+                true,
+                None,
+            )
+            .unwrap();
+        assert_eq!(app.selected_candidate().unwrap().kind, "command");
     }
 
     #[test]

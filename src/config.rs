@@ -10,6 +10,72 @@ use std::time::SystemTime;
 
 use crate::input::Action;
 
+/// A precomputed rank for each of Candidate::kind_priority's default groups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KindOrder {
+    priorities: [u8; 8],
+}
+
+impl Default for KindOrder {
+    fn default() -> Self {
+        Self {
+            priorities: [0, 1, 2, 3, 4, 5, 6, 7],
+        }
+    }
+}
+
+impl KindOrder {
+    /// Listed groups lead; omitted groups follow in their default order.
+    pub fn new(kinds: &[&str]) -> Result<Self, String> {
+        const KINDS: [&str; 8] = [
+            "directory",
+            "file",
+            "abbreviation",
+            "command",
+            "alias",
+            "builtin",
+            "function",
+            "other",
+        ];
+        if kinds.len() > KINDS.len() {
+            return Err("completion.kind_order accepts at most eight kinds".into());
+        }
+        let mut priorities = [u8::MAX; 8];
+        for (rank, kind) in kinds.iter().enumerate() {
+            let Some(index) = KINDS.iter().position(|known| known == kind) else {
+                return Err(format!("unknown completion.kind_order kind: {kind}"));
+            };
+            if priorities[index] != u8::MAX {
+                return Err(format!("duplicate completion.kind_order kind: {kind}"));
+            }
+            priorities[index] = rank as u8;
+        }
+        let mut next = kinds.len() as u8;
+        for priority in &mut priorities {
+            if *priority == u8::MAX {
+                *priority = next;
+                next += 1;
+            }
+        }
+        Ok(Self { priorities })
+    }
+
+    pub(crate) fn priority(&self, default_priority: u8) -> u8 {
+        self.priorities[usize::from(default_priority)]
+    }
+}
+
+impl<'de> Deserialize<'de> for KindOrder {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let kinds = Vec::<String>::deserialize(deserializer)?;
+        let names: Vec<_> = kinds.iter().map(String::as_str).collect();
+        Self::new(&names).map_err(serde::de::Error::custom)
+    }
+}
+
 const MAX_COMMAND_GLOB_PATTERNS: usize = 256;
 const MAX_COMMAND_GLOB_BYTES: usize = 1024;
 const MAX_COMMAND_CONTEXT_BYTES: usize = 16 * 1024;
@@ -80,6 +146,7 @@ pub struct Config {
     pub max_visible: usize,
     pub auto_insert_unambiguous: bool,
     pub expand_abbreviation_on_enter: bool,
+    pub kind_order: KindOrder,
     pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
     pub abbreviations: Vec<Abbreviation>,
@@ -92,6 +159,7 @@ impl Default for Config {
             max_visible: 10,
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
+            kind_order: KindOrder::default(),
             suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
             abbreviations: Vec::new(),
@@ -111,6 +179,8 @@ struct CompletionRaw {
     auto_insert_unambiguous: bool,
     #[serde(default)]
     expand_abbreviation_on_enter: bool,
+    #[serde(default)]
+    kind_order: KindOrder,
 }
 
 impl Default for CompletionRaw {
@@ -118,6 +188,7 @@ impl Default for CompletionRaw {
         CompletionRaw {
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
+            kind_order: KindOrder::default(),
         }
     }
 }
@@ -518,6 +589,7 @@ impl Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
+            kind_order: file.completion.kind_order,
             suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
             abbreviations,
@@ -599,6 +671,94 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kind_order_defaults_and_partial_lists_keep_omitted_groups_in_default_order() {
+        use crate::candidate::Candidate;
+        let kinds = [
+            "directory",
+            "file",
+            "abbreviation",
+            "command",
+            "alias",
+            "builtin",
+            "function",
+            "other",
+        ];
+        for text in ["", "[completion]", "[completion]\nkind_order = []"] {
+            let parsed: ConfigFile = toml::from_str(text).unwrap();
+            assert_eq!(parsed.completion.kind_order, KindOrder::default());
+        }
+        let parsed: ConfigFile =
+            toml::from_str("[completion]\nkind_order = ['command', 'file']").unwrap();
+        for (kind, expected) in [
+            ("command", 0),
+            ("file", 1),
+            ("directory", 2),
+            ("abbreviation", 3),
+            ("alias", 4),
+            ("builtin", 5),
+            ("function", 6),
+            ("other", 7),
+        ] {
+            let candidate = Candidate::parse_line(&format!("name\t\t{kind}"));
+            assert_eq!(
+                parsed
+                    .completion
+                    .kind_order
+                    .priority(candidate.kind_priority()),
+                expected
+            );
+        }
+        // Guard the mapping between configured names and the candidate model.
+        for (expected, kind) in kinds.into_iter().enumerate() {
+            let candidate = Candidate::parse_line(&format!("name\t\t{kind}"));
+            assert_eq!(candidate.kind_priority() as usize, expected);
+        }
+    }
+
+    #[test]
+    fn kind_order_rejects_duplicates_unknown_names_and_invalid_types() {
+        for value in [
+            "['file', 'file']",
+            "['files']",
+            "['command_rescue']",
+            "['']",
+            "'file'",
+            "[1]",
+            "['directory', 'file', 'abbreviation', 'command', 'alias', 'builtin', 'function', 'other', 'file']",
+        ] {
+            let text = format!("[completion]\nkind_order = {value}");
+            assert!(toml::from_str::<ConfigFile>(&text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn kind_order_reload_recovers_from_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut reloader = ConfigReloader::new(path.clone());
+        write_config(&path, "[completion]\nkind_order = ['command']", 1);
+        assert_eq!(
+            reloader.reload().unwrap().unwrap().kind_order,
+            KindOrder::new(&["command"]).unwrap()
+        );
+        write_config(
+            &path,
+            "[completion]\nkind_order = ['command', 'command']",
+            2,
+        );
+        assert_eq!(
+            reloader.reload().err().unwrap().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(reloader.reload().unwrap().is_none());
+        write_config(&path, "[completion]\nkind_order = []", 3);
+        assert_eq!(
+            reloader.reload().unwrap().unwrap().kind_order,
+            KindOrder::default()
+        );
+    }
     use crate::input::Action;
 
     #[test]
