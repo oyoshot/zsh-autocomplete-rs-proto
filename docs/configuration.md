@@ -200,33 +200,49 @@ reloaded. If the daemon restarts or loses the editing session, the current input
 is left unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
 
-### Daemon updates
+### Installation and updates
 
-Installers should run the newly installed executable with `daemon retire` after
-replacing the binary. This stops an obsolete daemon, leaves a matching daemon
-alone, and does nothing if none is running. It never starts a daemon in the
-installer's environment; the next shell starts one with the user's environment.
-For Home Manager this belongs in activation after package installation, rather
-than the package build. Other package managers can use their post-upgrade hook.
+Generate and compile the shell code during installation, using the target Zsh:
 
-At plugin initialization, Zsh's builtin `zstat` reads the installed executable's
-device, inode, size and timestamps. The existing `ping shell` reply carries the
-running daemon's executable identity. Matching identities reuse the daemon with
-no helper process. A missing daemon or a mismatch invokes `daemon ensure`, which
-also covers updates outside the installer, including local builds and symlink
-changes. Neither the file check nor a helper process runs on normal keystrokes.
+```sh
+# shell_dir is the package's share directory, or another installation directory.
+mkdir -p "$shell_dir"
+zsh-autocomplete-rs init zsh > "$shell_dir/init.zsh"
+zsh -dfc 'zcompile -U "$1"' _ "$shell_dir/init.zsh"
+zsh-autocomplete-rs daemon stop
+```
 
-Build identity additionally includes the Rust and shell sources, dependency
-lockfile and build settings. `daemon ensure` uses both build and executable
-identity so switching between copies of one build also converges on the installed
-executable. If `zstat` is unavailable, initialization uses the startup helper.
+Load the installed source path from `.zshrc`:
 
-Concurrent shell initializations share a lock, so only one replaces the daemon.
-During replacement, the old process releases its listening socket and lets open
-completion sessions finish while the new process accepts connections. Daemons
-from releases before this handoff support may close an open popup on replacement.
-If the installed CLI predates `daemon ensure`, a locally sourced newer plugin
-falls back to the existing daemon connection behavior.
+```zsh
+source /path/to/share/zacrs/init.zsh
+```
+
+Zsh selects the adjacent `init.zsh.zwc` automatically when usable. Keep the
+source alongside it for Zsh's native source fallback. Generate both artifacts
+again when zacrs or the target Zsh changes. Packages such as Nix can prepare
+these files in their build, then run `daemon stop` during activation; never
+start or stop a user's daemon inside a package build.
+
+Only zacrs's code is compiled. Configuration, `fpath`, `compdef` registrations
+and third-party completion definitions remain runtime inputs. This does not
+compile a user's `.zshrc` or manage their completion-system cache.
+
+Stop the daemon after installing an updated binary and shell code. `daemon stop`
+is idempotent and waits for the listening socket to be released. Existing popup
+sessions can finish on their open connections. The next shell starts a daemon
+with its interactive environment. Normal startup reuses a running daemon and
+retrieves capabilities; it does not search PATH to compare binaries, compute
+build fingerprints, or inspect executable metadata. `daemon ensure` serializes
+startup only when a daemon is missing; it does not replace a running daemon.
+`daemon retire` remains an alias for stop for older update hooks.
+
+Manual builds and symlink changes also require an explicit `daemon stop`.
+Settings continue to hot-reload without restarting the process. Existing shells
+may temporarily lose completion when the daemon stops; Enter expansion fails
+closed and remains disabled until the plugin is reloaded. Reload the shell
+integration after an update to restore its capabilities. This deliberately
+avoids adding startup hooks or automatic recovery policy to keystrokes.
 
 When sourcing a development checkout from `zshrc.local`, ensure a deferred loader
 does not subsequently load an older installed `init zsh` script. The deferred

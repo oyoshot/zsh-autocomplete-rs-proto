@@ -34,6 +34,13 @@ artifact_log=$(mktemp /tmp/zacrs-build.XXXXXX)
     install -m 755 "$binary" "$HOME/.local/bin/zsh-autocomplete-rs"
 ) 9> "$CARGO_TARGET_DIR/.zacrs-manual-build.lock"
 
+# Prepare shell code once during installation. Zsh loads the adjacent .zwc
+# automatically; runtime startup neither invokes the CLI nor writes a cache.
+mkdir -p "$HOME/.local/share/zacrs"
+zsh-autocomplete-rs init zsh > "$HOME/.local/share/zacrs/init.zsh"
+zsh -dfc 'zcompile -U "$1"' _ "$HOME/.local/share/zacrs/init.zsh"
+zsh-autocomplete-rs daemon stop
+
 # A writable, disposable project for file and Git completion, separate from /src.
 git -C "$HOME/work" init --quiet --initial-branch=main
 git -C "$HOME/work" -c user.name='zacrs test' -c user.email='test@example.invalid' \

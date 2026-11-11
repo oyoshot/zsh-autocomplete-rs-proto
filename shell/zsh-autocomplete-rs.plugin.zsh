@@ -195,32 +195,18 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         _zacrs_ensure_daemon
     }
     _zacrs_initialize_daemon() {
-        # Resolve one command without populating the entire PATH command table.
-        setopt localoptions nohashlistall
-        local handshake executable="$ZACRS_BIN" expected_id=''
-        if [[ "$executable" != */* ]]; then
-            # Zsh 5.9 only exposes cached commands with HASH_LIST_ALL off.
-            # Cache this executable alone before reading its resolved path.
-            builtin hash -- "$executable" 2>/dev/null || true
-            executable="${commands[$ZACRS_BIN]:-$ZACRS_BIN}"
-        fi
-        local -A executable_stat
-        # zstat is a builtin module: a warm initialization launches no helper.
-        if zmodload -F zsh/stat b:zstat 2>/dev/null \
-            && zstat -H executable_stat -- "$executable" 2>/dev/null; then
-            expected_id="$executable_stat[device]:$executable_stat[inode]:$executable_stat[size]:$executable_stat[mtime]:$executable_stat[ctime]"
-        fi
-        if [[ -n "$expected_id" ]] && _zacrs_ping_daemon; then
+        local handshake
+        # Startup needs capabilities, not installation identity. Updates stop
+        # running daemons explicitly; a compatible running daemon is reused.
+        if _zacrs_ping_daemon; then
             handshake="$REPLY"
-            if [[ " $handshake " == *" executable_id=$expected_id "* ]]; then
-                _zacrs_daemon_available=1
-                _zacrs_daemon_next_retry=0
-            fi
+            _zacrs_daemon_available=1
+            _zacrs_daemon_next_retry=0
         fi
         if (( ! _zacrs_daemon_available )); then
             local ensure_status
-            # Replacement, locking and startup run only for a missing or
-            # obsolete daemon. Retries during editing retain their existing path.
+            # Locking and startup run only for a missing or
+            # unavailable daemon. Updates use daemon stop outside shell startup.
             if handshake=$("$ZACRS_BIN" daemon ensure 2>/dev/null); then
                 _zacrs_daemon_available=1
                 _zacrs_daemon_started=0

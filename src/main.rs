@@ -380,7 +380,7 @@ fn main() {
         },
         Command::Daemon { action } => match action {
             DaemonAction::Retire => {
-                if let Err(error) = zsh_autocomplete_rs::lifecycle::retire() {
+                if let Err(error) = daemon::stop() {
                     eprintln!("daemon retire error: {error}");
                     process::exit(1);
                 }

@@ -191,9 +191,9 @@ mod tests {
 
 #[derive(Subcommand)]
 pub enum DaemonAction {
-    /// Start or replace the daemon to match this executable; print shell capabilities
+    /// Start a missing daemon; print shell capabilities
     Ensure,
-    /// Stop an obsolete daemon after installation without starting a new one
+    /// Alias for stop (kept for older update hooks)
     Retire,
     /// Start daemon in foreground
     Start,
