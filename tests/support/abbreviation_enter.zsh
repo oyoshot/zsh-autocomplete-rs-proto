@@ -301,13 +301,13 @@ _zacrs_daemon_available=0
 _zacrs_daemon_next_retry=0
 _zacrs_maybe_retry_daemon
 (( _zacrs_daemon_available == 1 )) || fail 'daemon retry did not reconnect'
-(( _zacrs_enter_enabled == -1 )) || fail 'daemon retry cleared the failure latch'
+(( _zacrs_enter_enabled == -2 )) || fail 'daemon retry re-enabled expansion within the same line'
 CURSOR=${#BUFFER}
 _zacrs_accept_line
 [[ "$accepted" == 'gs ' ]] || fail 'reconnection must preserve a fallback selection'
 set_buffer gs
 _zacrs_accept_line
-[[ "$accepted" == gs ]] || fail 'new lines must not clear the failure latch'
+[[ "$accepted" == 'git status' ]] || fail 'a fresh line must recover after transport reconnects'
 
 
 source "$ZACRS_PLUGIN"
@@ -335,6 +335,9 @@ _zacrs_accept_line
 set_buffer $'gs \xff'
 _zacrs_accept_line
 (( _zacrs_enter_enabled == -1 )) || fail 'undecodable acceptance must disable expansion'
+set_buffer gs
+_zacrs_accept_line
+[[ "$accepted" == gs ]] || fail 'a fresh line must not clear a protocol failure'
 source "$ZACRS_PLUGIN"
 
 config_text=$(<"$XDG_CONFIG_HOME/zacrs/config.toml")

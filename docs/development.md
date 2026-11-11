@@ -9,7 +9,8 @@ dev/shell
 ```
 
 This builds the current checkout in a Debian 13 / Rust 1.98.0 container and opens
-Zsh as a non-root user. Zsh loads the built binary through
+Zsh as a non-root user. After installing the binary, the launcher stops any
+existing daemon in the disposable session. Zsh loads the built binary through
 `zsh-autocomplete-rs init zsh`, which starts the session's daemon. The host needs
 no Rust or Zsh installation. The first run downloads the image and dependencies.
 

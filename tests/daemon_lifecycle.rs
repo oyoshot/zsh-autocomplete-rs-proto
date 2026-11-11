@@ -5,7 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-use zsh_autocomplete_rs::{lifecycle::BUILD_ID, protocol::TextFrameHeader};
+use zsh_autocomplete_rs::protocol::TextFrameHeader;
 
 struct Fixture {
     home: tempfile::TempDir,
@@ -48,7 +48,7 @@ impl Fixture {
         let output = self.command().args(["daemon", "ensure"]).output().unwrap();
         assert!(output.status.success(), "{output:?}");
         let reply = String::from_utf8(output.stdout).unwrap();
-        assert!(reply.contains(&format!("build_id={BUILD_ID}")), "{reply}");
+        assert!(reply.starts_with("OK"), "{reply}");
         reply
     }
 
@@ -124,7 +124,7 @@ fn concurrent_initializations_share_one_daemon() {
     for child in children {
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert!(String::from_utf8(output.stdout).unwrap().contains(BUILD_ID));
+        assert!(String::from_utf8(output.stdout).unwrap().starts_with("OK"));
     }
     let inode = fixture.inode();
     fixture.ensure();
@@ -159,7 +159,7 @@ source "$ZACRS_PLUGIN"
 }
 
 #[test]
-fn shell_detects_replacement_at_the_same_installation_path() {
+fn update_stops_daemon_before_shell_starts_replacement() {
     use std::os::unix::fs::symlink;
     let fixture = Fixture::new();
     let original = std::path::Path::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"));
@@ -170,6 +170,14 @@ fn shell_detects_replacement_at_the_same_installation_path() {
     fs::copy(original, &replacement).unwrap();
     fs::remove_file(&installed).unwrap();
     symlink(&replacement, &installed).unwrap();
+    // Updating stops the listener; shell startup performs no binary identity check.
+    let status = Command::new(&installed)
+        .args(["daemon", "stop"])
+        .env("XDG_RUNTIME_DIR", fixture.runtime.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(!fixture.runtime.path().join("zacrs.sock").exists());
     fixture.shell(
         &installed,
         r#"
@@ -180,67 +188,32 @@ source "$ZACRS_PLUGIN"
 (( _zacrs_daemon_available == 1 )) || exit 1
 "#,
     );
-    let metadata = fs::metadata(replacement).unwrap();
-    let expected = format!(
-        "executable_id={}:{}:{}:{}:{}",
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mtime(),
-        metadata.ctime()
-    );
-    let mut stream = fixture.connect();
-    stream.write_all(b"ping shell\n").unwrap();
-    let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply).unwrap();
-    assert!(reply.contains(&expected), "{reply}");
+    assert!(fixture.ensure().contains("edit_context=2"));
 }
 
 #[test]
-fn installation_hook_only_retires_obsolete_daemons() {
-    let fixture = Fixture::new();
-    // Installing when no daemon is running must not start one.
-    assert!(
-        fixture
-            .command()
-            .args(["daemon", "retire"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(!fixture.runtime.path().join("zacrs.sock").exists());
-    fixture.ensure();
-    let inode = fixture.inode();
-    assert!(
-        fixture
-            .command()
-            .args(["daemon", "retire"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert_eq!(fixture.inode(), inode);
-    let replacement = fixture.home.path().join("new-binary");
-    fs::copy(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"), &replacement).unwrap();
-    let mut command = Command::new(replacement);
-    command.envs(
-        fixture
-            .command()
-            .get_envs()
-            .filter_map(|(key, value)| value.map(|value| (key, value))),
-    );
-    assert!(
-        command
-            .args(["daemon", "retire"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(!fixture.runtime.path().join("zacrs.sock").exists());
+fn stop_is_idempotent_and_stops_even_a_matching_daemon() {
+    for action in ["stop", "retire"] {
+        let fixture = Fixture::new();
+        for running in [false, true, false] {
+            if running {
+                fixture.ensure();
+            }
+            assert!(
+                fixture
+                    .command()
+                    .args(["daemon", action])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!fixture.runtime.path().join("zacrs.sock").exists());
+        }
+    }
 }
 
 #[test]
-fn obsolete_daemons_with_and_without_shell_handshake_are_replaced() {
+fn running_daemons_are_reused_until_explicitly_stopped() {
     for handshake in [
         None,
         Some("OK enter_expansion=0 edit_context=2"),
@@ -256,7 +229,7 @@ fn obsolete_daemons_with_and_without_shell_handshake_are_replaced() {
                 let (mut stream, _) = match listener.accept() {
                     Ok(connection) => connection,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "old daemon was not replaced");
+                        assert!(Instant::now() < deadline, "old daemon was not stopped");
                         thread::sleep(Duration::from_millis(2));
                         continue;
                     }
@@ -284,7 +257,16 @@ fn obsolete_daemons_with_and_without_shell_handshake_are_replaced() {
                 }
             }
         });
-        fixture.ensure();
+        let reply = fixture.ensure();
+        assert_eq!(reply.trim(), handshake.unwrap_or("OK"));
+        assert!(
+            fixture
+                .command()
+                .args(["daemon", "stop"])
+                .status()
+                .unwrap()
+                .success()
+        );
         old.join().unwrap();
     }
 }

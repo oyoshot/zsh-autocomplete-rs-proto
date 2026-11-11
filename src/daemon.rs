@@ -265,7 +265,6 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
 
 pub fn start() -> io::Result<()> {
     init_tracing();
-    let _ = crate::lifecycle::executable_id();
 
     let socket_path = protocol::socket_path();
     info!(socket_path = %socket_path.display(), "starting daemon");
@@ -323,14 +322,7 @@ pub fn start() -> io::Result<()> {
 }
 
 pub fn stop() -> io::Result<()> {
-    let socket_path = protocol::socket_path();
-    let stream = UnixStream::connect(&socket_path)
-        .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "daemon not running"))?;
-    let mut writer = &stream;
-    writer.write_all(&Request::Shutdown.serialize())?;
-    let mut reader = BufReader::new(&stream);
-    let _ = Response::deserialize(&mut reader);
-    Ok(())
+    crate::lifecycle::stop()
 }
 
 pub fn status() -> bool {
@@ -1083,10 +1075,8 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=2 build_id={} executable_id={}",
-                    u8::from(self.config.expand_abbreviation_on_enter),
-                    crate::lifecycle::BUILD_ID,
-                    crate::lifecycle::executable_id()
+                    "OK enter_expansion={} edit_context=2",
+                    u8::from(self.config.expand_abbreviation_on_enter)
                 );
                 let _ = writer.flush();
                 false

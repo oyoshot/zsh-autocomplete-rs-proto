@@ -200,43 +200,42 @@ session and its explicit selection protection. Reloading an older adapter also
 leaves any existing session untouched. This does not make the feature available
 before the plugin has loaded.
 
-Enter expansion requires a compatible running daemon. If communication fails,
-the original input is accepted and expansion is disabled until the plugin is
-reloaded. If the daemon restarts or loses the editing session, the current input
-is left unchanged; a fresh line starts a new session. Literal shell expressions
+Enter expansion requires a compatible running daemon. If transport fails, the
+original input is preserved and expansion stays disabled for the current line.
+The existing line-init hook reconnects and resets the editing session on the
+next fresh line. Malformed responses disable expansion until plugin reload.
+If the daemon restarts or loses the editing session, the current input is left
+unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
 
 ### Daemon updates
 
-Installers should run the newly installed executable with `daemon retire` after
-replacing the binary. This stops an obsolete daemon, leaves a matching daemon
-alone, and does nothing if none is running. It never starts a daemon in the
-installer's environment; the next shell starts one with the user's environment.
-For Home Manager this belongs in activation after package installation, rather
-than the package build. Other package managers can use their post-upgrade hook.
+After successfully switching the installed zacrs executable, the installer or
+package activation must run the newly installed executable with `daemon stop`.
+Stop only when the zacrs package changes, including rollbacks; unrelated package
+or configuration updates should not stop the daemon. For Home Manager, run this
+after package installation, never inside a package build. Other package managers
+can use their post-upgrade hook. Installation does not start a replacement daemon
+in the installer's environment.
 
-At plugin initialization, Zsh's builtin `zstat` reads the installed executable's
-device, inode, size and timestamps. The existing `ping shell` reply carries the
-running daemon's executable identity. Matching identities reuse the daemon with
-no helper process. A missing daemon or a mismatch invokes `daemon ensure`, which
-also covers updates outside the installer, including local builds and symlink
-changes. Neither the file check nor a helper process runs on normal keystrokes.
+`daemon stop` is idempotent and waits for the listening socket to be released.
+Existing popup sessions can finish on their open connections. A subsequent shell
+initialization or completion request starts a daemon with the shell's environment.
+Normal shell startup reuses a running daemon and retrieves capabilities; it does
+not search PATH to compare binaries, compute build fingerprints, or inspect
+executable metadata. `daemon ensure` serializes startup when a daemon is missing;
+it does not replace a running daemon. `daemon retire` remains an alias for stop
+for older update hooks.
 
-Build identity additionally includes the Rust and shell sources, dependency
-lockfile and build settings. `daemon ensure` uses both build and executable
-identity so switching between copies of one build also converges on the installed
-executable. If `zstat` is unavailable, initialization uses the startup helper.
-
-Concurrent shell initializations share a lock, so only one replaces the daemon.
-During replacement, the old process releases its listening socket and lets open
-completion sessions finish while the new process accepts connections. Daemons
-from releases before this handoff support may close an open popup on replacement.
-If the installed CLI predates `daemon ensure`, a locally sourced newer plugin
-falls back to the existing daemon connection behavior.
-
-When sourcing a development checkout from `zshrc.local`, ensure a deferred loader
-does not subsequently load an older installed `init zsh` script. The deferred
-loader can skip initialization when `_zacrs_complete_popup` is already defined;
-otherwise its embedded plugin replaces the checkout's functions after startup.
+The installer or package activation owns this stop; zacrs cannot automatically
+run it for arbitrary installation methods. Manual installs and symlink changes
+require an explicit `daemon stop` after switching the installed executable.
+Stopping the daemon does not reload shell code in existing shells; restart the
+shell when an update changes the shell/daemon protocol incompatibly.
+Settings continue to hot-reload without restarting the process. Existing shells
+may temporarily lose completion when the daemon stops. Enter expansion preserves
+the current input and reconnects at the next line through its existing line-init
+hook. No extra hook, polling or per-keystroke health check is installed. Malformed
+responses still require plugin reload.
 
 See [the shell adapter boundary](shell-adapters.md) for the context contract.

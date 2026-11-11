@@ -34,6 +34,9 @@ artifact_log=$(mktemp /tmp/zacrs-build.XXXXXX)
     install -m 755 "$binary" "$HOME/.local/bin/zsh-autocomplete-rs"
 ) 9> "$CARGO_TARGET_DIR/.zacrs-manual-build.lock"
 
+# Stop the old listener after installing the binary; the shell starts a new one.
+zsh-autocomplete-rs daemon stop
+
 # A writable, disposable project for file and Git completion, separate from /src.
 git -C "$HOME/work" init --quiet --initial-branch=main
 git -C "$HOME/work" -c user.name='zacrs test' -c user.email='test@example.invalid' \

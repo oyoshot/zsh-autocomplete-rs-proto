@@ -62,8 +62,8 @@ typeset -gi _zacrs_self_insert_wrapped=0
 # identifies a reload with a potentially protected session, even when disabled
 # or unavailable. Capture it before declaring the capability state below.
 typeset -gi _zacrs_enter_session_initialized=${_zacrs_enter_session_initialized:-${+_zacrs_enter_enabled}}
-# 0: not enabled by configuration; 1: enabled; -1: communication failed.
-# Only plugin reload resets the failure latch.
+# 0: disabled; 1: enabled; -1: invalid response; -2: transport unavailable.
+# Only a fresh editing line may recover transport; invalid responses need reload.
 typeset -gi _zacrs_enter_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
@@ -96,6 +96,19 @@ _zacrs_reset_enter_selection() {
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
         _zacrs_enter_session_initialized=1
+    fi
+    if (( _zacrs_enter_enabled == -2 )); then
+        # A new line has no selection to preserve. Reconnect here, never in the
+        # middle of accepting or applying a user's existing input.
+        _zacrs_enter_enabled=0
+        _zacrs_daemon_available=0
+        if _zacrs_initialize_daemon; then
+            if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
+                _zacrs_enter_session_initialized=1
+            fi
+        else
+            _zacrs_enter_enabled=-2
+        fi
     fi
     return 0
 }
@@ -202,32 +215,18 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
         _zacrs_ensure_daemon
     }
     _zacrs_initialize_daemon() {
-        # Resolve one command without populating the entire PATH command table.
-        setopt localoptions nohashlistall
-        local handshake executable="$ZACRS_BIN" expected_id=''
-        if [[ "$executable" != */* ]]; then
-            # Zsh 5.9 only exposes cached commands with HASH_LIST_ALL off.
-            # Cache this executable alone before reading its resolved path.
-            builtin hash -- "$executable" 2>/dev/null || true
-            executable="${commands[$ZACRS_BIN]:-$ZACRS_BIN}"
-        fi
-        local -A executable_stat
-        # zstat is a builtin module: a warm initialization launches no helper.
-        if zmodload -F zsh/stat b:zstat 2>/dev/null \
-            && zstat -H executable_stat -- "$executable" 2>/dev/null; then
-            expected_id="$executable_stat[device]:$executable_stat[inode]:$executable_stat[size]:$executable_stat[mtime]:$executable_stat[ctime]"
-        fi
-        if [[ -n "$expected_id" ]] && _zacrs_ping_daemon; then
+        local handshake
+        # Startup needs capabilities, not installation identity. Updates stop
+        # running daemons explicitly; a compatible running daemon is reused.
+        if _zacrs_ping_daemon; then
             handshake="$REPLY"
-            if [[ " $handshake " == *" executable_id=$expected_id "* ]]; then
-                _zacrs_daemon_available=1
-                _zacrs_daemon_next_retry=0
-            fi
+            _zacrs_daemon_available=1
+            _zacrs_daemon_next_retry=0
         fi
         if (( ! _zacrs_daemon_available )); then
             local ensure_status
-            # Replacement, locking and startup run only for a missing or
-            # obsolete daemon. Retries during editing retain their existing path.
+            # Locking and startup run only for a missing or
+            # unavailable daemon. Updates use daemon stop outside shell startup.
             if handshake=$("$ZACRS_BIN" daemon ensure 2>/dev/null); then
                 _zacrs_daemon_available=1
                 _zacrs_daemon_started=0

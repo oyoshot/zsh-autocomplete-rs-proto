@@ -61,5 +61,7 @@ observation of the prepared command, whose identity only the adapter can supply.
 
 Malformed observations, including invalid UTF-8, return an explicit error and
 invalidate the daemon session. The adapter disables Enter expansion until reload
-after a communication error. Missing sessions after restart or eviction preserve
+after a malformed response. Transport failure disables edits for the current line;
+the existing line-init hook reconnects and resets the session at the next fresh
+line, never while accepting or applying a selection. Missing sessions after restart or eviction preserve
 the input. The default remains disabled and adds no Enter-time abbreviation work.
