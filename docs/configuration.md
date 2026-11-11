@@ -194,6 +194,12 @@ end of the command word, then restores the editor state before applying any edit
 Other shell adapters must establish their own native context capability; there is no
 shared Zsh grammar heuristic.
 
+If the plugin is first enabled inside an active ZLE widget, it initializes that
+line immediately with one reset request. Reloading preserves an initialized
+session and its explicit selection protection. Reloading an older adapter also
+leaves any existing session untouched. This does not make the feature available
+before the plugin has loaded.
+
 Enter expansion requires a compatible running daemon. If communication fails,
 the original input is accepted and expansion is disabled until the plugin is
 reloaded. If the daemon restarts or loses the editing session, the current input

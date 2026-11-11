@@ -69,6 +69,30 @@ fn zsh_enter_abbreviation_zle_with_daemon_popup() {
     run_abbreviation_test(include_str!("support/abbreviation_zle.zsh"), true);
 }
 
+#[test]
+fn zsh_deferred_enter_expansion_initializes_the_current_line() {
+    run_abbreviation_test(
+        concat!(
+            "export ZACRS_TEST_DEFERRED=1\n",
+            include_str!("support/abbreviation_zle.zsh")
+        ),
+        true,
+    );
+}
+
+#[test]
+fn zsh_reload_preserves_selections_without_the_new_initialization_flag() {
+    for state in [0, 1, -1] {
+        run_abbreviation_test(
+            &format!(
+                "export ZACRS_TEST_DEFERRED=1 ZACRS_TEST_LEGACY_RELOAD=1 ZACRS_TEST_LEGACY_STATE={state}\n{}",
+                include_str!("support/abbreviation_zle.zsh")
+            ),
+            true,
+        );
+    }
+}
+
 fn run_abbreviation_test(script: &str, daemon: bool) {
     let root = tempfile::tempdir().unwrap();
     let runtime = tempfile::Builder::new()
