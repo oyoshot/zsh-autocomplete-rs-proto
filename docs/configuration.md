@@ -194,10 +194,12 @@ end of the command word, then restores the editor state before applying any edit
 Other shell adapters must establish their own native context capability; there is no
 shared Zsh grammar heuristic.
 
-Enter expansion requires a compatible running daemon. If communication fails,
-the original input is accepted and expansion is disabled until the plugin is
-reloaded. If the daemon restarts or loses the editing session, the current input
-is left unchanged; a fresh line starts a new session. Literal shell expressions
+Enter expansion requires a compatible running daemon. If transport fails, the
+original input is preserved and expansion stays disabled for the current line.
+The existing line-init hook reconnects and resets the editing session on the
+next fresh line. Malformed responses disable expansion until plugin reload.
+If the daemon restarts or loses the editing session, the current input is left
+unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
 
 ### Installation and updates
@@ -239,10 +241,10 @@ startup only when a daemon is missing; it does not replace a running daemon.
 
 Manual builds and symlink changes also require an explicit `daemon stop`.
 Settings continue to hot-reload without restarting the process. Existing shells
-may temporarily lose completion when the daemon stops; Enter expansion fails
-closed and remains disabled until the plugin is reloaded. Reload the shell
-integration after an update to restore its capabilities. This deliberately
-avoids adding startup hooks or automatic recovery policy to keystrokes.
+may temporarily lose completion when the daemon stops. Enter expansion preserves
+the current input and reconnects at the next line through its existing line-init
+hook. No extra hook, polling or per-keystroke health check is installed. Malformed
+responses still require plugin reload.
 
 When sourcing a development checkout from `zshrc.local`, ensure a deferred loader
 does not subsequently load an older installed `init zsh` script. The deferred

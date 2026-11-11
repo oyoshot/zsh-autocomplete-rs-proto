@@ -57,8 +57,8 @@ typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
 typeset -gi _zacrs_self_insert_wrapped=0
-# 0: not enabled by configuration; 1: enabled; -1: communication failed.
-# Only plugin reload resets the failure latch.
+# 0: disabled; 1: enabled; -1: invalid response; -2: transport unavailable.
+# Only a fresh editing line may recover transport; invalid responses need reload.
 typeset -gi _zacrs_enter_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
@@ -90,6 +90,17 @@ _zacrs_reset_cache() {
 _zacrs_reset_enter_selection() {
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset || true
+    if (( _zacrs_enter_enabled == -2 )); then
+        # A new line has no selection to preserve. Reconnect here, never in the
+        # middle of accepting or applying a user's existing input.
+        _zacrs_enter_enabled=0
+        _zacrs_daemon_available=0
+        if _zacrs_initialize_daemon; then
+            (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset || true
+        else
+            _zacrs_enter_enabled=-2
+        fi
+    fi
     return 0
 }
 

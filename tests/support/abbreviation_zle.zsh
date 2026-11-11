@@ -266,6 +266,14 @@ if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
 else
     [[ ! -S "$XDG_RUNTIME_DIR/zacrs.sock" ]] || fail 'socket-free test started a daemon'
 fi
+# Updating stops the backend while this shell remains open. The next real
+# line-init must restore Enter expansion without sourcing the plugin again.
+if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+    enter_line '"$ZACRS_BIN" daemon stop'
+    : > "$HOME/executed"
+    enter_line gs
+    [[ "$(<"$HOME/executed")" == 'git:status' ]] || fail 'Enter expansion did not recover after update'
+fi
 # Re-sourcing must preserve Enter expansion for both trigger lengths. Use the
 # real exit builtin last so e is verified without replacing its implementation.
 enter_line '_test_load_plugin; _test_load_plugin'
