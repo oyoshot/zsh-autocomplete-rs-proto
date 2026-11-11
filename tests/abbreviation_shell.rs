@@ -101,10 +101,14 @@ fn run_abbreviation_test(script: &str, daemon: bool) {
         .unwrap();
     let config_dir = root.path().join("config/zacrs");
     fs::create_dir_all(&config_dir).unwrap();
+    fs::create_dir_all(root.path().join("completion-paths/workspace")).unwrap();
+    fs::write(root.path().join("completion-paths/notes"), "").unwrap();
     fs::write(
         config_dir.join("config.toml"),
         r#"[abbreviations]
 gs = "git status"
+mkdir = "mkdir -p"
+rm = "trash-put"
 v = "nvim"
 e = "exit"
 c = "clear"
@@ -138,6 +142,11 @@ expansion = "ssh user@{{cursor}}"
 trigger = "arg"
 expansion = "argument only"
 when.position = "argument"
+
+[[abbreviation]]
+trigger = "notes"
+expansion = "argument-abbreviation"
+when.position = "any"
 
 [[abbreviation]]
 trigger = "scoped"

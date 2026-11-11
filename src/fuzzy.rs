@@ -1067,13 +1067,16 @@ mod tests {
     }
 
     #[test]
-    fn paths_and_commands_precede_abbreviation_with_same_trigger() {
+    fn paths_precede_abbreviation_before_commands_with_same_trigger() {
         let mut m = FuzzyMatcher::new();
         let candidates = vec![
             Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
             Candidate::parse_line("gs\tcommand\tcommand"),
             Candidate::parse_line("gs\t\tfile"),
             Candidate::parse_line("gs\t\tdirectory"),
+            Candidate::parse_line("gs\t\talias"),
+            Candidate::parse_line("gs\t\tbuiltin"),
+            Candidate::parse_line("gs\t\tfunction"),
         ];
 
         let results = m.filter(&candidates, "gs");
@@ -1084,7 +1087,65 @@ mod tests {
                 .all(|pair| pair[0].score == pair[1].score)
         );
         let kinds: Vec<&str> = results.iter().map(|r| r.candidate.kind.as_str()).collect();
-        assert_eq!(kinds, ["directory", "file", "command", "abbreviation"]);
+        assert_eq!(
+            kinds,
+            [
+                "directory",
+                "file",
+                "abbreviation",
+                "command",
+                "alias",
+                "builtin",
+                "function"
+            ]
+        );
+    }
+
+    #[test]
+    fn abbreviation_precedes_same_command_for_partial_and_exact_queries() {
+        let mut m = FuzzyMatcher::new();
+        for (trigger, expansion, queries) in [
+            ("mkdir", "mkdir -p", ["mkd", "mkdir"]),
+            ("rm", "trash-put", ["r", "rm"]),
+        ] {
+            let candidates = vec![
+                Candidate::parse_line(&format!("{trigger}\t\tcommand")),
+                Candidate::abbreviation(trigger.into(), expansion.into(), String::new()),
+            ];
+            for query in queries {
+                let results = m.filter(&candidates, query);
+                assert_eq!(results.len(), 2);
+                assert_eq!(results[0].score, results[1].score);
+                assert_eq!(results[0].candidate.insert_text.as_deref(), Some(expansion));
+                assert_eq!(results[1].candidate.kind, "command");
+            }
+        }
+    }
+
+    #[test]
+    fn better_matching_native_candidate_precedes_abbreviation() {
+        let mut m = FuzzyMatcher::new();
+        let candidates = vec![
+            Candidate::abbreviation("gstatus".into(), "git status".into(), String::new()),
+            Candidate::parse_line("gs\t\tcommand"),
+        ];
+
+        let results = m.filter(&candidates, "gs");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].candidate.kind, "command");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn equal_score_keeps_shorter_native_candidate_before_abbreviation() {
+        let command = Candidate::parse_line("git\t\tcommand");
+        let abbreviation =
+            Candidate::abbreviation("git-status".into(), "git status".into(), String::new());
+        assert_eq!(
+            compare_scored_candidates(&command, 100, &abbreviation, 100),
+            Ordering::Less
+        );
     }
 
     #[test]
@@ -1120,7 +1181,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_keeps_paths_and_commands_before_abbreviations() {
+    fn empty_query_keeps_paths_before_abbreviations_and_commands() {
         let mut m = FuzzyMatcher::new();
         let candidates = vec![
             Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
@@ -1132,7 +1193,7 @@ mod tests {
         let results = m.filter(&candidates, "");
 
         let kinds: Vec<&str> = results.iter().map(|r| r.candidate.kind.as_str()).collect();
-        assert_eq!(kinds, ["directory", "file", "command", "abbreviation"]);
+        assert_eq!(kinds, ["directory", "file", "abbreviation", "command"]);
     }
 
     #[test]
@@ -1146,7 +1207,7 @@ mod tests {
         ]);
         let results = m.filter(&candidates, "");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        // file (priority 1) before command (priority 2), then by len, then alphabetical
+        // Files before commands, then by length, then alphabetically.
         assert_eq!(texts[0], "z");
         assert_eq!(texts[1], "ab");
         assert_eq!(texts[2], "abc");

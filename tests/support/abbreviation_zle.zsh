@@ -179,6 +179,47 @@ if [[ "${ZACRS_TEST_DEFERRED:-0}" == 1 ]]; then
 fi
 enter_line gs
 wait_file "$HOME/executed" 'gs:'
+if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+    # Tab selects the first result. Colliding abbreviations should be offered
+    # before native commands, independently of optional Enter expansion.
+    for query expected in mkd 'mkdir -p ' mkdir 'mkdir -p ' rm 'trash-put '; do
+        : > "$HOME/applied"
+        : > "$HOME/redrawn"
+        zpty -w -n zacrs_enter "$query"$'\x19'
+        wait_file "$HOME/editor" "$query"
+        pty_output=''
+        zpty -w -n zacrs_enter $'\t'
+        wait_popup "$query"
+        zpty -w -n zacrs_enter ' '
+        wait_file "$HOME/applied" "$expected"
+        wait_file "$HOME/redrawn" "$expected"
+        enter_line $'\x15'
+    done
+
+    # Argument abbreviations remain eligible, but must not displace paths when
+    # opening completion after an editor/move command, or when scores tie.
+    enter_line 'cd "$HOME/completion-paths"'
+    for input expected in \
+        'nvim ' 'nvim workspace/' \
+        'mv ' 'mv workspace/' \
+        'mv notes ' 'mv notes workspace/' \
+        'nvim notes' 'nvim notes ' \
+        'mv notes' 'mv notes ' \
+        'mv notes notes' 'mv notes notes '; do
+        : > "$HOME/applied"
+        : > "$HOME/redrawn"
+        zpty -w -n zacrs_enter "$input"$'\x19'
+        wait_file "$HOME/editor" "$input"
+        pty_output=''
+        zpty -w -n zacrs_enter $'\t'
+        wait_popup "${input##* }"
+        zpty -w -n zacrs_enter ' '
+        wait_file "$HOME/applied" "$expected"
+        wait_file "$HOME/redrawn" "$expected"
+        enter_line $'\x15'
+    done
+    enter_line 'cd "$HOME"'
+fi
 enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"; _test_load_plugin'
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
     enter_line gs
@@ -268,10 +309,10 @@ for trigger in gs zacrs_next; do
         zpty -w -n zacrs_enter $'\t'
         wait_popup "$trigger"
         if [[ "$trigger" == gs ]]; then
-            zpty -w -n zacrs_enter ' '
-        else
-            # The native command is first; choose the abbreviation below it.
+            # The abbreviation is first; explicitly choose the native command.
             zpty -w -n zacrs_enter $'\e[B '
+        else
+            zpty -w -n zacrs_enter ' '
         fi
     else
         zpty -w -n zacrs_enter $'\x18'
@@ -295,7 +336,7 @@ for abort_key in $'\x03' $'\x07'; do
     pty_output=''
     zpty -w -n zacrs_enter $'\t'
     wait_popup gs
-    zpty -w -n zacrs_enter ' '
+    zpty -w -n zacrs_enter $'\e[B '
     wait_file "$HOME/applied" 'gs '
     wait_file "$HOME/redrawn" 'gs '
     next_ready=$(( $(<"$HOME/ready") + 1 ))

@@ -15,11 +15,12 @@ impl Candidate {
         match self.base_kind() {
             "directory" => 0,
             "file" => 1,
-            "command" => 2,
-            "alias" => 3,
-            "builtin" => 4,
-            "function" => 5,
-            _ => 6,
+            "abbreviation" => 2,
+            "command" => 3,
+            "alias" => 4,
+            "builtin" => 5,
+            "function" => 6,
+            _ => 7,
         }
     }
 
