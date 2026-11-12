@@ -403,6 +403,12 @@ for abort_key in $'\x03' $'\x07'; do
     zpty -w -n zacrs_enter $'\e[B '
     wait_file "$HOME/applied" 'gs '
     wait_file "$HOME/redrawn" 'gs '
+    # The redraw marker is written inside the popup widget. Wait for another
+    # widget to run before sending a terminal interrupt; otherwise the byte may
+    # arrive while the popup still owns the terminal's raw input mode.
+    : > "$HOME/editor"
+    zpty -w -n zacrs_enter $'\x19'
+    wait_file "$HOME/editor" 'gs '
     next_ready=$(( $(<"$HOME/ready") + 1 ))
     zpty -w -n zacrs_enter "$abort_key"
     wait_file "$HOME/ready" "$next_ready"

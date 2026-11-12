@@ -223,10 +223,13 @@ when.command = "scoped -s*"
             .args(["-df", "-c", script])
             .env_clear()
             .env("PATH", env::var_os("PATH").unwrap_or_default())
-            // Real ZLE needs a UTF-8 locale for multibyte keyboard input.
+            // Only Space fixtures type multibyte keys. Keep the existing byte-oriented
+            // adapter fixtures (including deliberately invalid UTF-8) in C.
             .env(
                 "LC_ALL",
-                if cfg!(target_os = "macos") {
+                if !script.contains("export ZACRS_TEST_SPACE=1") {
+                    "C"
+                } else if cfg!(target_os = "macos") {
                     "en_US.UTF-8"
                 } else {
                     "C.UTF-8"
