@@ -19,7 +19,7 @@ pub fn stable_hash_text(payload: &str) -> u64 {
 
 pub fn compute_reuse_token(prefix: &str, candidates_tsv: &str, app: &App, popup: &Popup) -> u64 {
     let signature = format!(
-        "prefix={prefix}\ncandidates={:016x}\ncursor_row={}\ncursor_col={}\nterm_cols={}\nterm_rows={}\npopup_row={}\npopup_col={}\npopup_width={}\npopup_height={}\nfilter_text={}\n",
+        "prefix={prefix}\ncandidates={:016x}\ncursor_row={}\ncursor_col={}\nterm_cols={}\nterm_rows={}\npopup_row={}\npopup_col={}\npopup_width={}\npopup_height={}\nfilter_text={}\nkind_order={:?}\n",
         stable_hash_text(candidates_tsv),
         app.cursor_row,
         app.cursor_col,
@@ -30,6 +30,7 @@ pub fn compute_reuse_token(prefix: &str, candidates_tsv: &str, app: &App, popup:
         popup.width,
         popup.height,
         app.filter_text,
+        app.kind_order(),
     );
     // Avoid 0 so the shell can distinguish "has token" from "no token"
     // via a simple non-empty string check on the variable.
@@ -62,6 +63,32 @@ mod tests {
     fn stable_hash_text_is_deterministic() {
         assert_eq!(stable_hash_text("git"), stable_hash_text("git"));
         assert_ne!(stable_hash_text("git"), stable_hash_text("gizmo"));
+    }
+
+    #[test]
+    fn reuse_token_changes_when_kind_order_changes_with_the_same_popup_dimensions() {
+        use crate::config::KindOrder;
+        use crate::fuzzy::FuzzyMatcher;
+        let tsv = "same\t\tcommand\nsame\t\talias\n";
+        let mut tokens = Vec::new();
+        for order in [KindOrder::default(), KindOrder::new(&["alias"]).unwrap()] {
+            let app = App::new_with_matcher(
+                Candidate::parse_lines_dedup(tsv),
+                "same".into(),
+                5,
+                2,
+                80,
+                24,
+                FuzzyMatcher::new().with_kind_order(order),
+            );
+            tokens.push(compute_reuse_token(
+                "same",
+                tsv,
+                &app,
+                &Popup::compute(&app),
+            ));
+        }
+        assert_ne!(tokens[0], tokens[1]);
     }
 
     #[test]

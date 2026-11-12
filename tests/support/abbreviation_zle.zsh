@@ -218,6 +218,28 @@ if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
         wait_file "$HOME/redrawn" "$expected"
         enter_line $'\x15'
     done
+    # Live config changes affect the next completion even with cached native
+    # candidates. Invalid lists keep the last valid ordering.
+    original_config=$(<"$XDG_CONFIG_HOME/zacrs/config.toml")
+    for order expected in \
+        '["abbreviation"]' 'nvim argument only ' \
+        '["file"]' 'nvim notes ' \
+        '[]' 'nvim workspace/' \
+        '["file", "file"]' 'nvim workspace/'; do
+        print -r -- "$original_config"$'\n[completion]\n'"kind_order = $order" > "$XDG_CONFIG_HOME/zacrs/config.toml"
+        : > "$HOME/applied"
+        : > "$HOME/redrawn"
+        zpty -w -n zacrs_enter $'nvim \x19'
+        wait_file "$HOME/editor" 'nvim '
+        pty_output=''
+        zpty -w -n zacrs_enter $'\t'
+        wait_popup ''
+        zpty -w -n zacrs_enter ' '
+        wait_file "$HOME/applied" "$expected"
+        wait_file "$HOME/redrawn" "$expected"
+        enter_line $'\x15'
+    done
+    print -r -- "$original_config" > "$XDG_CONFIG_HOME/zacrs/config.toml"
     enter_line 'cd "$HOME"'
 fi
 enter_line 'printf "\n[completion]\nexpand_abbreviation_on_enter = true\n" >> "$XDG_CONFIG_HOME/zacrs/config.toml"; _test_load_plugin'

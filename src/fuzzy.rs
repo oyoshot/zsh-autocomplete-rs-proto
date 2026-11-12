@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::{borrow::Cow, cmp::Ordering};
 
 use crate::candidate::Candidate;
+use crate::config::KindOrder;
 use any_ascii::any_ascii_char;
 use frizbee::{CaseMatching, Config as MatchConfig, Matcher, SortStrategy, UnicodeMatching};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
@@ -9,6 +10,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub struct FuzzyMatcher {
+    kind_order: KindOrder,
     matcher: Matcher,
     config: MatchConfig,
     last_query: String,
@@ -136,11 +138,22 @@ impl FuzzyMatcher {
             ..MatchConfig::default()
         };
         Self {
+            kind_order: KindOrder::default(),
             matcher: Matcher::new("", &config),
             config,
             last_query: String::new(),
             last_max_typos: 0,
         }
+    }
+
+    /// Apply the session's ordering before constructing its App and filter cache.
+    pub fn with_kind_order(mut self, kind_order: KindOrder) -> Self {
+        self.kind_order = kind_order;
+        self
+    }
+
+    pub(crate) fn kind_order(&self) -> KindOrder {
+        self.kind_order
     }
 
     fn ensure_matcher(&mut self, query: &str, max_typos: u16, unicode: UnicodeMatching) {
@@ -185,7 +198,7 @@ impl FuzzyMatcher {
                     score: 0,
                 })
                 .collect();
-            sort_empty_query_matches(&mut results, candidates);
+            sort_empty_query_matches(&mut results, candidates, &self.kind_order);
             return FilterResult {
                 matches: results,
                 mode: MatchMode::default(),
@@ -308,7 +321,7 @@ impl FuzzyMatcher {
             })
             .collect();
 
-        sort_scored_matches(&mut results, candidates);
+        sort_scored_matches(&mut results, candidates, &self.kind_order);
         results
     }
 }
@@ -536,34 +549,54 @@ fn subsequence_indices(query: &str, haystack: &str, case_sensitive: bool) -> Opt
     Some(indices)
 }
 
-fn compare_empty_candidates(a: &Candidate, b: &Candidate) -> Ordering {
-    a.kind_priority()
-        .cmp(&b.kind_priority())
+fn compare_empty_candidates(a: &Candidate, b: &Candidate, order: &KindOrder) -> Ordering {
+    order
+        .priority(a.kind_priority())
+        .cmp(&order.priority(b.kind_priority()))
         .then_with(|| a.text.len().cmp(&b.text.len()))
         .then_with(|| a.text.cmp(&b.text))
 }
 
-fn compare_scored_candidates(a: &Candidate, a_score: u32, b: &Candidate, b_score: u32) -> Ordering {
+fn compare_scored_candidates(
+    a: &Candidate,
+    a_score: u32,
+    b: &Candidate,
+    b_score: u32,
+    order: &KindOrder,
+) -> Ordering {
     b_score
         .cmp(&a_score)
         .then_with(|| a.text.len().cmp(&b.text.len()))
-        .then_with(|| a.kind_priority().cmp(&b.kind_priority()))
+        .then_with(|| {
+            order
+                .priority(a.kind_priority())
+                .cmp(&order.priority(b.kind_priority()))
+        })
         .then_with(|| a.text.cmp(&b.text))
 }
 
-fn sort_empty_query_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
+fn sort_empty_query_matches(
+    results: &mut [ScoredMatch],
+    candidates: &[Candidate],
+    order: &KindOrder,
+) {
     results.sort_unstable_by(|a, b| {
-        compare_empty_candidates(&candidates[a.candidate_idx], &candidates[b.candidate_idx])
+        compare_empty_candidates(
+            &candidates[a.candidate_idx],
+            &candidates[b.candidate_idx],
+            order,
+        )
     });
 }
 
-fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
+fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate], order: &KindOrder) {
     results.sort_unstable_by(|a, b| {
         compare_scored_candidates(
             &candidates[a.candidate_idx],
             a.score,
             &candidates[b.candidate_idx],
             b.score,
+            order,
         )
     });
 }
@@ -571,6 +604,46 @@ fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_kind_order_applies_to_empty_and_scored_queries_including_other_and_rescue() {
+        let candidates = vec![
+            Candidate::parse_line("gs\t\tdirectory"),
+            Candidate::parse_line("gs\t\tfile"),
+            Candidate::abbreviation("gs".into(), "git status".into(), String::new()),
+            Candidate::parse_line("gs\t\tcommand"),
+            Candidate::parse_line("gs\t\toption"),
+            Candidate::parse_line("gs\t\tcommand_rescue"),
+        ];
+        let mut matcher =
+            FuzzyMatcher::new().with_kind_order(KindOrder::new(&["other", "command"]).unwrap());
+        for query in ["", "gs"] {
+            let matches = matcher.filter(&candidates, query);
+            let kinds: Vec<_> = matches.iter().map(|r| r.candidate.kind.as_str()).collect();
+            assert_eq!(kinds[0], "option");
+            assert!(kinds[1..3].contains(&"command"));
+            assert!(kinds[1..3].contains(&"command_rescue"));
+            assert_eq!(&kinds[3..], ["directory", "file", "abbreviation"]);
+        }
+    }
+
+    #[test]
+    fn custom_kind_order_preserves_score_and_length_precedence() {
+        let order = KindOrder::new(&["abbreviation"]).unwrap();
+        let command = Candidate::parse_line("gs\t\tcommand");
+        let abbreviation =
+            Candidate::abbreviation("gstatus".into(), "git status".into(), String::new());
+        let candidates = vec![abbreviation.clone(), command.clone()];
+        let results = FuzzyMatcher::new()
+            .with_kind_order(order)
+            .filter(&candidates, "gs");
+        assert_eq!(results[0].candidate.kind, "command");
+        assert!(results[0].score > results[1].score);
+        assert_eq!(
+            compare_scored_candidates(&command, 100, &abbreviation, 100, &order),
+            Ordering::Less
+        );
+    }
 
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {
         items
@@ -1143,7 +1216,7 @@ mod tests {
         let abbreviation =
             Candidate::abbreviation("git-status".into(), "git status".into(), String::new());
         assert_eq!(
-            compare_scored_candidates(&command, 100, &abbreviation, 100),
+            compare_scored_candidates(&command, 100, &abbreviation, 100, &KindOrder::default()),
             Ordering::Less
         );
     }
