@@ -99,6 +99,14 @@ kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
 intended runtimes, rather than rebuilding it in each container.
 
+At each ZLE line-init, zacrs discards popup coordinates and snapshots, resets
+the previous input and suppression state, and restores a deferred self-insert
+delegate. Terminal interrupts can bypass both send-break and line-finish. The
+new prompt is already on screen at line-init, so this reset emits no terminal
+erase sequences. This callback runs even when Enter abbreviation expansion is
+disabled; its optional selection-reset callback remains separate. The reset
+adds shell function calls once per editing line, with no helper process or IPC.
+
 When a reload finds a wrapped ZLE hook, zacrs preserves its delegation through
 a fallback while keeping the public `azhw:zle-*` dispatcher identity recognized
 by `add-zle-hook-widget`. This keeps later standard registrations from capturing

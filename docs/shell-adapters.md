@@ -53,8 +53,9 @@ Word identity denotes the shell's literal first token, not the value after
 expansion. Identity is checked only during selection and acceptance. If the user
 edits away from a selected word and returns to it before either operation, that
 word remains protected. This conservative same-line rule avoids per-keystroke
-tracking and per-redraw requests. Line-init is the sole new lifecycle hook; it
-also resets state after terminal interruption or send-break. An empty known
+tracking and per-redraw requests. An optional line-init callback resets selection
+state after terminal interruption or send-break, alongside the adapter's
+unconditional popup-state reset. An empty known
 identity denotes no command word. Selection application and acceptance include the current identity, so separate observations are not
 needed immediately before them. Placeholder edits are followed by a selection
 observation of the prepared command, whose identity only the adapter can supply.

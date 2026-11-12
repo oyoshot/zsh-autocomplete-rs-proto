@@ -482,6 +482,16 @@ _zacrs_finish_popup_session() {
     _zacrs_reset_popup_snapshot
 }
 
+_zacrs_line_init() {
+    # Terminal interrupts bypass send-break (and line-finish). Zsh has already
+    # displayed the next prompt, so forget old coordinates without erasing them.
+    _zacrs_finish_popup_session
+    _zacrs_end_popup_session
+    _zacrs_prev_lbuffer=""
+    _zacrs_suppressed=0
+    _zacrs_reset_cache
+}
+
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local selection_applied="${7:-0}"
@@ -1197,6 +1207,7 @@ _zacrs_add_zle_hook() {
 }
 
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
+_zacrs_add_zle_hook line-init _zacrs_line_init
 if (( _zacrs_enter_enabled > 0 )); then
     _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
     # An idle loader can source us after this line's line-init has already run.

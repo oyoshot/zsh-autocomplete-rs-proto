@@ -206,6 +206,62 @@ done
 }
 
 #[test]
+fn zsh_new_lines_discard_popup_state_after_cancellation_and_acceptance() {
+    for (daemon, enter, compiled) in [
+        (true, false, false),
+        (true, true, true),
+        (false, false, false),
+    ] {
+        for order in ["before", "after"] {
+            let root = tempfile::tempdir().unwrap();
+            let runtime = tempfile::Builder::new()
+                .prefix("zacrs-popup.")
+                .tempdir_in("/tmp")
+                .unwrap();
+            let plugin = support::install_zsh_plugin(root.path(), compiled);
+            let config = root.path().join("config/zacrs");
+            fs::create_dir_all(&config).unwrap();
+            fs::write(
+                config.join("config.toml"),
+                format!("[completion]\nexpand_abbreviation_on_enter = {enter}\n"),
+            )
+            .unwrap();
+            let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+            let (output, timed_out) = run_shell(
+                Command::new("zsh")
+                    .args(["-df", "-c", include_str!("support/popup_lifecycle.zsh")])
+                    .env_clear()
+                    .env("PATH", env::var_os("PATH").unwrap_or_default())
+                    .env("HOME", root.path())
+                    .env("ZDOTDIR", root.path())
+                    .env("XDG_CONFIG_HOME", root.path().join("config"))
+                    .env("XDG_RUNTIME_DIR", runtime.path())
+                    .env("ZACRS_BIN", binary)
+                    .env("ZACRS_PLUGIN", plugin)
+                    .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
+                    .env("ZACRS_TEST_ENTER", if enter { "1" } else { "0" })
+                    .env("ZACRS_HOOK_ORDER", order)
+                    .env("TERM", "xterm-256color")
+                    .current_dir(root.path()),
+                Duration::from_secs(20),
+            );
+            // Also stop the private daemon if the PTY script timed out.
+            let _ = Command::new(binary)
+                .args(["daemon", "stop"])
+                .env("XDG_RUNTIME_DIR", runtime.path())
+                .output();
+            assert!(!timed_out, "{output:?}");
+            assert!(
+                output.status.success(),
+                "daemon={daemon} enter={enter} compiled={compiled} order={order}\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+    }
+}
+
+#[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();
     let (_, timed_out) = run_shell(
