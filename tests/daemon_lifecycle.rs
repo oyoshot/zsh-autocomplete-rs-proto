@@ -216,7 +216,7 @@ fn stop_is_idempotent_and_stops_even_a_matching_daemon() {
 fn running_daemons_are_reused_until_explicitly_stopped() {
     for handshake in [
         None,
-        Some("OK enter_expansion=0 edit_context=2"),
+        Some("OK enter_expansion=0 edit_context=2 space_expansion=0"),
         Some("OK build_id=old"),
     ] {
         let fixture = Fixture::new();

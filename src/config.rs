@@ -146,6 +146,7 @@ pub struct Config {
     pub max_visible: usize,
     pub auto_insert_unambiguous: bool,
     pub expand_abbreviation_on_enter: bool,
+    pub expand_abbreviation_on_space: bool,
     pub kind_order: KindOrder,
     pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
@@ -159,6 +160,7 @@ impl Default for Config {
             max_visible: 10,
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
+            expand_abbreviation_on_space: false,
             kind_order: KindOrder::default(),
             suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
@@ -180,6 +182,8 @@ struct CompletionRaw {
     #[serde(default)]
     expand_abbreviation_on_enter: bool,
     #[serde(default)]
+    expand_abbreviation_on_space: bool,
+    #[serde(default)]
     kind_order: KindOrder,
 }
 
@@ -188,6 +192,7 @@ impl Default for CompletionRaw {
         CompletionRaw {
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
+            expand_abbreviation_on_space: false,
             kind_order: KindOrder::default(),
         }
     }
@@ -589,6 +594,7 @@ impl Config {
             max_visible: 10,
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
+            expand_abbreviation_on_space: file.completion.expand_abbreviation_on_space,
             kind_order: file.completion.kind_order,
             suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
@@ -1059,6 +1065,18 @@ mod tests {
         assert_eq!(theme.filter, Some(Color::Green));
         assert_eq!(theme.candidate, Some(Color::White));
         assert_eq!(theme.match_fg, Color::Yellow);
+    }
+
+    #[test]
+    fn space_expansion_is_independent_and_opt_in() {
+        let file: ConfigFile =
+            toml::from_str("[completion]\nexpand_abbreviation_on_space = true").unwrap();
+        assert!(file.completion.expand_abbreviation_on_space);
+        assert!(!file.completion.expand_abbreviation_on_enter);
+        assert!(!Config::default().expand_abbreviation_on_space);
+        assert!(
+            toml::from_str::<ConfigFile>("[completion]\nexpand_abbreviation_on_space = 1").is_err()
+        );
     }
 
     // --- auto_insert_unambiguous TOML parsing ---

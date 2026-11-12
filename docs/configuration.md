@@ -182,14 +182,14 @@ expand_abbreviation_on_enter = true
 
 This replaces the former `ZACRS_ABBR_EXPAND_ON_ENTER` shell variable, which is
 no longer read. Reload the plugin after changing this setting. Configuration is
-received through the daemon's startup handshake. When disabled, no abbreviation
-editing session is registered and Enter sends no abbreviation request.
+received through the daemon's startup handshake. When Enter expansion is disabled, Enter sends no abbreviation request.
+With both expansion options disabled, no abbreviation editing session is registered.
 
 It is disabled by default. With `gs = "git status"`, typing `gs` then Enter
 rewrites the input to `git status` and executes it; `gs -sb` becomes
 `git status -sb`. History records the expanded command. A same-named executable
 or alias is overridden by the configured abbreviation in this mode. Space
-keeps its ordinary behavior.
+keeps its ordinary behavior unless Space expansion is enabled.
 
 The Zsh adapter obtains a command-word range from the native completion parser.
 It offers that range only when the parser's command words cover the complete
@@ -218,7 +218,8 @@ or a new input line clears the exemption.
 Closing the popup with Space after typing a filter without selecting a candidate
 keeps that typed command eligible for Enter expansion.
 
-When enabled, the daemon owns the editing session and selection protection.
+When either expansion option is enabled, the daemon owns the editing session
+and selection protection.
 Zsh sends facts only when applying a candidate or accepting a line, and resets the
 session when ZLE starts a new input line. It holds no abbreviation selection state
 or edit journal and sends no per-redraw abbreviation observations. These requests
@@ -226,7 +227,7 @@ use the existing Unix socket and launch no helper processes. The Zsh adapter use
 the existing completion widget in context-only mode to verify the target and supplies
 its literal word and character range. Rust validates the range and performs
 exact lookup and editing without parsing shell syntax. This widget runs only
-when Enter expansion is enabled and calls no candidate providers. No extra
+when an enabled expansion option needs a context query and calls no candidate providers. No extra
 completion widget is registered. The query temporarily places the cursor at the
 end of the command word, then restores the editor state before applying any edit.
 Other shell adapters must establish their own native context capability; there is no
@@ -245,6 +246,53 @@ next fresh line. Malformed responses disable expansion until plugin reload.
 If the daemon restarts or loses the editing session, the current input is left
 unchanged; a fresh line starts a new session. Literal shell expressions
 in expansions are evaluated by Zsh only when the resulting line is executed.
+
+### Expand abbreviations with Space
+
+To expand a command abbreviation without executing it:
+
+```toml
+[completion]
+expand_abbreviation_on_space = true
+```
+
+This is disabled by default and independent of Enter expansion. Reload the
+plugin after changing it. With `gs = "git status"`, typing `gs` then Space
+produces `git status ` for further editing. Only a cursor immediately after the
+complete command word is eligible; spaces in arguments keep their ordinary
+behavior. The same native syntax checks and selection protection as Enter apply.
+A cursor marker places the cursor at that marker without adding a space.
+Space-expanded commands are protected from a second expansion on Enter.
+Successful Space expansion clears `POSTDISPLAY`, as popup insertion does,
+so a suggestion belonging to the old buffer cannot be accepted into the
+expanded command. Expansion without a cursor marker delegates the separator and suggestion
+updates to the existing insertion widget. Cursor-marker edits skip insertion.
+
+When enabled, the adapter wraps `self-insert` while keeping native key bindings.
+Space and temporary deferred rendering share one wrapper and saved delegate.
+Search minibuffers, including incremental and vi history searches invoked
+through saved widget aliases, retain Zsh's native insertion handling. Explicit
+custom key bindings are preserved. The wrapper checks for Space and delegates
+other keys immediately to the previous insertion widget, including other
+plugins' wrappers. This adds a small dispatch cost to ordinary character
+insertion while the option is enabled.
+
+Recursive editors such as `replace-string` prompts are not command lines:
+Space and Enter expansion skip them, without changing the outer line's editing
+session. Non-command contexts such as `vared` and `select` also skip expansion.
+When native completion has a pending auto-removable suffix, or the
+numeric insertion count differs from one (including zero), Space delegates
+directly to insertion. Zsh retains control of suffix removal and insertion
+counts. Reloading or disabling restores delegates captured by other plugins,
+preserving their outer wrappers without recursive calls. Popup Space keeps its
+configured popup action.
+
+Space in the command word uses the native lexer and, at the word end, the
+completion context query and daemon socket. Argument spaces use the native lexer
+but skip the completion query and IPC. Successful edits send a selection
+notification to protect the expanded command. Disabled Space expansion installs
+no insertion wrapper and adds no work to ordinary input handling. The editing
+session, line-init reset and transport failure handling are shared with Enter.
 
 ### Daemon updates
 

@@ -177,9 +177,22 @@ _zacrs_abbreviation_context_func() {
     _zacrs_abbr_valid=1
 }
 
+# Only primary command editing may update the daemon's abbreviation session.
+_zacrs_command_editor() {
+    (( ZLE_RECURSIVE == 0 )) && [[ "${CONTEXT:-start}" == start ]]
+}
+
 _zacrs_expand_command_abbreviation() {
+    # Recursive editors can be search/replacement text, not shell command input.
+    _zacrs_command_editor || return 1
+    local operation="${1:-accept}"
     local -a reply _zacrs_abbr_words
     _zacrs_abbreviation_words
+    # Space only terminates the literal command word at the editing cursor.
+    # Argument spaces need neither a completion query nor a daemon request.
+    if [[ "$operation" == space ]]; then
+        [[ "$reply[1]" == 1 && -n "$reply[2]" && $CURSOR == $reply[4] ]] || return 1
+    fi
     local -i _zacrs_abbr_valid=0 _zacrs_abbr_context_only=1
     local original_buffer="$BUFFER" original_cursor=$CURSOR
     if [[ -z "${PREBUFFER:-}" && "$reply[1]" == 1 && -n "$reply[2]" ]]; then
@@ -200,15 +213,18 @@ _zacrs_expand_command_abbreviation() {
     local context="${(j: :)${(@Q)_zacrs_abbr_words}}"
     [[ "$BUFFER" == *[[:space:]] ]] && context+=" "
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    _zacrs_abbreviation_request accept "$BUFFER" "$reply[1]" "$reply[2]" "$reply[3]" "$reply[4]" "$_zacrs_abbr_valid" "$context" || return 1
+    _zacrs_abbreviation_request "$operation" "$BUFFER" "$reply[1]" "$reply[2]" "$reply[3]" "$reply[4]" "$_zacrs_abbr_valid" "$context" || return 1
     [[ "$_zacrs_abbreviation_header" == 'DONE 0 '* || "$_zacrs_abbreviation_header" == 'DONE 0' ]] || return 1
     [[ "$_zacrs_abbreviation_apply" == 'APPLY '* ]] || return 1
-    local result_code result_text chain execute restore_text cursor_offset selection_applied
+    local result_code result_text chain execute restore_text cursor_offset selection_applied insert_trigger
     _zacrs_parse_done_line "$_zacrs_abbreviation_header"
     _zacrs_parse_apply_line "$_zacrs_abbreviation_apply"
+    # Enter placeholder edits and Space edits both invalidate the old suggestion.
+    unset POSTDISPLAY
     BUFFER="$result_text"
     CURSOR=${cursor_offset:-${#BUFFER}}
     REPLY="$execute"
+    [[ "$operation" == space ]] && REPLY="$insert_trigger"
     return 0
 }
 

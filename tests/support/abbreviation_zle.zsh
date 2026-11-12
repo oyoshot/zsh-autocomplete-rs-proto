@@ -16,6 +16,40 @@ if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
         builtin zmodload "$@"
     }
 fi
+if [[ "${ZACRS_TEST_SPACE:-0}" == 1 && "${_test_insert_installed:-0}" == 0 ]]; then
+    _test_insert_installed=1
+    zle -A self-insert _test_saved_insert
+    _test_competing_insert() {
+        zle _test_saved_insert -w
+        if (( ${_test_suggestions_enabled:-0} )); then
+            if [[ "$_test_suggestion_history" == "$BUFFER"* ]]; then
+                POSTDISPLAY="${_test_suggestion_history#$BUFFER}"
+            else
+                POSTDISPLAY=''
+            fi
+        fi
+        print -r -- "$BUFFER" > "$HOME/inserted"
+    }
+    zle -N self-insert _test_competing_insert
+    zle -A vi-history-search-backward _test_saved_search_backward
+    zle -A vi-history-search-forward _test_saved_search_forward
+    _test_search_backward() {
+        zle _test_saved_search_backward
+        print -r -- backward > "$HOME/search-before"
+    }
+    _test_search_forward() {
+        zle _test_saved_search_forward
+        print -r -- forward > "$HOME/search-before"
+    }
+    zle -N vi-history-search-backward _test_search_backward
+    zle -N vi-history-search-forward _test_search_forward
+fi
+if [[ "${ZACRS_TEST_SEARCH_CUSTOM:-0}" == 1 && "${_test_search_installed:-0}" == 0 ]]; then
+    _test_search_installed=1
+    bindkey -M isearch ' ' backward-delete-char
+    bindkey -M vicmd '/' _test_saved_search_backward
+    bindkey -M vicmd '?' _test_saved_search_forward
+fi
 source "$ZACRS_PLUGIN"
 _zacrs_render() { :; }
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
@@ -91,6 +125,7 @@ _test_line_init() {
 _test_observe_buffer() {
     print -r -- "$BUFFER" > "$HOME/editor"
     print -r -- "$CURSOR" > "$HOME/cursor"
+    print -r -- "${POSTDISPLAY:-}" > "$HOME/postdisplay"
 }
 add-zle-hook-widget line-init _test_line_init
 zle -N _test_observe_buffer
@@ -157,6 +192,9 @@ enter_line() {
 if [[ "${ZACRS_TEST_DEFERRED:-0}" == 1 ]]; then
     print -rl -- '[completion]' 'expand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
 fi
+if [[ "${ZACRS_TEST_SPACE:-0}" == 1 ]]; then
+    print -rl -- '[completion]' 'expand_abbreviation_on_space = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
+fi
 zpty -b zacrs_enter zsh -di
 wait_file "$HOME/ready" 1
 if [[ "${ZACRS_TEST_DEFERRED:-0}" == 1 ]]; then
@@ -175,6 +213,10 @@ if [[ "${ZACRS_TEST_DEFERRED:-0}" == 1 ]]; then
     wait_file "$HOME/executed" 'git:status'
     print -r -- 'ok: deferred loading expands the first line and reload preserves selections'
     zpty -w -n zacrs_enter $'exit\r'
+    exit 0
+fi
+if [[ "${ZACRS_TEST_SPACE:-0}" == 1 ]]; then
+    source "$ZACRS_SPACE_TEST_FILE"
     exit 0
 fi
 enter_line gs
