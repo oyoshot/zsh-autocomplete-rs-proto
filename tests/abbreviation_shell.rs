@@ -6,6 +6,8 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 struct ShellGroup(Child);
 
 impl Drop for ShellGroup {
@@ -94,7 +96,29 @@ fn zsh_reload_preserves_selections_without_the_new_initialization_flag() {
 }
 
 fn run_abbreviation_test(script: &str, daemon: bool) {
+    run_abbreviation_test_with_plugin(script, daemon, false);
+}
+
+#[test]
+fn zsh_compiled_plugin_preserves_zle_editing_and_reload_behavior() {
+    run_abbreviation_test_with_plugin(include_str!("support/abbreviation_zle.zsh"), true, true);
+}
+
+#[test]
+fn zsh_compiled_plugin_initializes_after_deferred_loading() {
+    run_abbreviation_test_with_plugin(
+        concat!(
+            "export ZACRS_TEST_DEFERRED=1\n",
+            include_str!("support/abbreviation_zle.zsh")
+        ),
+        true,
+        true,
+    );
+}
+
+fn run_abbreviation_test_with_plugin(script: &str, daemon: bool, compiled: bool) {
     let root = tempfile::tempdir().unwrap();
+    let plugin = support::install_zsh_plugin(root.path(), compiled);
     let runtime = tempfile::Builder::new()
         .prefix("zacrs-abbr.")
         .tempdir_in("/tmp")
@@ -173,13 +197,7 @@ when.command = "scoped -s*"
             )
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
-            .env(
-                "ZACRS_PLUGIN",
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/shell/zsh-autocomplete-rs.plugin.zsh"
-                ),
-            )
+            .env("ZACRS_PLUGIN", plugin)
             .env("TERM", "xterm-256color")
             .current_dir(root.path()),
         Duration::from_secs(30),
