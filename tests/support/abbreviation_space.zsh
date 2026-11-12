@@ -283,8 +283,17 @@ done
 enter_line 'bindkey -M vicmd "/" vi-history-search-backward; bindkey -M vicmd "?" vi-history-search-forward'
 
 # Interrupt the minibuffer itself; the borrowed Space binding must be restored.
-zpty -w -n zacrs_enter $'\e/needle '
 next_ready=$(( $(<"$HOME/ready") + 1 ))
+pty_output=''
+zpty -w -n zacrs_enter $'\e/needle #'
+# VINTR can flush queued input. Wait until the native search reader has
+# displayed the query before interrupting it, rather than racing its startup.
+for attempt in {1..500}; do
+    drain_pty
+    [[ "$pty_output" == *'#'* ]] && break
+    sleep 0.01
+done
+[[ "$pty_output" == *'#'* ]] || fail 'vi search query was not displayed'
 zpty -w -n zacrs_enter $'\x03'
 wait_file "$HOME/ready" "$next_ready"
 zpty -w -n zacrs_enter $'gs \x19'

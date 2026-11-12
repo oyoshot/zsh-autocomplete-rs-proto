@@ -151,6 +151,11 @@ for abort_key in $'\x03' $'\x07' $'\x18' $'\x0f'; do
         : > "$HOME/deferred"
         zpty -w -n zacrs_lifecycle $'\x14'
         wait_file deferred deferred
+        # The deferred marker is written before its redraw hook runs. Probe
+        # again so VINTR cannot race terminal setup in that pending redraw.
+        : > "$HOME/probe"
+        zpty -w -n zacrs_lifecycle $'\x19'
+        wait_file probe "ls:2:1:$ZACRS_TEST_ENTER:$ZACRS_TEST_DAEMON"
     fi
     zpty -w -n zacrs_lifecycle "$abort_key"
     (( ++next_line ))
