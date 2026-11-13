@@ -1,4 +1,4 @@
-# Shell adapter boundary for Enter edits
+# Shell adapter boundary for abbreviation edits
 
 The shared Rust engine owns configuration, exact abbreviation lookup, selection
 protection, and literal edit results. It does not classify reserved words,
@@ -66,3 +66,26 @@ after a malformed response. Transport failure disables edits for the current lin
 the existing line-init hook reconnects and resets the session at the next fresh
 line, never while accepting or applying a selection. Missing sessions after restart or eviction preserve
 the input. The default remains disabled and adds no Enter-time abbreviation work.
+
+## Optional Space edits
+
+The handshake also advertises `space_expansion=0|1`. Either expansion option
+enables the shared editing session. The `space` operation carries the same
+fields as `accept`, but preserves the session and never executes. Zsh offers a
+target only when the editing cursor is at the end of the command word.
+Recursive editors never offer abbreviation targets or update the outer editing
+session: their input may be replacement text rather than a command line.
+Zsh also requires its native `CONTEXT` to identify a primary command prompt;
+`vared`, `select`, and continuation editors do not supply abbreviation targets.
+Rust applies the verified edit and returns the insertion cursor plus
+`insert_trigger=1` in APPLY metadata when the native separator should be inserted.
+An explicit cursor marker suppresses that insertion. The adapter delegates the
+separator to its saved insertion widget, preserving existing plugin behavior. The adapter then reports the prepared
+command identity through `select` to prevent repeated expansion. The operation
+is gated independently of Enter expansion; older adapters ignore the new flag.
+
+Before a Space context query, Zsh checks its native `SUFFIX_ACTIVE` state.
+Pending completion suffixes bypass abbreviation expansion and go directly to
+the current insertion widget. Querying completion context would consume that
+state even without an edit, so restoring only the buffer and cursor is
+insufficient. Removal and retention remain the native widget's responsibility.

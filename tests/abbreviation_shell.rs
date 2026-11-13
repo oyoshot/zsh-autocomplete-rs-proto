@@ -67,6 +67,28 @@ fn zsh_enter_abbreviation_is_opt_in_and_preserves_input() {
 }
 
 #[test]
+fn zsh_space_abbreviation_is_independent_and_preserves_zle_state() {
+    run_abbreviation_test(
+        concat!(
+            "export ZACRS_TEST_SPACE=1\n",
+            include_str!("support/abbreviation_zle.zsh")
+        ),
+        true,
+    );
+}
+
+#[test]
+fn zsh_space_preserves_preexisting_search_binding() {
+    run_abbreviation_test(
+        concat!(
+            "export ZACRS_TEST_SPACE=1 ZACRS_TEST_SEARCH_CUSTOM=1\n",
+            include_str!("support/abbreviation_zle.zsh")
+        ),
+        true,
+    );
+}
+
+#[test]
 fn zsh_enter_abbreviation_zle_without_daemon() {
     run_abbreviation_test(include_str!("support/abbreviation_zle.zsh"), false);
 }
@@ -102,6 +124,18 @@ fn zsh_reload_preserves_selections_without_the_new_initialization_flag() {
 
 fn run_abbreviation_test(script: &str, daemon: bool) {
     run_abbreviation_test_with_plugin(script, daemon, false);
+}
+
+#[test]
+fn zsh_compiled_plugin_preserves_space_expansion_and_insert_wrappers() {
+    run_abbreviation_test_with_plugin(
+        concat!(
+            "export ZACRS_TEST_SPACE=1\n",
+            include_str!("support/abbreviation_zle.zsh")
+        ),
+        true,
+        true,
+    );
 }
 
 #[test]
@@ -158,6 +192,7 @@ zacrs_next = "gs"
 connect = "ssh user@{{cursor}}"
 literal = "echo $(touch should-not-exist)"
 multi = "echo one\necho two"
+wrap = "{{cursor}}git status"
 
 [[abbreviation]]
 trigger = "gcm"
@@ -189,6 +224,18 @@ when.command = "scoped -s*"
             .args(["-df", "-c", script])
             .env_clear()
             .env("PATH", env::var_os("PATH").unwrap_or_default())
+            // Only Space fixtures type multibyte keys. Keep the existing byte-oriented
+            // adapter fixtures (including deliberately invalid UTF-8) in C.
+            .env(
+                "LC_ALL",
+                if !script.contains("export ZACRS_TEST_SPACE=1") {
+                    "C"
+                } else if cfg!(target_os = "macos") {
+                    "en_US.UTF-8"
+                } else {
+                    "C.UTF-8"
+                },
+            )
             .env("HOME", root.path())
             .env("ZDOTDIR", root.path())
             .env("XDG_CONFIG_HOME", root.path().join("config"))
@@ -198,6 +245,13 @@ when.command = "scoped -s*"
                 concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/tests/support/abbreviation_enter.zsh"
+                ),
+            )
+            .env(
+                "ZACRS_SPACE_TEST_FILE",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/support/abbreviation_space.zsh"
                 ),
             )
             .env("XDG_RUNTIME_DIR", runtime.path())

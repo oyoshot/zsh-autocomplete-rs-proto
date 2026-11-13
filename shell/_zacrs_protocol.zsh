@@ -32,6 +32,7 @@ _zacrs_parse_apply_line() {
     selection_applied=0
     restore_text=""
     cursor_offset=""
+    insert_trigger=0
 
     if [[ "$metadata" == *" restore_hex="* ]]; then
         local restore_hex="${metadata#* restore_hex=}"
@@ -47,6 +48,7 @@ _zacrs_parse_apply_line() {
     for token in ${(s: :)metadata}; do
         [[ "$token" == "chain=1" ]] && chain=1
         [[ "$token" == "execute=1" ]] && execute=1
+        [[ "$token" == "insert_trigger=1" ]] && insert_trigger=1
         [[ "$token" == "selection_applied=1" ]] && selection_applied=1
         [[ "$token" == cursor_offset=<-> ]] && cursor_offset="${token#cursor_offset=}"
         if [[ "$token" == text_hex=* ]]; then

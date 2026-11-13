@@ -346,11 +346,7 @@ fn should_match_candidate(
         }
     }
 
-    if smart_case && !case_sensitive_subsequence_matches(normalized_query, normalized_text) {
-        return false;
-    }
-
-    true
+    !smart_case || case_sensitive_subsequence_matches(normalized_query, normalized_text)
 }
 
 fn normalize_for_matching(text: &str) -> Cow<'_, str> {

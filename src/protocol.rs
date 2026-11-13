@@ -120,6 +120,8 @@ pub struct TextCompleteResult {
     pub selection_applied: bool,
     pub restore_text: String,
     pub cursor_offset: Option<usize>,
+    /// Delegate the triggering separator to the shell insertion widget.
+    pub insert_trigger: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,6 +437,11 @@ pub enum AbbreviationObservation<'a> {
         head: Option<&'a str>,
         head_start: usize,
     },
+    Space {
+        buffer: &'a str,
+        head: Option<&'a str>,
+        target: Option<crate::abbreviation::CommandTarget>,
+    },
     Accept {
         buffer: &'a str,
         head: Option<&'a str>,
@@ -464,7 +471,7 @@ impl<'a> AbbreviationObservation<'a> {
                 head: flag(known)?.then_some(head),
                 head_start: number(head_start)?,
             }),
-            ("accept", [buffer, known, head, start, end, eligible, context]) => {
+            ("accept" | "space", [buffer, known, head, start, end, eligible, context]) => {
                 let known = flag(known)?;
                 let target = if flag(eligible)? {
                     if !known {
@@ -479,10 +486,18 @@ impl<'a> AbbreviationObservation<'a> {
                 } else {
                     None
                 };
-                Ok(Self::Accept {
-                    buffer,
-                    head: known.then_some(head),
-                    target,
+                Ok(if operation == "space" {
+                    Self::Space {
+                        buffer,
+                        head: known.then_some(head),
+                        target,
+                    }
+                } else {
+                    Self::Accept {
+                        buffer,
+                        head: known.then_some(head),
+                        target,
+                    }
                 })
             }
             _ => Err(invalid()),
@@ -797,6 +812,9 @@ impl TextCompleteResult {
             if self.chain { 1 } else { 0 },
             if self.execute { 1 } else { 0 },
         )?;
+        if self.insert_trigger {
+            write!(writer, " insert_trigger=1")?;
+        }
         if self.selection_applied {
             write!(writer, " selection_applied=1")?;
         }
@@ -858,6 +876,7 @@ impl TextCompleteResult {
         let mut execute = false;
         let mut selection_applied = false;
         let mut cursor_offset = None;
+        let mut insert_trigger = false;
         for token in flag_fields.split_whitespace() {
             if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
@@ -865,6 +884,8 @@ impl TextCompleteResult {
                 execute = value == "1";
             } else if let Some(value) = token.strip_prefix("selection_applied=") {
                 selection_applied = value == "1";
+            } else if let Some(value) = token.strip_prefix("insert_trigger=") {
+                insert_trigger = value == "1";
             } else if let Some(value) = token.strip_prefix("cursor_offset=") {
                 cursor_offset = value.parse().ok();
             } else if let Some(value) = token.strip_prefix("text_hex=") {
@@ -880,6 +901,7 @@ impl TextCompleteResult {
             selection_applied,
             restore_text,
             cursor_offset,
+            insert_trigger,
         })
     }
 }
@@ -1339,6 +1361,7 @@ mod tests {
     #[test]
     fn text_complete_result_roundtrip() {
         let result = TextCompleteResult {
+            insert_trigger: true,
             code: 2,
             text: "cargo ".to_string(),
             chain: true,
@@ -1365,6 +1388,7 @@ mod tests {
     #[test]
     fn text_complete_result_roundtrip_preserves_multiline_text() {
         let result = TextCompleteResult {
+            insert_trigger: false,
             code: 0,
             text: "printf 'first\nsecond'\n".to_string(),
             chain: false,
@@ -1393,6 +1417,7 @@ mod tests {
     #[test]
     fn text_complete_result_write_to_hex_encodes_restore_text() {
         let result = TextCompleteResult {
+            insert_trigger: false,
             code: 1,
             text: String::new(),
             chain: false,

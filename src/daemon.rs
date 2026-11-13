@@ -110,6 +110,7 @@ fn encode_hex_bytes(bytes: &[u8]) -> String {
 
 fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
     TextCompleteResult {
+        insert_trigger: false,
         code: result.code,
         text: result.text.clone(),
         chain: result.chain,
@@ -432,7 +433,7 @@ impl DaemonServer {
     ) -> Option<TextCompleteResult> {
         use protocol::AbbreviationObservation as Event;
         self.maybe_reload_config();
-        if !self.config.expand_abbreviation_on_enter {
+        if !self.config.expand_abbreviation_on_enter && !self.config.expand_abbreviation_on_space {
             self.abbreviation_sessions.remove(key);
             return None;
         }
@@ -456,6 +457,19 @@ impl DaemonServer {
                 head,
                 head_start,
             } => session.select(edit_start, applied, head, head_start),
+            Event::Space {
+                buffer,
+                head,
+                target,
+            } => {
+                session.observe(head);
+                return crate::abbreviation::expand_space_line(
+                    &self.config,
+                    buffer,
+                    target.as_ref(),
+                    session,
+                );
+            }
             Event::Accept {
                 buffer,
                 head,
@@ -1075,8 +1089,9 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=2",
-                    u8::from(self.config.expand_abbreviation_on_enter)
+                    "OK enter_expansion={} edit_context=2 space_expansion={}",
+                    u8::from(self.config.expand_abbreviation_on_enter),
+                    u8::from(self.config.expand_abbreviation_on_space)
                 );
                 let _ = writer.flush();
                 false

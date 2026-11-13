@@ -18,13 +18,16 @@ source "${_zacrs_dir}/_zacrs_protocol.zsh"
 zmodload zsh/zleparameter 2>/dev/null
 
 _zacrs_restore_self_insert() {
+    # Keep the shared wrapper while Space needs it; force removal on reload.
+    (( ${1:-0} || ! ${_zacrs_space_enabled:-0} )) || return 0
     (( ${1:-0} || ${_zacrs_self_insert_wrapped:-0} )) || return 0
     local widget original=_zacrs_saved_self_insert
     (( ${+widgets[$original]} )) || original=.self-insert
-    # Another plugin can save our temporary widget under its own alias and
+    # Another plugin can save our widget under its own alias and
     # wrap self-insert around that alias. Restore every such reference before
     # the saved delegate is reused, preserving the other plugin's outer wrapper.
-    for widget in ${(k)widgets[(R)user:_zacrs_deferred_self_insert]}; do
+    # Include the old temporary widget name for reloads from installed adapters.
+    for widget in ${(k)widgets[(R)user:_zacrs_self_insert]} ${(k)widgets[(R)user:_zacrs_deferred_self_insert]}; do
         zle -A "$original" "$widget"
     done
     _zacrs_self_insert_wrapped=0
@@ -62,7 +65,10 @@ typeset -gi _zacrs_self_insert_wrapped=0
 typeset -gi _zacrs_enter_session_initialized=${_zacrs_enter_session_initialized:-${+_zacrs_enter_enabled}}
 # 0: disabled; 1: enabled; -1: invalid response; -2: transport unavailable.
 # Only a fresh editing line may recover transport; invalid responses need reload.
+# Shared edit transport state (the name is retained for adapter reload compatibility).
 typeset -gi _zacrs_enter_enabled=0
+typeset -gi _zacrs_enter_expansion=0
+typeset -gi _zacrs_space_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
@@ -91,6 +97,7 @@ _zacrs_reset_cache() {
 
 # Only enabled shells send observations; the daemon owns the editing session.
 _zacrs_reset_enter_selection() {
+    _zacrs_command_editor || return 0
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
         _zacrs_enter_session_initialized=1
@@ -112,6 +119,7 @@ _zacrs_reset_enter_selection() {
 }
 
 _zacrs_record_enter_selection() {
+    _zacrs_command_editor || return 0
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     (( _zacrs_enter_enabled > 0 )) || return 0
     local -a reply _zacrs_abbr_words
@@ -120,15 +128,21 @@ _zacrs_record_enter_selection() {
     return 0
 }
 
-# Temporarily observe the tail of a type-ahead (Shinsoku-typing) batch without
-# permanently replacing another plugin's self-insert widget.
+# Both features borrow one insertion widget and one delegate. Clearing a
+# deferred redraw must not remove the wrapper needed for Space expansion.
+_zacrs_wrap_self_insert() {
+    (( _zacrs_self_insert_wrapped )) && return 0
+    zle -A self-insert _zacrs_saved_self_insert
+    if (( _zacrs_space_enabled )); then
+        zle -N self-insert _zacrs_self_insert
+    else
+        zle -N self-insert _zacrs_deferred_self_insert
+    fi
+    _zacrs_self_insert_wrapped=1
+}
 _zacrs_defer_redraw() {
     _zacrs_redraw_deferred=1
-    if (( ! _zacrs_self_insert_wrapped )); then
-        zle -A self-insert _zacrs_saved_self_insert
-        zle -N self-insert _zacrs_deferred_self_insert
-        _zacrs_self_insert_wrapped=1
-    fi
+    _zacrs_wrap_self_insert
 }
 
 _zacrs_end_popup_session() {
@@ -240,8 +254,12 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
                 fi
             fi
         fi
-        if [[ "$handshake" == OK* && " $handshake " == *' enter_expansion=1 '* && " $handshake " == *' edit_context=2 '* ]]; then
-            _zacrs_enter_enabled=1
+        if [[ "$handshake" == OK* && " $handshake " == *' edit_context=2 '* ]]; then
+            _zacrs_enter_expansion=0
+            _zacrs_space_enabled=0
+            [[ " $handshake " == *' enter_expansion=1 '* ]] && _zacrs_enter_expansion=1
+            [[ " $handshake " == *' space_expansion=1 '* ]] && _zacrs_space_enabled=1
+            (( _zacrs_enter_expansion || _zacrs_space_enabled )) && _zacrs_enter_enabled=1
         fi
         return 0
     }
@@ -613,7 +631,7 @@ _zacrs_invoke_daemon() {
         return 1
     fi
 
-    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0
+    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 4
     _zacrs_parse_apply_line "${lines[2]}"
@@ -679,7 +697,7 @@ _zacrs_invoke() {
         return 1
     fi
 
-    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0
+    local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
     (( result_code == 4 )) && return 1
     _zacrs_parse_apply_line "${lines[2]}"
@@ -793,7 +811,7 @@ _zacrs_complete_popup() {
 _zacrs_line_pre_redraw() {
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
-    (( _zacrs_self_insert_wrapped && PENDING == 0 )) && _zacrs_restore_self_insert
+    (( _zacrs_self_insert_wrapped && ! _zacrs_space_enabled && PENDING == 0 )) && _zacrs_restore_self_insert
 
     # LBUFFER が変わってなければスキップ
     if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
@@ -973,7 +991,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     local _keep_editing=0
-    if (( _zacrs_enter_enabled > 0 )) && _zacrs_expand_command_abbreviation; then
+    if (( _zacrs_enter_enabled > 0 && _zacrs_enter_expansion )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
             _zacrs_record_enter_selection
@@ -1044,18 +1062,38 @@ TRAPWINCH() {
 
 # === Register widgets and keybindings ===
 
-# A large type-ahead batch can have only one redraw hook invocation while
-# PENDING is still non-zero. This wrapper is installed only for the remaining
-# batch, delegates to the widget that was active before zacrs, and restores it
-# before resuming the deferred render.
+# Keep native self-insert bindings so Zsh search readers retain native input.
+# Space expansion and deferred rendering share this wrapper and its lifecycle.
+_zacrs_self_insert() {
+    if [[ "$KEYS" == ' ' ]] && \
+        (( ${NUMERIC:-1} == 1 && ! ${SUFFIX_ACTIVE:-0} && _zacrs_space_enabled && _zacrs_enter_enabled > 0 )) && \
+        _zacrs_expand_command_abbreviation space; then
+        # A leading cursor marker leaves LBUFFER equal to the empty redraw
+        # sentinel. Clear old UI now, even if the next redraw skips work.
+        _zacrs_clear_popup
+        local insert_status=0
+        (( REPLY )) && { zle _zacrs_saved_self_insert -w || insert_status=$?; }
+        _zacrs_record_enter_selection
+        _zacrs_prev_lbuffer=""
+        _zacrs_reset_cache
+        zle -R
+        return $insert_status
+    fi
+    _zacrs_deferred_self_insert
+}
+
+# Disabled Space expansion keeps the original typeahead path free of Space checks.
 _zacrs_deferred_self_insert() {
-    zle _zacrs_saved_self_insert -w
+    local insert_status=0
+    zle _zacrs_saved_self_insert -w || insert_status=$?
     if (( _zacrs_redraw_deferred && PENDING == 0 )); then
         _zacrs_restore_self_insert
         _zacrs_prev_lbuffer=""
         _zacrs_line_pre_redraw
     fi
+    return $insert_status
 }
+(( _zacrs_space_enabled )) && _zacrs_wrap_self_insert
 
 # Popup widget
 zle -N _zacrs_complete_popup

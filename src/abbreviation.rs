@@ -54,7 +54,41 @@ pub fn expand_enter_line(
     target: Option<&CommandTarget>,
     session: &EditingSession,
 ) -> Option<TextCompleteResult> {
-    if !config.expand_abbreviation_on_enter || session.uncertain {
+    if !config.expand_abbreviation_on_enter {
+        return None;
+    }
+    expand_verified_line(config, buffer, target, session)
+}
+
+/// Expand without execution, requesting native insertion unless a cursor marker owns
+/// the insertion point. The adapter only offers targets at the editing cursor.
+pub fn expand_space_line(
+    config: &Config,
+    buffer: &str,
+    target: Option<&CommandTarget>,
+    session: &EditingSession,
+) -> Option<TextCompleteResult> {
+    if !config.expand_abbreviation_on_space {
+        return None;
+    }
+    let target = target?;
+    let mut result = expand_verified_line(config, buffer, Some(target), session)?;
+    if result.cursor_offset.is_none() {
+        let cursor = target.end + result.text.chars().count() - buffer.chars().count();
+        result.cursor_offset = Some(cursor);
+        result.insert_trigger = true;
+    }
+    result.execute = false;
+    Some(result)
+}
+
+fn expand_verified_line(
+    config: &Config,
+    buffer: &str,
+    target: Option<&CommandTarget>,
+    session: &EditingSession,
+) -> Option<TextCompleteResult> {
+    if session.uncertain {
         return None;
     }
     let target = target?;
@@ -101,6 +135,7 @@ pub fn expand_command_abbreviation(
         return None;
     }
     Some(TextCompleteResult {
+        insert_trigger: false,
         code: 0,
         text,
         chain: false,
@@ -116,6 +151,27 @@ pub fn expand_command_abbreviation(
 mod tests {
     use super::*;
     use crate::config::{Abbreviation, AbbreviationPosition, AbbreviationWhen};
+
+    #[test]
+    fn space_expansion_preserves_unicode_tail_and_protects_selected_words() {
+        let mut config = config("日本語", Default::default());
+        config.expand_abbreviation_on_enter = false;
+        config.expand_abbreviation_on_space = true;
+        let target = CommandTarget {
+            trigger: "gs".into(),
+            start: 1,
+            end: 3,
+            command_context: "gs 引数".into(),
+        };
+        let mut session = EditingSession::default();
+        let result = expand_space_line(&config, " gs 引数", Some(&target), &session).unwrap();
+        assert_eq!(result.text, " 日本語 引数");
+        assert!(result.insert_trigger);
+        assert_eq!(result.cursor_offset, Some(4));
+        assert!(!result.execute);
+        session.select(1, true, Some("gs"), 1);
+        assert!(expand_space_line(&config, " gs 引数", Some(&target), &session).is_none());
+    }
 
     #[test]
     fn verified_ranges_preserve_arguments_and_validate_offsets() {
