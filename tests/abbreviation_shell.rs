@@ -192,6 +192,7 @@ zacrs_next = "gs"
 connect = "ssh user@{{cursor}}"
 literal = "echo $(touch should-not-exist)"
 multi = "echo one\necho two"
+wrap = "{{cursor}}git status"
 
 [[abbreviation]]
 trigger = "gcm"

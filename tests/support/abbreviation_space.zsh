@@ -11,6 +11,25 @@ fi
 enter_line 'bindkey -M emacs " " > "$HOME/binding"; bindkey -M viins " " > "$HOME/vi-binding"'
 [[ "$(<"$HOME/binding")" == *' self-insert' && "$(<"$HOME/vi-binding")" == *' self-insert' ]] || fail 'native Space bindings changed'
 
+# Exercise the production automatic popup/redraw path with a leading marker.
+# An empty LBUFFER after expansion must still erase the previously visible UI.
+enter_line 'functions[_test_stub_render]=$functions[_zacrs_render]; functions[_test_stub_redraw]=$functions[_zacrs_line_pre_redraw]; functions[_zacrs_render]=$functions[_test_native_render]; functions[_zacrs_line_pre_redraw]=$functions[_test_native_redraw]'
+pty_output=''
+zpty -w -n zacrs_enter wrap
+wait_popup wrap
+zpty -w -n zacrs_enter $'\x19'
+wait_file "$HOME/editor" wrap
+wait_file "$HOME/popup-state" '1:wrap'
+pty_output=''
+zpty -w -n zacrs_enter $' \x19'
+wait_file "$HOME/editor" 'git status'
+wait_file "$HOME/cursor" 0
+wait_file "$HOME/popup-state" '0:'
+drain_pty
+[[ "$pty_output" == *$'\e[2K'* ]] || fail 'Space expansion did not erase the old popup'
+enter_line $'\x15'
+enter_line 'functions[_zacrs_render]=$functions[_test_stub_render]; functions[_zacrs_line_pre_redraw]=$functions[_test_stub_redraw]'
+
 # Represent an existing suggestion insertion widget. Ordinary expanded Space
 # must delegate its insertion and refresh; marker edits must skip insertion.
 enter_line '_test_suggestions_enabled=1; _test_suggestion_history="gs old-suggestion"; _test_accept_suggestion() { if (( CURSOR == ${#BUFFER} )); then BUFFER+="$POSTDISPLAY"; POSTDISPLAY=""; CURSOR=${#BUFFER}; else zle _test_saved_forward; fi; }; zle -A forward-char _test_saved_forward; zle -N forward-char _test_accept_suggestion'

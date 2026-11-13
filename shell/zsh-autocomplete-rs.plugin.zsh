@@ -1068,6 +1068,9 @@ _zacrs_self_insert() {
     if [[ "$KEYS" == ' ' ]] && \
         (( ${NUMERIC:-1} == 1 && ! ${SUFFIX_ACTIVE:-0} && _zacrs_space_enabled && _zacrs_enter_enabled > 0 )) && \
         _zacrs_expand_command_abbreviation space; then
+        # A leading cursor marker leaves LBUFFER equal to the empty redraw
+        # sentinel. Clear old UI now, even if the next redraw skips work.
+        _zacrs_clear_popup
         local insert_status=0
         (( REPLY )) && { zle _zacrs_saved_self_insert -w || insert_status=$?; }
         _zacrs_record_enter_selection

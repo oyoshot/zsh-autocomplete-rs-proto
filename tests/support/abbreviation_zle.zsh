@@ -51,6 +51,8 @@ if [[ "${ZACRS_TEST_SEARCH_CUSTOM:-0}" == 1 && "${_test_search_installed:-0}" ==
     bindkey -M vicmd '?' _test_saved_search_forward
 fi
 source "$ZACRS_PLUGIN"
+functions[_test_native_render]=$functions[_zacrs_render]
+functions[_test_native_redraw]=$functions[_zacrs_line_pre_redraw]
 _zacrs_render() { :; }
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
     unfunction zmodload
@@ -126,6 +128,7 @@ _test_observe_buffer() {
     print -r -- "$BUFFER" > "$HOME/editor"
     print -r -- "$CURSOR" > "$HOME/cursor"
     print -r -- "${POSTDISPLAY:-}" > "$HOME/postdisplay"
+    print -r -- "$_zacrs_popup_visible:$_zacrs_popup_snapshot_lbuffer" > "$HOME/popup-state"
 }
 add-zle-hook-widget line-init _test_line_init
 zle -N _test_observe_buffer
