@@ -43,40 +43,21 @@ _zacrs_test_plain_init() {
     return 0
 }
 _zacrs_test_plain_redraw() { return 0 }
-# Stale dispatcher aliases require a fallback around both plain replacements.
+# Register callbacks before an outer plugin captures the standard dispatcher.
+# Reload must keep that dispatcher and its recursive invocation semantics.
+add-zle-hook-widget line-init _zacrs_test_plain_init
 add-zle-hook-widget line-init _zacrs_test_init_marker
-zle -A zle-line-init _zacrs_test_stale_init
-zle -N zle-line-init _zacrs_test_plain_init
-_zacrs_add_zle_hook line-init _zacrs_test_init_marker
-zle -A zle-line-pre-redraw _zacrs_test_stale_redraw
-zle -N zle-line-pre-redraw _zacrs_test_plain_redraw
-_zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
-
-# A further plugin wrapper must share the observation for this invocation,
-# while recursive editing and its successive redraws each need fresh state.
 _zacrs_test_outer_redraw() {
-    zle _zacrs_test_saved_fallback -f nolast
+    zle _zacrs_test_saved_dispatcher -f nolast
 }
-zle -A zle-line-pre-redraw _zacrs_test_saved_fallback
-zle -N zle-line-pre-redraw _zacrs_test_outer_redraw
-_zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
-
-# Model a reload retaining observer styles written by the previous version.
-for hook in zle-line-init zle-line-pre-redraw; do
-    zstyle -a "$hook" widgets entries
-    zstyle "$hook" widgets "0:_zacrs_observe_zle_hook" \
-        "0:user:_zacrs_observe_zle_hook" "${entries[@]}"
-done
-zle -N _zacrs_observe_zle_hook
-zle -N user:_zacrs_observe_zle_hook _zacrs_observe_zle_hook
+if [[ $ZACRS_RECURSION_MODE != line-init-native ]]; then
+    zle -A zle-line-pre-redraw _zacrs_test_saved_dispatcher
+    zle -N zle-line-pre-redraw _zacrs_test_outer_redraw
+fi
 source "$ZACRS_RECURSION_PLUGIN"
 _zacrs_line_pre_redraw() {
     print -r -- "dispatch:$ZLE_RECURSIVE:$BUFFER:$CURSOR" >> "$ZACRS_RECURSION_MARKER"
 }
-# A native redraw during a wrapped line-init must not count as line-init.
-if [[ $ZACRS_RECURSION_MODE == line-init-native ]]; then
-    _zacrs_publish_zle_hook zle-line-pre-redraw "${functions[_zacrs_standard_zle_line-pre-redraw]}"
-fi
 
 # Exercise the same hook at the inner depth while the outer line-init call is
 # suspended. Its observation must not suppress the outer fallback on return.

@@ -4,6 +4,15 @@
 
 # === Initialization ===
 
+# Reload changes our implementation, never another plugin's saved widget.
+# Old adapters used mutable delegate storage and foreign-alias repair. Mixing
+# the two lifecycles in a live shell is unsafe; start a new shell to upgrade.
+if (( ! ${+_zacrs_integration_version} && ${+_zacrs_self_insert_wrapped} )); then
+    print -u2 -- 'zacrs: restart the shell to load the new widget lifecycle'
+    return 1
+fi
+typeset -g _zacrs_integration_version=1
+
 ZACRS_BIN="${ZACRS_BIN:-zsh-autocomplete-rs}"
 
 # Packages keep the helpers beside this entry point, with optional adjacent .zwc
@@ -18,24 +27,21 @@ source "${_zacrs_dir}/_zacrs_protocol.zsh"
 zmodload zsh/zleparameter 2>/dev/null
 
 _zacrs_restore_self_insert() {
-    # Keep the shared wrapper while Space needs it; force removal on reload.
-    (( ${1:-0} || ! ${_zacrs_space_enabled:-0} )) || return 0
-    (( ${1:-0} || ${_zacrs_self_insert_wrapped:-0} )) || return 0
-    local widget original=_zacrs_saved_self_insert
-    (( ${+widgets[$original]} )) || original=.self-insert
-    # Another plugin can save our widget under its own alias and
-    # wrap self-insert around that alias. Restore every such reference before
-    # the saved delegate is reused, preserving the other plugin's outer wrapper.
-    # Include the old temporary widget name for reloads from installed adapters.
-    for widget in ${(k)widgets[(R)user:_zacrs_self_insert]} ${(k)widgets[(R)user:_zacrs_deferred_self_insert]}; do
-        zle -A "$original" "$widget"
-    done
+    (( ! ${_zacrs_space_enabled:-0} && ${_zacrs_self_insert_wrapped:-0} && ! ${_zacrs_insert_shared:-0} )) || return 0
+    [[ ${widgets[self-insert]:-} == user:_zacrs_insert ]] || return 0
+    # Only retire an attachment with no other registered references. A plugin
+    # may save the entry using either zle -A or zle -N. Keep its delegate alive;
+    # never rewrite the saved alias, even when our feature is now disabled.
+    local -a references
+    references=( ${(k)widgets[(R)user:_zacrs_insert]} )
+    if (( ${#references} != 1 )); then
+        _zacrs_insert_shared=1
+        return 0
+    fi
+    zle -A ._zacrs_insert_delegate self-insert || return
+    _zacrs_insert_restored=${widgets[self-insert]}
     _zacrs_self_insert_wrapped=0
 }
-
-# Recover aliases captured during an interrupted batch, even when the public
-# widget is now an autosuggestions/highlighting wrapper rather than our own.
-_zacrs_restore_self_insert 1
 
 typeset -g _zacrs_prev_lbuffer=""
 typeset -g _zacrs_suppressed=0
@@ -57,7 +63,7 @@ typeset -gi _zacrs_popup_snapshot_lines=0
 typeset -gi _zacrs_popup_session_active=0
 typeset -gi _zacrs_ignore_next_winch=0
 typeset -gi _zacrs_redraw_deferred=0
-typeset -gi _zacrs_self_insert_wrapped=0
+typeset -gi _zacrs_self_insert_wrapped=${_zacrs_self_insert_wrapped:-0}
 # Preserve initialization across reloads so a selected command stays protected.
 # Older adapters lack this flag but declare _zacrs_enter_enabled. Its presence
 # identifies a reload with a potentially protected session, even when disabled
@@ -132,12 +138,18 @@ _zacrs_record_enter_selection() {
 # deferred redraw must not remove the wrapper needed for Space expansion.
 _zacrs_wrap_self_insert() {
     (( _zacrs_self_insert_wrapped )) && return 0
-    zle -A self-insert _zacrs_saved_self_insert
-    if (( _zacrs_space_enabled )); then
-        zle -N self-insert _zacrs_self_insert
-    else
-        zle -N self-insert _zacrs_deferred_self_insert
+    # A changed public user widget is an explicit replacement, not a request
+    # to repair its chain. Builtins can be captured exactly without interpreting
+    # their identity; no live entry references remain after our own retirement.
+    if (( ${+_zacrs_insert_restored} )) && \
+        [[ ${widgets[self-insert]:-} != "$_zacrs_insert_restored" ]]; then
+        return 1
     fi
+    # Dot names are internal delegates, not new canonical builtin operations.
+    # Preserve native aliases as well as user/completion widgets via ZLE.
+    _zacrs_insert_shared=0
+    zle -A self-insert ._zacrs_insert_delegate || return
+    zle -N self-insert _zacrs_insert || return
     _zacrs_self_insert_wrapped=1
 }
 _zacrs_defer_redraw() {
@@ -1007,7 +1019,7 @@ _zacrs_accept_line() {
     fi
     zle .accept-line
 }
-zle -N accept-line _zacrs_accept_line
+(( ${_zacrs_widgets_initialized:-0} )) || zle -N accept-line _zacrs_accept_line
 
 _zacrs_send_break() {
     _zacrs_clear_popup
@@ -1015,7 +1027,7 @@ _zacrs_send_break() {
     _zacrs_reset_cache
     zle .send-break
 }
-zle -N send-break _zacrs_send_break
+(( ${_zacrs_widgets_initialized:-0} )) || zle -N send-break _zacrs_send_break
 
 # === ターミナルリサイズ対応 ===
 
@@ -1072,7 +1084,7 @@ _zacrs_self_insert() {
         # sentinel. Clear old UI now, even if the next redraw skips work.
         _zacrs_clear_popup
         local insert_status=0
-        (( REPLY )) && { zle _zacrs_saved_self_insert -w || insert_status=$?; }
+        (( REPLY )) && { zle ._zacrs_insert_delegate -w || insert_status=$?; }
         _zacrs_record_enter_selection
         _zacrs_prev_lbuffer=""
         _zacrs_reset_cache
@@ -1085,179 +1097,76 @@ _zacrs_self_insert() {
 # Disabled Space expansion keeps the original typeahead path free of Space checks.
 _zacrs_deferred_self_insert() {
     local insert_status=0
-    zle _zacrs_saved_self_insert -w || insert_status=$?
+    zle ._zacrs_insert_delegate -w || insert_status=$?
     if (( _zacrs_redraw_deferred && PENDING == 0 )); then
+        _zacrs_redraw_deferred=0
         _zacrs_restore_self_insert
         _zacrs_prev_lbuffer=""
         _zacrs_line_pre_redraw
     fi
     return $insert_status
 }
-(( _zacrs_space_enabled )) && _zacrs_wrap_self_insert
+# Saved user widgets retain this function name across reloads and toggles.
+# Disabled shells use the batching body without Space checks.
+if (( _zacrs_space_enabled )); then
+    functions[_zacrs_insert]=${functions[_zacrs_self_insert]}
+    _zacrs_wrap_self_insert
+else
+    functions[_zacrs_insert]=${functions[_zacrs_deferred_self_insert]}
+    _zacrs_restore_self_insert
+fi
 
 # Popup widget
 zle -N _zacrs_complete_popup
 
 # Default: Tab enters the Rust-owned popup session.
-bindkey '^I' _zacrs_complete_popup
+(( ${_zacrs_widgets_initialized:-0} )) || bindkey '^I' _zacrs_complete_popup
+typeset -gi _zacrs_widgets_initialized=1
 
-# Register the auto-trigger hook without rebinding ordinary input keys.
+# Register fixed callbacks once. Re-registering a wrapped standard dispatcher
+# can capture that same dispatcher into its own callback list and create a cycle.
+# Reload only updates our functions, never dispatcher bodies or foreign aliases.
 autoload -Uz add-zle-hook-widget
-# Count dispatches by hook and recursive editing depth. Each wrapper compares
-# its own entry count, sharing increments with its delegate chain without
-# retaining a stale "seen" flag across successive recursive-editor events.
-_zacrs_observe_zle_hook() {
-    if (( ${+_zacrs_seen_zle_hooks} )); then
-        (( ++_zacrs_seen_zle_hooks[$WIDGET:$ZLE_RECURSIVE] ))
-    fi
-    return 0
-}
-_zacrs_dispatch_zle_hook() {
-    local delegate="$1" dispatcher="$2" observation="$WIDGET:$ZLE_RECURSIVE"
-    if (( ! ${+_zacrs_seen_zle_hooks} )); then
-        local -A _zacrs_seen_zle_hooks
-    fi
-    local -i before=${_zacrs_seen_zle_hooks[$observation]:-0}
-    # Do not use -w: add-zle-hook-widget looks up its styles using the public
-    # WIDGET name, including when called through another plugin's saved alias.
-    local -i result=0
-    zle "$delegate" -f nolast -- "${@:3}" || result=$?
-    (( result == 0 )) || return $result
-    if (( ${_zacrs_seen_zle_hooks[$observation]:-0} == before )); then
-        zle "$dispatcher" -f nolast -- "${@:3}"
-        return $?
-    fi
-    return $result
-}
-# Observation belongs to the dispatcher body, not its removable callback list.
-# Drop observer entries retained by an older version, including line-init when
-# Enter integration is being disabled on this reload.
-() {
-    emulate -L zsh
-    local hook standard native fn
-    local -a entries
-    local -aU dispatchers
-    for hook in zle-line-init zle-line-pre-redraw; do
-        standard="_zacrs_standard_zle_${hook#zle-}"
-        # Zsh serializes function bodies with a leading tab on each statement.
-        if (( ${+functions[$standard]} )) && \
-            [[ ${functions[$standard]} != $'\t_zacrs_observe_zle_hook\n'* ]]; then
-            # An older fallback may still hold native snapshots without entry
-            # observation. Upgrade those exact bodies before removing its list
-            # observer; leave saved fallback/delegate chains intact.
-            native="${functions[$standard]}"
-            dispatchers=("$standard" "azhw:$hook"
-                ${${(v)widgets[(R)user:_zacrs_zle_hook_<->]}#user:})
-            for fn in "${dispatchers[@]}"; do
-                if [[ ${functions[$fn]:-} == "$native" ]]; then
-                    functions[$fn]=$'_zacrs_observe_zle_hook\n'"$native"
-                fi
-            done
-        fi
-        zstyle -a "$hook" widgets entries || continue
-        if [[ -n ${(M)entries:#(<->:|)(user:|)_zacrs_observe_zle_hook} ]]; then
-            entries=("${(@)entries:#(<->:|)(user:|)_zacrs_observe_zle_hook}")
-            if (( ${#entries} )); then
-                zstyle "$hook" widgets "${entries[@]}"
-            else
-                zstyle -d "$hook" widgets
-            fi
-        fi
-    done
-}
-typeset -gi _zacrs_zle_hook_generation=${_zacrs_zle_hook_generation:-0}
-# add-zle-hook-widget recognizes the dispatcher by its widget function name.
-# Keep that public identity, or later registrations would capture our fallback
-# as a dispatcher child. Freeze aliases before changing its implementation so
-# plugins that saved it retain the exact delegate chain they originally wrapped.
-_zacrs_publish_zle_hook() {
-    local hook="$1" body="$2" widget
-    local -a saved
-    saved=( ${${(k)widgets[(R)user:azhw:$hook]}:#$hook} )
-    if (( ${#saved} )); then
-        local snapshot="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))"
-        functions[$snapshot]="${functions[azhw:$hook]}"
-        for widget in "${saved[@]}"; do
-            zle -N "$widget" "$snapshot"
-        done
-    fi
-    functions[azhw:$hook]="$body"
-    zle -N "$hook" "azhw:$hook"
-}
 _zacrs_add_zle_hook() {
-    emulate -L zsh
-    local hook="zle-$1" fn="$2" entry
-    local standard="_zacrs_standard_zle_$1"
-    local -a entries
-    local -i index=0
-    if (( ! ${+functions[$standard]} )) && [[ -z ${(k)widgets[(R)user:azhw:$hook]} ]]; then
-        # With no saved dispatcher there can be no recursive delegation.
-        # Remove our retained entry first: otherwise the standard helper exits
-        # early for a duplicate and never records a newly captured plain hook.
-        add-zle-hook-widget -d "$1" "$fn" || return
-        add-zle-hook-widget "$1" "$fn" || return
-    else
+    local hook="zle-$1" fn="$2"
+    [[ ${_zacrs_registered_hooks[$hook]:-} == 1 ]] && return 0
+    if [[ ${widgets[$hook]:-} != user:azhw:$hook &&
+          -n ${(k)widgets[(R)user:azhw:$hook]} ]]; then
+        # Append our callback to the existing standard registry without asking
+        # the helper to recapture the outer widget. The helper checks public
+        # identity before duplicate membership and could create a cycle here.
+        # Preserve every existing entry and the public widget verbatim.
+        local -a entries
+        local entry
+        local -i index=0
         zstyle -a "$hook" widgets entries || entries=()
         if [[ -z ${(M)entries:#(<->:|)$fn} ]]; then
             for entry in "${entries[@]}"; do
-                if [[ "$entry" == <->:* ]] && (( ${entry%%:*} > index )); then
+                if [[ $entry == <->:* ]] && (( ${entry%%:*} > index )); then
                     index=${entry%%:*}
                 fi
             done
-            entries+=("$(( index + 1 )):$fn")
-            zstyle "$hook" widgets "${entries[@]}"
+            zle -N "$fn" || return
+            zstyle "$hook" widgets "${entries[@]}" "$(( index + 1 )):$fn"
         fi
-        (( ${+widgets[$fn]} )) || zle -N "$fn"
+    else
+        add-zle-hook-widget "$1" "$fn" || return
     fi
-    # Includes our fallback published under the standard dispatcher identity.
-    if [[ ${widgets[$hook]:-} == user:azhw:$hook ]]; then
-        return 0
-    fi
-    # Save the native implementation once, before publishing any fallback.
-    if (( ! ${+functions[$standard]} )); then
-        # Observe entry before any callback can abort dispatch. Instrument the
-        # native body before freezing saved aliases in _zacrs_publish_zle_hook,
-        # so both native delegates and fallback calls survive hook-list resets.
-        functions[$standard]=$'_zacrs_observe_zle_hook\n'"${functions[azhw:$hook]}"
-        zle -N "$standard"
-        functions[azhw:$hook]="${functions[$standard]}"
-    fi
-    if (( ! ${+widgets[$hook]} )); then
-        _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
-        return
-    fi
-    zstyle -a "$hook" widgets entries || entries=()
-    # A plain hook previously captured by the dispatcher can be reattached
-    # directly, even if unused dispatcher aliases remain from an old wrapper.
-    # Its user:<function> alias retains the capture identity even if another
-    # plugin has since wrapped that alias with a different widget function.
-    for entry in "${entries[@]#<->:}"; do
-        if (( ${+widgets[$entry]} )) && \
-            [[ "$entry" == "${widgets[$hook]}" || ${widgets[$entry]} == ${widgets[$hook]} ]]; then
-            _zacrs_publish_zle_hook "$hook" "${functions[$standard]}"
-            return
-        fi
-    done
-    local delegate="_zacrs_zle_hook_$(( ++_zacrs_zle_hook_generation ))_delegate"
-    zle -A "$hook" "$delegate"
-    _zacrs_publish_zle_hook "$hook" \
-        "_zacrs_dispatch_zle_hook ${(q)delegate} ${(q)standard} \"\$@\""
+    _zacrs_registered_hooks[$hook]=1
 }
-
+typeset -gA _zacrs_registered_hooks
+_zacrs_editor_line_init() {
+    _zacrs_line_init
+    (( _zacrs_enter_enabled != 0 )) && _zacrs_reset_enter_selection
+    return 0
+}
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
-_zacrs_add_zle_hook line-init _zacrs_line_init
-if (( _zacrs_enter_enabled > 0 )); then
-    _zacrs_add_zle_hook line-init _zacrs_reset_enter_selection
-    # An idle loader can source us after this line's line-init has already run.
-    # Normal startup leaves initialization to line-init; reload must not reset
-    # an existing session and lose its explicit selection protection.
-    if (( ! _zacrs_enter_session_initialized )) && zle; then
-        _zacrs_reset_enter_selection
-    fi
-else
-    add-zle-hook-widget -d line-init _zacrs_reset_enter_selection 2>/dev/null || true
-fi
+_zacrs_add_zle_hook line-init _zacrs_editor_line_init
 _zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
+# A loader may run after line-init. Preserve any existing selected command.
+if (( _zacrs_enter_enabled > 0 && ! _zacrs_enter_session_initialized )) && zle; then
+    _zacrs_reset_enter_selection
+fi
 
 # Invalidate daemon candidates before commands accepted by any ZLE widget.
 autoload -Uz add-zsh-hook

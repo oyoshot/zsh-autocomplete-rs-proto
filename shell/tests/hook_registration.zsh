@@ -13,130 +13,91 @@ cat > "$tmp_dir/.zshrc" <<'RC'
 HISTFILE="$ZACRS_REGISTRATION_MARKER.history"
 ZACRS_BIN=false
 FUNCNEST=100
-_zacrs_test_ready() {
-    (( ++_zacrs_test_ready_count ))
-    print -r -- "ready:$_zacrs_test_ready_count" >> "$ZACRS_REGISTRATION_MARKER"
-}
-_zacrs_test_plain() {
+autoload -Uz add-zle-hook-widget
+_test_plain() {
     print -r -- "plain:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
+    [[ $ZACRS_REGISTRATION_MODE != failure ]]
 }
-_aaa_plain() {
-    _zacrs_test_plain
-    return 7
+_test_outer() {
+    print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
+    local result=0
+    zle _test_saved_dispatcher -f nolast || result=$?
+    print -r -- "after:$BUFFER:$result" >> "$ZACRS_REGISTRATION_MARKER"
+    return $result
 }
-if [[ $ZACRS_REGISTRATION_MODE == captured ]]; then
-    zle -N zle-line-pre-redraw _zacrs_test_plain
-elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
-    # This captured index-0 hook sorts before an index-0 observer callback.
-    zle -N zle-line-pre-redraw _aaa_plain
+zle -N zle-line-pre-redraw _test_plain
+if [[ $ZACRS_REGISTRATION_MODE == prewrapped ]]; then
+    _test_existing() { :; }
+    add-zle-hook-widget line-pre-redraw _test_existing
+    zle -A zle-line-pre-redraw _test_saved_dispatcher
+    zle -N zle-line-pre-redraw _test_outer
+fi
+if [[ $ZACRS_REGISTRATION_MODE == legacy ]]; then
+    _zacrs_self_insert_wrapped=0
+    _test_legacy_public=${widgets[zle-line-pre-redraw]}
+    _test_legacy_result=0
+    source "$ZACRS_REGISTRATION_PLUGIN" >/dev/null 2>&1 || _test_legacy_result=$?
+    if (( _test_legacy_result != 1 || ${+_zacrs_integration_version} ||
+          ${+functions[_zacrs_wrap_self_insert]} )) ||
+        [[ ${widgets[zle-line-pre-redraw]} != $_test_legacy_public ]]; then
+        print -r -- ownership:changed >> "$ZACRS_REGISTRATION_MARKER"
+    fi
+    unset _zacrs_self_insert_wrapped
 fi
 source "$ZACRS_REGISTRATION_PLUGIN"
-zle -A zle-line-pre-redraw _zacrs_test_saved_dispatcher
-
-if [[ $ZACRS_REGISTRATION_MODE == captured ]]; then
-    # Autosuggestions can wrap the alias captured by add-zle-hook-widget, then
-    # .zshrc reinstalls the original public function while the alias survives.
-    zle -A user:_zacrs_test_plain _zacrs_test_saved_plain
-    _zacrs_test_wrapped_plain() {
-        print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-        zle _zacrs_test_saved_plain -f nolast
-        print -r -- "after:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-    }
-    zle -N user:_zacrs_test_plain _zacrs_test_wrapped_plain
-    zle -N zle-line-pre-redraw _zacrs_test_plain
-    source "$ZACRS_REGISTRATION_PLUGIN"
-elif [[ $ZACRS_REGISTRATION_MODE == repeat-reload* ||
-        ( $ZACRS_REGISTRATION_MODE == reset* && $ZACRS_REGISTRATION_MODE != reset-init* ) ]]; then
-    # Install a fallback around an active dispatcher delegate. Reset cases
-    # remove all registered entries, with and without another zacrs reload.
-    _zacrs_test_outer() {
-        print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-        zle _zacrs_test_saved_dispatcher -f nolast
-        print -r -- "after:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-    }
-    zle -N zle-line-pre-redraw _zacrs_test_outer
-    source "$ZACRS_REGISTRATION_PLUGIN"
-    if [[ $ZACRS_REGISTRATION_MODE == reset* ]]; then
-        add-zle-hook-widget -D line-pre-redraw '*'
-        if [[ $ZACRS_REGISTRATION_MODE == reset ]]; then
-            source "$ZACRS_REGISTRATION_PLUGIN"
-        fi
-    fi
-elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
-    _zacrs_test_mask_failure() {
-        print -r -- "before:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-        local -i result=0
-        zle _zacrs_test_saved_dispatcher -f nolast || result=$?
-        (( result == 7 )) || return 1
-        print -r -- "after:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-    }
-    zle -N zle-line-pre-redraw _zacrs_test_mask_failure
-    source "$ZACRS_REGISTRATION_PLUGIN"
+_test_late() { print -r -- "late:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"; }
+# Standard registration works while the public entry is the dispatcher.
+if [[ $ZACRS_REGISTRATION_MODE != prewrapped ]]; then
+    add-zle-hook-widget line-pre-redraw _test_late
+    zle -A zle-line-pre-redraw _test_saved_dispatcher
+    zle -N zle-line-pre-redraw _test_outer
 fi
-
-if [[ $ZACRS_REGISTRATION_MODE == reset-init* || $ZACRS_REGISTRATION_MODE == repeat-reload* ]]; then
-    add-zle-hook-widget line-init _zacrs_test_ready
-    zle -A zle-line-init _zacrs_test_saved_init
-    _zacrs_test_outer_init() {
-        print -r -- "init-before" >> "$ZACRS_REGISTRATION_MARKER"
-        zle _zacrs_test_saved_init -f nolast
-        print -r -- "init-after" >> "$ZACRS_REGISTRATION_MARKER"
-    }
-    zle -N zle-line-init _zacrs_test_outer_init
-    _zacrs_add_zle_hook line-init _zacrs_test_ready
-    if [[ $ZACRS_REGISTRATION_MODE == reset-init* ]]; then
-        add-zle-hook-widget -D line-init '*'
-        add-zle-hook-widget line-init _zacrs_test_ready
-    fi
-    # Enter integration is disabled by ZACRS_BIN=false; its remaining fallback
-    # must still observe calls to the competing line-init callback after reload.
-    if [[ $ZACRS_REGISTRATION_MODE == reset-init ]]; then
-        source "$ZACRS_REGISTRATION_PLUGIN"
-    fi
+if [[ $ZACRS_REGISTRATION_MODE == replaced ]]; then
+    zle -N zle-line-pre-redraw _test_plain
+elif [[ $ZACRS_REGISTRATION_MODE == removed ]]; then
+    add-zle-hook-widget -d line-pre-redraw _zacrs_line_pre_redraw
 fi
-
-if [[ $ZACRS_REGISTRATION_MODE == repeat-reload* ]]; then
-    if [[ $ZACRS_REGISTRATION_MODE == repeat-reload-replaced ]]; then
-        # Exercise the saved native fallback as well as active dispatcher aliases.
-        zle -N zle-line-pre-redraw _zacrs_test_plain
-    fi
-    for reload in {1..5}; do
-        source "$ZACRS_REGISTRATION_PLUGIN"
-    done
-    # Count actual observer calls, not only callbacks: duplicate entry probes
-    # leave callbacks correct but add work to every redraw after each reload.
-    functions[_zacrs_test_observe]="${functions[_zacrs_observe_zle_hook]}"
-    _zacrs_observe_zle_hook() {
-        print -r -- "observe:$WIDGET:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-        _zacrs_test_observe "$@"
-    }
+# Also preserve user key choices and wrappers of accept/cancel on reload.
+zle -A accept-line _test_accept
+_test_accept_outer() { zle _test_accept; }
+zle -N accept-line _test_accept_outer
+zle -A send-break _test_break
+_test_break_outer() { zle _test_break; }
+zle -N send-break _test_break_outer
+bindkey '^I' expand-or-complete
+_test_public=${widgets[zle-line-pre-redraw]}
+_test_saved=${widgets[_test_saved_dispatcher]}
+_test_body=${functions[azhw:zle-line-pre-redraw]}
+zstyle -a zle-line-pre-redraw widgets _test_callbacks
+for iteration in {1..10}; do
+    source "$ZACRS_REGISTRATION_PLUGIN"
+done
+zstyle -a zle-line-pre-redraw widgets _test_after
+if [[ $widgets[zle-line-pre-redraw] != $_test_public ||
+      $widgets[_test_saved_dispatcher] != $_test_saved ||
+      $functions[azhw:zle-line-pre-redraw] != $_test_body ||
+      "${(j:,:)_test_callbacks}" != "${(j:,:)_test_after}" ||
+      $widgets[accept-line] != user:_test_accept_outer ||
+      $widgets[send-break] != user:_test_break_outer ||
+      $(bindkey '^I') != *' expand-or-complete' ]]; then
+    print -r -- 'ownership:changed' >> "$ZACRS_REGISTRATION_MARKER"
 fi
-
-# Keep the production hook lifecycle but isolate dispatch from candidate
-# generation and terminal cursor queries. A later plugin uses the standard API.
 _zacrs_line_pre_redraw() {
     print -r -- "complete:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
 }
-_zacrs_test_late() {
-    print -r -- "late:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
-}
-add-zle-hook-widget line-pre-redraw _zacrs_test_late
-
-# A final representative wrapper marks the end of the entire redraw, so the
-# parent cannot count callbacks before a duplicate fallback finishes running.
-zle -A zle-line-pre-redraw _zacrs_test_final_dispatcher
-_zacrs_test_finished() {
-    zle _zacrs_test_final_dispatcher -f nolast
+_test_ready() { print -r -- "ready:$(( ++_test_ready_count ))" >> "$ZACRS_REGISTRATION_MARKER"; }
+add-zle-hook-widget line-init _test_ready
+zle -A zle-line-pre-redraw _test_finished_delegate
+_test_finished() {
+    zle _test_finished_delegate -f nolast
     print -r -- "done:$BUFFER" >> "$ZACRS_REGISTRATION_MARKER"
 }
-zle -N zle-line-pre-redraw _zacrs_test_finished
-add-zle-hook-widget line-init _zacrs_test_ready
-bindkey '^C' .send-break
+zle -N zle-line-pre-redraw _test_finished
 PROMPT='READY> '
 RPROMPT=''
 RC
 
-typeset pty_output=""
+typeset pty_output=''
 drain_pty() {
     local chunk
     while zpty -r -t zacrs_registration chunk 2>/dev/null; do
@@ -148,92 +109,48 @@ wait_for_marker() {
     local expected="$1" i
     for (( i=0; i<200; i++ )); do
         drain_pty
-        if grep -Fqx -- "$expected" "$ZACRS_REGISTRATION_MARKER"; then
-            return 0
-        fi
+        grep -Fqx -- "$expected" "$ZACRS_REGISTRATION_MARKER" && return 0
         sleep 0.01
     done
-    print -u2 -r -- "not ok: timed out waiting for ${(qqq)expected} ($ZACRS_REGISTRATION_MODE)"
+    print -u2 -r -- "not ok: waiting for $expected ($ZACRS_REGISTRATION_MODE)"
     cat "$ZACRS_REGISTRATION_MARKER" >&2
     print -u2 -r -- "pty: ${(qqq)pty_output}"
     return 1
 }
 assert_event() {
-    local buffer="$1" expected actual
-    if [[ $ZACRS_REGISTRATION_MODE == captured ]]; then
-        expected="before:$buffer,plain:$buffer,after:$buffer,complete:$buffer,late:$buffer,done:$buffer"
-    elif [[ $ZACRS_REGISTRATION_MODE == reset || $ZACRS_REGISTRATION_MODE == repeat-reload ]]; then
-        expected="before:$buffer,complete:$buffer,late:$buffer,after:$buffer,done:$buffer"
-    elif [[ $ZACRS_REGISTRATION_MODE == repeat-reload-replaced ]]; then
-        expected="plain:$buffer,complete:$buffer,late:$buffer,done:$buffer"
-    elif [[ $ZACRS_REGISTRATION_MODE == reset-live ]]; then
-        # Standard removal intentionally disables zacrs until its next reload.
-        expected="before:$buffer,late:$buffer,after:$buffer,done:$buffer"
-    elif [[ $ZACRS_REGISTRATION_MODE == masked-failure ]]; then
-        # A failed first callback aborts the list even when its wrapper succeeds.
-        expected="before:$buffer,plain:$buffer,after:$buffer,done:$buffer"
-    else
-        expected="complete:$buffer,late:$buffer,done:$buffer"
-    fi
+    local buffer="$1" expected
+    case $ZACRS_REGISTRATION_MODE in
+        wrapped|legacy) expected="before:$buffer,plain:$buffer,complete:$buffer,late:$buffer,after:$buffer:0,done:$buffer" ;;
+        removed) expected="before:$buffer,plain:$buffer,late:$buffer,after:$buffer:0,done:$buffer" ;;
+        replaced) expected="plain:$buffer,done:$buffer" ;;
+        prewrapped|legacy) expected="before:$buffer,plain:$buffer,complete:$buffer,after:$buffer:0,done:$buffer" ;;
+        failure) expected="before:$buffer,plain:$buffer,after:$buffer:1,done:$buffer" ;;
+    esac
     local -a entries
-    entries=("${(@f)$(grep -E "^(before|plain|after|complete|late|done):$buffer$" "$ZACRS_REGISTRATION_MARKER")}")
-    actual="${(j:,:)entries}"
-    [[ "$actual" == "$expected" ]] || {
-        print -u2 -r -- "not ok: $ZACRS_REGISTRATION_MODE must dispatch each hook once in order"
-        print -u2 -r -- "expected: $expected"
-        print -u2 -r -- "actual:   $actual"
+    entries=("${(@f)$(grep -E "^(before|plain|complete|late|after|done):$buffer(:[01])?$" "$ZACRS_REGISTRATION_MARKER")}")
+    [[ "${(j:,:)entries}" == "$expected" ]] || {
+        print -u2 -r -- "not ok: $ZACRS_REGISTRATION_MODE order: ${(j:,:)entries}; expected $expected"
         return 1
     }
-    if [[ $ZACRS_REGISTRATION_MODE == repeat-reload* ]]; then
-        [[ $(grep -Fxc "observe:zle-line-pre-redraw:$buffer" "$ZACRS_REGISTRATION_MARKER") == 1 ]] || {
-            print -u2 -r -- "not ok: repeated reloads must observe each redraw exactly once"
-            cat "$ZACRS_REGISTRATION_MARKER" >&2
-            return 1
-        }
-    fi
 }
 start_shell() {
     ZDOTDIR="$tmp_dir" zpty -b zacrs_registration zsh -d
 }
-
-typeset -a modes
-if (( $# )); then
-    modes=("$@")
-else
-    modes=(captured reset reset-init reset-live reset-init-live masked-failure
-        repeat-reload repeat-reload-replaced)
-fi
-typeset mode
-for mode in "${modes[@]}"; do
-    export ZACRS_REGISTRATION_MODE="$mode"
+for mode in wrapped removed replaced prewrapped failure legacy; do
+    export ZACRS_REGISTRATION_MODE=$mode
     : > "$ZACRS_REGISTRATION_MARKER"
-    pty_output=""
+    pty_output=''
     start_shell
-    wait_for_marker 'ready:1'
-    zpty -w -n zacrs_registration a
-    wait_for_marker 'done:a'
-    assert_event a
-    zpty -w -n zacrs_registration b
-    wait_for_marker 'done:ab'
-    assert_event ab
+    wait_for_marker ready:1
+    zpty -w -n zacrs_registration q
+    wait_for_marker done:q
+    assert_event q
     zpty -w -n zacrs_registration $'\x03'
-    wait_for_marker 'ready:2'
-    zpty -w -n zacrs_registration c
-    wait_for_marker 'done:c'
-    assert_event c
-    # Exactly one init callback for startup and one for cancellation recovery.
-    [[ $(grep -c '^ready:' "$ZACRS_REGISTRATION_MARKER") == 2 ]] || {
-        print -u2 -r -- "not ok: line-init callbacks ran more than once per event"
-        cat "$ZACRS_REGISTRATION_MARKER" >&2
-        return 1
-    }
-    if [[ $mode == repeat-reload* ]]; then
-        [[ $(grep -c '^observe:zle-line-init:' "$ZACRS_REGISTRATION_MARKER") == 2 ]] || {
-            print -u2 -r -- "not ok: repeated reloads must observe each line-init exactly once"
-            cat "$ZACRS_REGISTRATION_MARKER" >&2
-            return 1
-        }
-    fi
+    wait_for_marker ready:2
+    zpty -w -n zacrs_registration r
+    wait_for_marker done:r
+    assert_event r
+    ! grep -Fqx ownership:changed "$ZACRS_REGISTRATION_MARKER"
     zpty -d zacrs_registration
-    print -r -- "ok: $mode reload preserves once-per-event hooks and wrapper order"
+    print -r -- "ok: $mode preserves hook ownership, order and cancellation after reload"
 done

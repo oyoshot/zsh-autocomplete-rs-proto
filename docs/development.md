@@ -104,33 +104,54 @@ the previous input and suppression state, and restores a deferred self-insert
 delegate. Terminal interrupts can bypass both send-break and line-finish. The
 new prompt is already on screen at line-init, so this reset emits no terminal
 erase sequences. This callback runs even when Enter abbreviation expansion is
-disabled; its optional selection-reset callback remains separate. The reset
+disabled; the same callback conditionally resets the selection session. The reset
 adds shell function calls once per editing line, with no helper process or IPC.
 
-When a reload finds a wrapped ZLE hook, zacrs preserves its delegation through
-a fallback while keeping the public `azhw:zle-*` dispatcher identity recognized
-by `add-zle-hook-widget`. This keeps later standard registrations from capturing
-the fallback as a dispatcher child. Zacrs saves the native dispatcher function,
-then updates that hook's dispatcher body; aliases saved by other plugins are
-rebound to immutable copies of the previous body before each update.
-Captured hooks are recognized by their registered alias as well as their current
-widget implementation, so wrapping a captured alias does not add a second path
-to its original hook. A small observer at the start of the native dispatcher
-body counts invocations by hook name and ZLE recursive editing depth. It runs
-before user callbacks, even when a callback fails and a surrounding wrapper
-handles that failure. Observation is independent of the callback list, so
-standard hook-list resets and later registrations remain safe without another
-zacrs reload. Removing callbacks does not reinstall them.
-Each wrapper compares the count before and after its delegate; only an unchanged
-count triggers a fallback. Nested wrappers share increments, while successive
-events and recursive editors remain independent. Reload removes legacy observer
-callbacks and upgrades saved native dispatcher bodies from older versions.
-The upgrade check matches Zsh's tab-indented function representation so repeated
-reloads keep one observer call per native dispatch.
-The observer uses the public widget name so another hook cannot mark this
-invocation as dispatched. This avoids recursion through active aliases and lost
-completion through stale aliases. It adds shell function calls on wrapped hook invocations,
-but no helper process or IPC. Delegates remain immutable so other plugins can
-save and wrap them across further reloads. Delegated widget calls use `nolast`
-to preserve `LASTWIDGET` for downstream hooks. The competing wrapper still
-surrounds its original dispatcher calls.
+Zacrs registers fixed line-init and pre-redraw callbacks once. Reload updates
+owned function bodies and configuration without re-registering callbacks,
+changing dispatcher bodies, or rewriting aliases captured by another plugin.
+The public insertion widget, accept/cancel wrappers, and user Tab bindings are
+preserved across reloads. Removing a callback or independently replacing a
+public hook is respected; reload does not reclaim that entry.
+
+When a standard dispatcher is already behind a foreign wrapper on first load,
+zacrs appends only its callback to that dispatcher's `widgets` style, preserving
+existing entries and the public widget. Calling `add-zle-hook-widget` on that
+public wrapper would capture the dispatcher into itself. Later registrations by
+other code must also respect that standard-helper limitation; zacrs no longer
+patches the dispatcher to compensate for arbitrary subsequent re-registration.
+A failing callback retains the standard dispatcher's early-return behavior.
+
+Insertion captures an exact ZLE delegate under a dot-prefixed internal name.
+Builtin aliases are not assumed to be canonical `.self-insert`. Captured entries
+keep the same function identity and delegate across reloads and toggles. When
+zacrs still owns the public entry, it restores that entry only if no other
+registered widget references its entry function. Such an unshared attachment
+can then be reused for another batch. After observing a saved reference, it
+retains forwarding state until a fresh shell, avoiding repeated widget scans.
+Direct calls or function-body copies of private `_zacrs_*` functions are not a
+supported capture interface; ZLE aliases and registered user widgets are.
+Independent public replacements are preserved. Upgrading the previous adapter's
+mutable live captures requires a fresh shell; the new source returns before
+altering an old installation.
+
+The lifecycle regression can also run against actual plugins:
+
+```sh
+zsh -df shell/tests/insertion_ownership.zsh fsh /path/to/fast-syntax-highlighting.plugin.zsh
+zsh -df shell/tests/insertion_ownership.zsh autosuggestions /path/to/zsh-autosuggestions.zsh
+```
+
+These tests isolate transport while using real ZLE and plugin UI state; the
+abbreviation integration suite separately uses the actual daemon. For adapter
+performance comparisons, retain the baseline's entire shell directory, build one
+binary, then run:
+
+```sh
+python3 dev/bench-zle.py /path/to/baseline/shell/zsh-autocomplete-rs.plugin.zsh
+```
+
+This uses isolated HOME/config/runtime directories, a reused daemon, and plain
+adapters. It records startup and queued-key workload latency with completion
+drawing suppressed, including terminal output and control-key overhead. It does
+not measure request-to-visible-candidate latency or cold daemon startup.
