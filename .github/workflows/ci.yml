@@ -92,4 +92,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
       - run: cargo test
+      - name: Smoke-test ZLE benchmark
+        run: |
+          cargo build --bin zsh-autocomplete-rs
+          cargo bench --profile dev --bench zle_bench -- --binary target/debug/zsh-autocomplete-rs --workload startup --samples 3 --warmups 0 --daemon both --output "$RUNNER_TEMP/zacrs-startup-smoke.toml"
+          cargo bench --profile dev --bench zle_bench -- --binary target/debug/zsh-autocomplete-rs --samples 3 --warmups 0 --output "$RUNNER_TEMP/zacrs-keys-smoke.toml"
       - run: sh shell/tests/run.sh
