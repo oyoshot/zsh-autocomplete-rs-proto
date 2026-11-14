@@ -8,6 +8,7 @@ use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 #[path = "zle/pty.rs"]
@@ -17,12 +18,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Sample = BTreeMap<String, f64>;
 type Samples = BTreeMap<String, Vec<Sample>>;
 type Results = BTreeMap<String, Samples>;
-static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-extern "C" fn on_signal(_: libc::c_int) {
-    INTERRUPTED.store(true, Ordering::Relaxed);
-}
+static INTERRUPTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 fn interrupted() -> Result<()> {
-    if INTERRUPTED.load(Ordering::Relaxed) {
+    if INTERRUPTED
+        .get()
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
         Err("benchmark interrupted".into())
     } else {
         Ok(())
@@ -448,6 +449,7 @@ fn adapter(entry: &Path) -> Result<Adapter> {
 }
 #[derive(Serialize)]
 struct Metadata {
+    harness_git_blob: String,
     command: Vec<String>,
     platform: String,
     zsh: PathBuf,
@@ -468,10 +470,9 @@ struct Report {
 }
 fn main() -> Result<()> {
     let args = Args::parse();
-    // SAFETY: handlers only set a lock-free atomic; cleanup runs on the main thread.
-    unsafe {
-        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+    let interrupted = INTERRUPTED.get_or_init(|| Arc::new(AtomicBool::new(false)));
+    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        signal_hook::flag::register(signal, Arc::clone(interrupted))?;
     }
     let binary = args.binary.canonicalize()?;
     let zsh = if args.zsh.components().count() > 1 {
@@ -496,6 +497,7 @@ fn main() -> Result<()> {
         ("candidate".into(), candidate),
     ]);
     let metadata = Metadata {
+        harness_git_blob: git_hash(&std::env::current_exe()?)?,
         command: std::env::args().collect(), platform: checked(Command::new("uname").arg("-a"))?,
         zsh_version: checked(Command::new(&zsh).arg("--version"))?, zsh: zsh.clone(),
         binary_git_blob: git_hash(&binary)?, binary: binary.clone(),

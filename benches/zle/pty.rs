@@ -1,15 +1,16 @@
-use std::fs::{self, File};
+use portable_pty::{Child, CommandBuilder, MasterPty};
+use std::fs;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use super::{Result, interrupted};
 
 pub struct Shell {
-    child: Child,
-    master: File,
+    child: Box<dyn Child + Send + Sync>,
+    master: Box<dyn MasterPty + Send>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
     output: Vec<u8>,
     pub started: Instant,
 }
@@ -17,75 +18,52 @@ pub struct Shell {
 impl Shell {
     pub fn spawn(command: &mut Command) -> Result<Self> {
         let started = Instant::now();
-        let (mut master, mut slave) = (-1, -1);
-        let mut size = libc::winsize {
-            ws_row: 24,
-            ws_col: 80,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: all non-null pointers refer to live writable values. Apple
-        // declares the size pointer mutable; Linux accepts the same raw pointer.
-        if unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &raw mut size,
-            )
-        } != 0
-        {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        // SAFETY: successful openpty transfers ownership of these distinct fds.
-        let (master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
-        for file in [&master, &slave] {
-            // Do not leak extra terminal descriptors into the shell or daemon.
-            if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                return Err(std::io::Error::last_os_error().into());
+        let pair = portable_pty::native_pty_system().openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        let reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+        let mut builder = CommandBuilder::new(command.get_program());
+        builder.args(command.get_args());
+        builder.env_clear();
+        for (name, value) in command.get_envs() {
+            if let Some(value) = value {
+                builder.env(name, value);
             }
         }
-        command
-            .stdin(Stdio::from(slave.try_clone()?))
-            .stdout(Stdio::from(slave.try_clone()?))
-            .stderr(Stdio::from(slave));
-        // SAFETY: only async-signal-safe syscalls run between fork and exec.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let child = command.spawn()?;
+        builder.cwd(std::env::current_dir()?);
+        let child = pair.slave.spawn_command(builder)?;
+        drop(pair.slave);
         Ok(Self {
             child,
-            master,
+            master: pair.master,
+            reader,
+            writer,
             output: Vec::new(),
             started,
         })
     }
 
     fn drain(&mut self, timeout_ms: i32) -> Result<()> {
-        let mut fd = libc::pollfd {
-            fd: self.master.as_raw_fd(),
-            events: libc::POLLIN,
+        let mut fd = filedescriptor::pollfd {
+            fd: self
+                .master
+                .as_raw_fd()
+                .ok_or("PTY has no Unix descriptor")?,
+            events: filedescriptor::POLLIN,
             revents: 0,
         };
-        // SAFETY: fd points to one live pollfd for the duration of the call.
-        let result = unsafe { libc::poll(&mut fd, 1, timeout_ms) };
-        if result < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-        if result > 0 {
+        let result = filedescriptor::poll(
+            std::slice::from_mut(&mut fd),
+            Some(Duration::from_millis(timeout_ms as u64)),
+        );
+        interrupted()?;
+        if result? > 0 {
             let mut buffer = [0; 8192];
-            match self.master.read(&mut buffer) {
+            match self.reader.read(&mut buffer) {
                 Ok(0) | Err(_) => {
                     return Err(format!(
                         "Zsh closed before probe: {}",
@@ -140,7 +118,7 @@ impl Shell {
     }
 
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
-        self.master.write_all(bytes)?;
+        self.writer.write_all(bytes)?;
         Ok(())
     }
 }

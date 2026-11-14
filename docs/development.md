@@ -166,8 +166,10 @@ This uses isolated HOME/config/runtime directories, a reused daemon, and plain
 adapters. It records startup and queued-key workload latency with completion
 drawing suppressed, including terminal output and control-key overhead. It does
 not measure request-to-visible-candidate latency or cold daemon startup.
-The harness uses the existing Rust dependencies, Zsh, and Git; Python is not
-required. Its default binary is `target/release/zsh-autocomplete-rs`; select
+The harness uses development-only `portable-pty`, `filedescriptor`, and
+`signal-hook` dependencies for PTY, readiness, and signal handling, plus Zsh
+and Git. Its default binary is
+`target/release/zsh-autocomplete-rs`; select
 another build with `--binary`. Building the harness is outside all timed intervals.
 Omitting the baseline uses the current adapter for both variants as a smoke
 check. Supply a baseline from another revision for a performance comparison.
@@ -214,10 +216,13 @@ end-to-end experiment with matching binaries.
 
 TOML includes raw samples, mean, standard deviation, median, 10th/90th
 percentiles, and paired differences between adapters and against no adapter.
-It also records the command, platform, Zsh version, Git blob hashes of the binary
+It also records the command, platform, Zsh version, Git blob hashes of the harness, binary
 and sources, and adapter revisions when the sources are in Git checkouts. For exported
 sources, retain the revision alongside the result. Keep the build profile and
 machine information with the result. Compare repeated runs under similar
 machine load before drawing conclusions from small differences. These shell
 measurements are manual;
 the CI benchmark workflow currently tracks only Rust fuzzy/text processing.
+The Linux/macOS test jobs smoke-test all startup configurations and the input
+workloads using development builds; these small runs check functionality, not
+performance. Use the same release harness for both sides of a timing comparison.

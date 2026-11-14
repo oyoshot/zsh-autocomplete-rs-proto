@@ -34,6 +34,9 @@ globset = "0.4"
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3"
+portable-pty = "0.9"
+filedescriptor = "0.8"
+signal-hook = "0.3"
 
 [[bench]]
 name = "fuzzy_bench"
