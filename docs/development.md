@@ -99,6 +99,15 @@ kernel/WSL differences and terminal-specific behavior need native checks.
 Release portability requires testing the same release binary across the
 intended runtimes, rather than rebuilding it in each container.
 
+Dependabot enables auto-merge for patch and minor updates after checking every
+updated dependency. Cargo updates must stay within the same major version, or
+the same minor version for `0.x` crates; `0.0.x`, prerelease, and unrecognized
+Cargo versions require manual review. Major updates also require manual review.
+The `main` branch must require the seven CI checks (Spell Check, Format, Clippy,
+Unused Deps, MSRV Check, and Test on both Linux and macOS) so auto-merge waits for
+successful validation. Benchmark results remain advisory. The automation runs
+when a Dependabot PR is opened, reopened, or updated.
+
 At each ZLE line-init, zacrs discards popup coordinates and snapshots, resets
 the previous input and suppression state, and restores a deferred self-insert
 delegate. Terminal interrupts can bypass both send-break and line-finish. The
