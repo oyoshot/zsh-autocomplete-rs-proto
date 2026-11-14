@@ -2,22 +2,22 @@ name: Dependabot Auto-Merge
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
   pull-requests: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   auto-merge:
-    name: Auto-Merge Patch Updates
+    name: Auto-Merge Compatible Updates
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.actor == 'dependabot[bot]'
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
@@ -25,9 +25,38 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Auto-merge patch updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Check update compatibility
+        id: compatibility
+        env:
+          DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          # Check every dependency, including all members of grouped updates.
+          # Cargo 0.x minor bumps and all 0.0.x bumps require manual review.
+          if jq -e '
+            def version:
+              capture("^(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$") // null;
+            type == "array" and length > 0 and all(.[];
+              (.updateType == "version-update:semver-patch" or
+               .updateType == "version-update:semver-minor") and
+              (if .packageEcosystem == "cargo" then
+                (.prevVersion | version) as $old |
+                (.newVersion | version) as $new |
+                $old != null and $new != null and
+                $old.major == $new.major and
+                ($old.major != "0" or
+                 ($old.minor != "0" and $old.minor == $new.minor))
+              else true end)
+            )
+          ' <<< "$DEPENDENCIES"; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enable auto-merge for compatible updates
+        if: steps.compatibility.outputs.eligible == 'true'
+        run: gh pr merge --auto --squash --match-head-commit "$PR_HEAD" "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
