@@ -157,10 +157,67 @@ performance comparisons, retain the baseline's entire shell directory, build one
 binary, then run:
 
 ```sh
-python3 dev/bench-zle.py /path/to/baseline/shell/zsh-autocomplete-rs.plugin.zsh
+CARGO_TARGET_DIR=target cargo build --release
+CARGO_TARGET_DIR=target cargo bench --bench zle_bench -- \
+    /path/to/baseline/shell/zsh-autocomplete-rs.plugin.zsh
 ```
 
 This uses isolated HOME/config/runtime directories, a reused daemon, and plain
 adapters. It records startup and queued-key workload latency with completion
 drawing suppressed, including terminal output and control-key overhead. It does
 not measure request-to-visible-candidate latency or cold daemon startup.
+The harness uses the existing Rust dependencies, Zsh, and Git; Python is not
+required. Its default binary is `target/release/zsh-autocomplete-rs`; select
+another build with `--binary`. Building the harness is outside all timed intervals.
+Omitting the baseline uses the current adapter for both variants as a smoke
+check. Supply a baseline from another revision for a performance comparison.
+
+### Shell startup comparisons
+
+Use the startup workload to measure adapter loading separately from input
+handling. Build one binary and use it for both compatible adapter revisions:
+
+```sh
+CARGO_TARGET_DIR=target cargo build --release
+CARGO_TARGET_DIR=target cargo bench --bench zle_bench -- \
+    /path/to/baseline/shell/zsh-autocomplete-rs.plugin.zsh \
+    --workload startup --binary target/release/zsh-autocomplete-rs \
+    --samples 500 --warmups 100 --expansion enter --format compiled \
+    --output /tmp/zacrs-startup.toml
+```
+
+Each repetition compares no adapter, the baseline, and the current checkout in
+rotating order. The harness stages private copies of the shell sources. With
+`--format compiled`, it compiles all files using the same Zsh that runs the
+samples; existing bytecode in either checkout is ignored. Use `--zsh /path/to/zsh`
+to select it explicitly. The defaults measure both plain and compiled sources
+and all four expansion configurations: off, Enter only, Space only, and both.
+
+The common `compinit` dump is generated before timing. Fresh interactive shells
+load it with `compinit -C`. `source_ms` covers just the source call, timed inside
+Zsh with `EPOCHREALTIME`; the no-adapter case measures the empty conditional.
+`ready_ms` covers PTY creation through the final line-init marker,
+including zacrs's selection reset when expansion is enabled. Connection and
+capability checks run after source timing and before readiness; failed
+initialization aborts the run instead of producing a fast sample. The fixture
+loads synchronously and uses no other plugins or user dotfiles. It does not
+measure deferred loading, the first completion, or a full personal shell setup.
+The PTY size is fixed at 80 columns by 24 rows. Compare revisions with this same
+harness; absolute timings from the former Python driver are not interchangeable.
+
+The default `--daemon reused` starts the private daemon before timing. Use
+`--daemon cold` to start without a running daemon for every sample, or
+`--daemon both` to compare both lifecycles. Stopping the daemon is outside the
+timed interval. "Cold" does not flush filesystem caches. Both adapters use the
+same binary; comparing incompatible protocol revisions requires a separate
+end-to-end experiment with matching binaries.
+
+TOML includes raw samples, mean, standard deviation, median, 10th/90th
+percentiles, and paired differences between adapters and against no adapter.
+It also records the command, platform, Zsh version, Git blob hashes of the binary
+and sources, and adapter revisions when the sources are in Git checkouts. For exported
+sources, retain the revision alongside the result. Keep the build profile and
+machine information with the result. Compare repeated runs under similar
+machine load before drawing conclusions from small differences. These shell
+measurements are manual;
+the CI benchmark workflow currently tracks only Rust fuzzy/text processing.

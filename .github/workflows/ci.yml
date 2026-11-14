@@ -92,4 +92,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
       - run: cargo test
+      - name: Check ZLE benchmark on macOS
+        if: runner.os == 'macOS'
+        run: cargo check --bench zle_bench
       - run: sh shell/tests/run.sh

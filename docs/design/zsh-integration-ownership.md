@@ -109,8 +109,10 @@ not performed locally.
 
 ## Performance
 
-Measured with `dev/bench-zle.py`, one debug binary built by Rust 1.99.1, Zsh 5.9.2,
-Ryzen 7 9800X3D, Linux 6.18.58.1 / WSL2. Baseline shell files are from `8db8fa7`.
+The following historical measurements used the former `dev/bench-zle.py` driver
+(now replaced by `cargo bench --bench zle_bench`), one debug binary built by
+Rust 1.99.1, Zsh 5.9.2, Ryzen 7 9800X3D, Linux 6.18.58.1 / WSL2.
+Baseline shell files are from `8db8fa7`.
 Each state has 3 warmups and 15 measured shells per revision; baseline/candidate
 alternate within each repetition. HOME, configuration and runtime are private.
 Daemon startup is excluded: all startups reuse the same binary's daemon.

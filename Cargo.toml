@@ -48,6 +48,10 @@ name = "startup_bench"
 harness = false
 
 [[bench]]
+name = "zle_bench"
+harness = false
+
+[[bench]]
 name = "daemon_bench"
 harness = false
 
