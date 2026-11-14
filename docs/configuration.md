@@ -283,16 +283,24 @@ session. Non-command contexts such as `vared` and `select` also skip expansion.
 When native completion has a pending auto-removable suffix, or the
 numeric insertion count differs from one (including zero), Space delegates
 directly to insertion. Zsh retains control of suffix removal and insertion
-counts. Reloading or disabling restores delegates captured by other plugins,
-preserving their outer wrappers without recursive calls. Popup Space keeps its
-configured popup action.
+counts. Reload updates zacrs's own implementation and configuration while keeping
+existing delegates. Disabling stops expansion immediately. Zacrs restores the
+public insertion widget only while it owns that entry and no other registered
+widget retains its entry. Otherwise an inert forwarding widget remains until a
+fresh shell; it has a small dispatch cost. Saved aliases owned by other plugins
+are never rewritten. Popup Space keeps its configured popup action.
 
 Space in the command word uses the native lexer and, at the word end, the
 completion context query and daemon socket. Argument spaces use the native lexer
 but skip the completion query and IPC. Successful edits send a selection
-notification to protect the expanded command. Disabled Space expansion installs
-no insertion wrapper and adds no work to ordinary input handling. The editing
-session, line-init reset and transport failure handling are shared with Enter.
+notification to protect the expanded command. A fresh shell with Space disabled
+installs no Space wrapper. Deferred popup rendering may temporarily borrow
+insertion; the same retention rule applies if another plugin captures it.
+The editing session, line-init reset and transport failure handling are shared
+with Enter. Reload preserves later user bindings and independent widget or hook
+replacements; it does not automatically reattach to a replacement. Start a fresh
+shell to restore the normal startup integration. Upgrading from the earlier
+mutable-delegate adapter also requires a fresh shell.
 
 ### Daemon updates
 
