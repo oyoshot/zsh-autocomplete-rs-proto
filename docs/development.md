@@ -166,6 +166,8 @@ This uses isolated HOME/config/runtime directories, a reused daemon, and plain
 adapters. It records startup and queued-key workload latency with completion
 drawing suppressed, including terminal output and control-key overhead. It does
 not measure request-to-visible-candidate latency or cold daemon startup.
+The input fixture runs `compinit -i -D`, excluding insecure system completion
+directories without prompting and scanning completion definitions for each shell.
 The harness uses development-only `portable-pty`, `filedescriptor`, and
 `signal-hook` dependencies for PTY, readiness, and signal handling, plus Zsh
 and Git. Its default binary is

@@ -114,7 +114,12 @@ impl Shell {
             }
             std::thread::sleep(Duration::from_micros(200));
         }
-        Err(format!("probe timeout: {}", path.display()).into())
+        Err(format!(
+            "probe timeout: {}\nPTY output: {}",
+            path.display(),
+            String::from_utf8_lossy(&self.output)
+        )
+        .into())
     }
 
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {

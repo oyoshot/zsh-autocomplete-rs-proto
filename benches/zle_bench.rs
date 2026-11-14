@@ -506,7 +506,7 @@ fn main() -> Result<()> {
         method: if args.workload == "startup" {
             "fresh interactive PTY (80x24); warm common compdump; EPOCHREALTIME source interval; PTY creation through final line-init; rotating order; same binary; cold excludes stop time, not filesystem caches"
         } else {
-            "fresh interactive PTY (80x24); compinit -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate"
+            "fresh interactive PTY (80x24); compinit -i -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate"
         }.into(),
     };
     let session = Session::new(binary, zsh)?;

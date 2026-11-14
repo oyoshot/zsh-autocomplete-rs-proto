@@ -1,6 +1,8 @@
 HISTFILE="$HOME/history"
 autoload -Uz compinit add-zle-hook-widget
-compinit -D
+# System completion directories may be writable by another user (for example,
+# on CI runners). Exclude them instead of waiting for an interactive answer.
+compinit -i -D
 source "$BENCH_PLUGIN" || exit 1
 if [[ $BENCH_MODE == hot-disabled ]]; then
     zle -A self-insert _bench_saved
