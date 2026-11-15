@@ -91,20 +91,6 @@ _zacrs_compadd_has_array_output_flag() {
     return 1
 }
 
-_zacrs_path_candidate_kind() {
-    local _path="$1"
-    case "$_path" in
-        '~') _path="$HOME" ;;
-        '~/'*) _path="${HOME}${_path[2,-1]}" ;;
-    esac
-
-    if [[ -d "$_path" ]]; then
-        REPLY="directory"
-    else
-        REPLY="file"
-    fi
-}
-
 _zacrs_compsys_func() {
     # Reuse the native completion widget without running candidate providers,
     # initializing compsys, or mutating its captured-candidate state.
@@ -174,23 +160,43 @@ _zacrs_compsys_func() {
             local -a _zacrs_cap=()
             builtin compadd -O _zacrs_cap "$@" 2>/dev/null
 
-            _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
+            [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
 
             local _full_prefix="${IPREFIX}${_hidden_prefix}${_vis_prefix}"
-            local _m
-            for _m in "${_zacrs_cap[@]}"; do
-                local _text="${_full_prefix}${_m}${_vis_suffix}"
-                local _kind=""
-                if (( _is_file )); then
-                    _zacrs_path_candidate_kind "${_full_prefix}${_m}"
-                    _kind="$REPLY"
-                elif [[ "$_text" == */ ]]; then
-                    _kind="directory"
-                elif (( _zacrs_cmd_pos )) && [[ "$_text" != */* ]] && _zacrs_command_kind "$_m"; then
-                    _kind="$REPLY"
-                fi
-                _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
-            done
+            # Plain argument matches share empty description/kind metadata.
+            # Format them in one expansion rather than looping over large
+            # package lists in the interactive shell.
+            if (( ! _is_file && ! _zacrs_cmd_pos && ${#_desc_map} == 0 )) \
+                && [[ -z "${_full_prefix}${_vis_suffix}${_xdesc}" ]] \
+                && (( ${_zacrs_cap[(I)*/]} == 0 )); then
+                local _zacrs_plain_metadata=$'\t\t'
+                _zacrs_captured+=( "${(@)_zacrs_cap/%/$_zacrs_plain_metadata}" )
+            else
+                local _m _path
+                for _m in "${_zacrs_cap[@]}"; do
+                    local _text="${_full_prefix}${_m}${_vis_suffix}"
+                    local _kind=""
+                    if (( _is_file )); then
+                        # Keep this check inline: a function call per filesystem
+                        # candidate dominates capture time for large match sets.
+                        _path="${_full_prefix}${_m}"
+                        case "$_path" in
+                            '~') _path="$HOME" ;;
+                            '~/'*) _path="${HOME}${_path[2,-1]}" ;;
+                        esac
+                        if [[ -d "$_path" ]]; then
+                            _kind="directory"
+                        else
+                            _kind="file"
+                        fi
+                    elif [[ "$_text" == */ ]]; then
+                        _kind="directory"
+                    elif (( _zacrs_cmd_pos )) && [[ "$_text" != */* ]] && _zacrs_command_kind "$_m"; then
+                        _kind="$REPLY"
+                    fi
+                    _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
+                done
+            fi
 
             # Completion helpers use compstate[nmatches] to decide whether a
             # source succeeded and whether to try alternatives. Preserve zero,
@@ -204,7 +210,7 @@ _zacrs_compsys_func() {
             fi
             return 1
         else
-            _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
+            [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: SKIPPED (-O/-D) args: ${(j: :)${(@q)@}}"
             # Probe calls explicitly request their own output arrays and must
             # retain the original compadd behavior. Regular calls are captured
             # above only: zacrs renders its own popup and suppresses compsys'

@@ -10,6 +10,10 @@ trap 'zpty -d 2>/dev/null || true; rm -rf -- "$tmp_dir"' EXIT
 
 export ZACRS_STATE_COMPSYS="${test_dir:h}/_zacrs_compsys.zsh"
 export ZACRS_STATE_UTIL="${test_dir:h}/_zacrs_util.zsh"
+mkdir -p "$tmp_dir/home/space 日本語"
+: > "$tmp_dir/home/file"
+ln -s 'space 日本語' "$tmp_dir/home/link"
+export ZACRS_STATE_HOME="$tmp_dir/home"
 export ZACRS_STATE_MARKER="$tmp_dir/marker"
 
 print -r -- '
@@ -28,6 +32,29 @@ _zacrs_state_test_completion() {
         many) candidates=(x{001..200}) ;;
     esac
 
+    if [[ "$ZACRS_STATE_CASE" == kinds ]]; then
+        local HOME="$ZACRS_STATE_HOME"
+        compadd -Uf -- "~" "~/" "~/file" "~/space 日本語" "~/link" "~/missing"
+        print -rl -- "${_zacrs_captured[@]}" > "$ZACRS_STATE_MARKER"
+        return 0
+    fi
+    case "$ZACRS_STATE_CASE" in
+        plain|plain-debug)
+            [[ "$ZACRS_STATE_CASE" == plain-debug ]] && local ZACRS_DEBUG=1 ZACRS_LOG="$ZACRS_STATE_MARKER.debug"
+            compadd -U -- "alpha" "日本語 space" "a*b&c" "repo/package" "-option"
+            ;;
+        affixes) compadd -U -P "pre&" -S "*end" -- "alpha" "beta" ;;
+        description) compadd -U -X "package entries" -- "alpha" "beta" ;;
+        mapped-description)
+            local -a displays=("alpha -- first entry" "beta -- second entry")
+            compadd -U -d displays -- "alpha" "beta"
+            ;;
+        slash) compadd -U -- "alpha" "directory/" ;;
+    esac
+    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash) ]]; then
+        print -rl -- "${_zacrs_captured[@]}" > "$ZACRS_STATE_MARKER"
+        return 0
+    fi
     compadd -- "${candidates[@]}" || compadd_status=$?
     after=$compstate[nmatches]
     print -r -- "$ZACRS_STATE_CASE status=$compadd_status delta=$(( after - before )) captured=${#_zacrs_captured} first=${_zacrs_captured[1]-}" > "$ZACRS_STATE_MARKER"
@@ -89,3 +116,12 @@ run_case() {
 run_case zero 'zero status=1 delta=0 captured=0 first='
 run_case one $'one status=0 delta=1 captured=1 first=xone\t\t'
 run_case many $'many status=0 delta=101 captured=200 first=x001\t\t'
+
+run_case kinds $'~\t\tdirectory\n~/\t\tdirectory\n~/file\t\tfile\n~/space 日本語\t\tdirectory\n~/link\t\tdirectory\n~/missing\t\tfile'
+
+run_case plain $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
+run_case plain-debug $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
+run_case affixes $'pre&alpha*end\t\t\npre&beta*end\t\t'
+run_case description $'alpha\tpackage entries\t\nbeta\tpackage entries\t'
+run_case mapped-description $'alpha\tfirst entry\t\nbeta\tsecond entry\t'
+run_case slash $'alpha\t\t\ndirectory/\t\tdirectory'
