@@ -111,7 +111,7 @@ fn zsh_deferred_enter_expansion_initializes_the_current_line() {
 
 #[test]
 fn zsh_reload_preserves_selections_without_the_new_initialization_flag() {
-    for state in [0, 1, -1] {
+    for state in [0, 1, -1, -2] {
         run_abbreviation_test(
             &format!(
                 "export ZACRS_TEST_DEFERRED=1 ZACRS_TEST_LEGACY_RELOAD=1 ZACRS_TEST_LEGACY_STATE={state}\n{}",

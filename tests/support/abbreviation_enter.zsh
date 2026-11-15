@@ -301,7 +301,7 @@ _zacrs_daemon_available=0
 _zacrs_daemon_next_retry=0
 _zacrs_maybe_retry_daemon
 (( _zacrs_daemon_available == 1 )) || fail 'daemon retry did not reconnect'
-(( _zacrs_enter_enabled == -2 )) || fail 'daemon retry re-enabled expansion within the same line'
+(( _zacrs_edit_transport_state == -2 )) || fail 'daemon retry re-enabled expansion within the same line'
 CURSOR=${#BUFFER}
 _zacrs_accept_line
 [[ "$accepted" == 'gs ' ]] || fail 'reconnection must preserve a fallback selection'
@@ -334,7 +334,7 @@ _zacrs_accept_line
 # Acceptance still requires a decodable buffer for edits; failure is explicit.
 set_buffer $'gs \xff'
 _zacrs_accept_line
-(( _zacrs_enter_enabled == -1 )) || fail 'undecodable acceptance must disable expansion'
+(( _zacrs_edit_transport_state == -1 )) || fail 'undecodable acceptance must disable expansion'
 set_buffer gs
 _zacrs_accept_line
 [[ "$accepted" == gs ]] || fail 'a fresh line must not clear a protocol failure'

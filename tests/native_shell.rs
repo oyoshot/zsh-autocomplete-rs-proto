@@ -109,7 +109,7 @@ ZACRS_BIN=_test_start
 for reload in 1 2; do
     source "$ZACRS_PLUGIN"
     (( _zacrs_daemon_available == 1 && _zacrs_daemon_started == 0 )) || exit 1
-    (( _zacrs_enter_enabled == 0 )) || exit 2
+    (( _zacrs_edit_transport_state == 0 )) || exit 2
 done
 [[ ! -e "$HOME/started" ]]
 "#,

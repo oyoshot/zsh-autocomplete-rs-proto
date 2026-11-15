@@ -67,6 +67,13 @@ the existing line-init hook reconnects and resets the session at the next fresh
 line, never while accepting or applying a selection. Missing sessions after restart or eviction preserve
 the input. The default remains disabled and adds no Enter-time abbreviation work.
 
+The Zsh adapter keeps Enter and Space opt-ins separate from their shared
+`_zacrs_edit_transport_state`: disabled, ready, invalid response, or transport
+unavailable. Session initialization is tracked separately across reloads so
+reloading cannot discard protection for an explicitly selected command. The
+former `_zacrs_enter_enabled` name is consulted only when identifying a reload
+from an older adapter that lacks the session-initialization flag.
+
 ## Optional Space edits
 
 The handshake also advertises `space_expansion=0|1`. Either expansion option
