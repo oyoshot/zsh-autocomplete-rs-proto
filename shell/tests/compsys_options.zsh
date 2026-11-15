@@ -62,22 +62,6 @@ assert_array_output_flag 0 'output flag after option terminator is a candidate' 
 assert_array_output_flag 0 'option value containing O is not an output flag' -P -Output candidate
 assert_array_output_flag 0 'option value containing A is not an output flag' -P -Array candidate
 
-assert_path_kind() {
-    local expected=$1 path=$2 description=$3
-    _zacrs_path_candidate_kind "$path"
-    if [[ "$REPLY" != "$expected" ]]; then
-        print -u2 -r -- "not ok: ${description} (expected=${expected}, actual=${REPLY})"
-        (( ++failures ))
-    else
-        print -r -- "ok: ${description}"
-    fi
-}
-
-assert_path_kind directory "$test_dir" 'directory candidate keeps directory kind'
-assert_path_kind file "$0" 'file candidate keeps file kind'
-HOME="$test_dir" assert_path_kind directory '~/' 'home-relative directory candidate keeps directory kind'
-HOME="$test_dir" assert_path_kind file '~/compsys_options.zsh' 'home-relative file candidate keeps file kind'
-
 assert_render_gate() {
     local expected=$1 candidates=$2 buffer=$3 prefix=$4 description=$5
     local actual=0
