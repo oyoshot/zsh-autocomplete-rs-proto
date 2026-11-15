@@ -69,10 +69,10 @@ typeset -gi _zacrs_self_insert_wrapped=${_zacrs_self_insert_wrapped:-0}
 # identifies a reload with a potentially protected session, even when disabled
 # or unavailable. Capture it before declaring the capability state below.
 typeset -gi _zacrs_enter_session_initialized=${_zacrs_enter_session_initialized:-${+_zacrs_enter_enabled}}
-# 0: disabled; 1: enabled; -1: invalid response; -2: transport unavailable.
+# Shared Enter/Space transport: 0: disabled; 1: ready; -1: invalid response;
+# -2: transport unavailable. Feature opt-ins are kept separately below.
 # Only a fresh editing line may recover transport; invalid responses need reload.
-# Shared edit transport state (the name is retained for adapter reload compatibility).
-typeset -gi _zacrs_enter_enabled=0
+typeset -gi _zacrs_edit_transport_state=0
 typeset -gi _zacrs_enter_expansion=0
 typeset -gi _zacrs_space_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
@@ -105,20 +105,20 @@ _zacrs_reset_cache() {
 _zacrs_reset_enter_selection() {
     _zacrs_command_editor || return 0
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
+    if (( _zacrs_edit_transport_state > 0 )) && _zacrs_abbreviation_request reset; then
         _zacrs_enter_session_initialized=1
     fi
-    if (( _zacrs_enter_enabled == -2 )); then
+    if (( _zacrs_edit_transport_state == -2 )); then
         # A new line has no selection to preserve. Reconnect here, never in the
         # middle of accepting or applying a user's existing input.
-        _zacrs_enter_enabled=0
+        _zacrs_edit_transport_state=0
         _zacrs_daemon_available=0
         if _zacrs_initialize_daemon; then
-            if (( _zacrs_enter_enabled > 0 )) && _zacrs_abbreviation_request reset; then
+            if (( _zacrs_edit_transport_state > 0 )) && _zacrs_abbreviation_request reset; then
                 _zacrs_enter_session_initialized=1
             fi
         else
-            _zacrs_enter_enabled=-2
+            _zacrs_edit_transport_state=-2
         fi
     fi
     return 0
@@ -127,7 +127,7 @@ _zacrs_reset_enter_selection() {
 _zacrs_record_enter_selection() {
     _zacrs_command_editor || return 0
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
-    (( _zacrs_enter_enabled > 0 )) || return 0
+    (( _zacrs_edit_transport_state > 0 )) || return 0
     local -a reply _zacrs_abbr_words
     _zacrs_abbreviation_words
     _zacrs_abbreviation_request select "${1:-0}" "${2:-1}" "$reply[1]" "$reply[2]" "$reply[3]" || true
@@ -271,7 +271,7 @@ if zmodload zsh/net/socket 2>/dev/null || zmodload zsh/net/unix 2>/dev/null; the
             _zacrs_space_enabled=0
             [[ " $handshake " == *' enter_expansion=1 '* ]] && _zacrs_enter_expansion=1
             [[ " $handshake " == *' space_expansion=1 '* ]] && _zacrs_space_enabled=1
-            (( _zacrs_enter_expansion || _zacrs_space_enabled )) && _zacrs_enter_enabled=1
+            (( _zacrs_enter_expansion || _zacrs_space_enabled )) && _zacrs_edit_transport_state=1
         fi
         return 0
     }
@@ -555,7 +555,7 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    if (( _zacrs_enter_enabled > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
+    if (( _zacrs_edit_transport_state > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
         _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
     if [[ -n "$cursor_offset" && "$cursor_offset" == <-> ]]; then
@@ -1003,7 +1003,7 @@ _zacrs_line_pre_redraw() {
 _zacrs_accept_line() {
     _zacrs_clear_popup
     local _keep_editing=0
-    if (( _zacrs_enter_enabled > 0 && _zacrs_enter_expansion )) && _zacrs_expand_command_abbreviation; then
+    if (( _zacrs_edit_transport_state > 0 && _zacrs_enter_expansion )) && _zacrs_expand_command_abbreviation; then
         if [[ "$REPLY" == 0 ]]; then
             _keep_editing=1
             _zacrs_record_enter_selection
@@ -1078,7 +1078,7 @@ TRAPWINCH() {
 # Space expansion and deferred rendering share this wrapper and its lifecycle.
 _zacrs_self_insert() {
     if [[ "$KEYS" == ' ' ]] && \
-        (( ${NUMERIC:-1} == 1 && ! ${SUFFIX_ACTIVE:-0} && _zacrs_space_enabled && _zacrs_enter_enabled > 0 )) && \
+        (( ${NUMERIC:-1} == 1 && ! ${SUFFIX_ACTIVE:-0} && _zacrs_space_enabled && _zacrs_edit_transport_state > 0 )) && \
         _zacrs_expand_command_abbreviation space; then
         # A leading cursor marker leaves LBUFFER equal to the empty redraw
         # sentinel. Clear old UI now, even if the next redraw skips work.
@@ -1157,14 +1157,14 @@ _zacrs_add_zle_hook() {
 typeset -gA _zacrs_registered_hooks
 _zacrs_editor_line_init() {
     _zacrs_line_init
-    (( _zacrs_enter_enabled != 0 )) && _zacrs_reset_enter_selection
+    (( _zacrs_edit_transport_state != 0 )) && _zacrs_reset_enter_selection
     return 0
 }
 zle -D _zacrs_abbreviation_context 2>/dev/null || true
 _zacrs_add_zle_hook line-init _zacrs_editor_line_init
 _zacrs_add_zle_hook line-pre-redraw _zacrs_line_pre_redraw
 # A loader may run after line-init. Preserve any existing selected command.
-if (( _zacrs_enter_enabled > 0 && ! _zacrs_enter_session_initialized )) && zle; then
+if (( _zacrs_edit_transport_state > 0 && ! _zacrs_enter_session_initialized )) && zle; then
     _zacrs_reset_enter_selection
 fi
 

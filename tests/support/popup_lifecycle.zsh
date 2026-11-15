@@ -38,7 +38,7 @@ _test_ready() {
 }
 add-zle-hook-widget line-init _test_ready
 _test_probe() {
-    print -r -- "$BUFFER:$CURSOR:$_zacrs_popup_visible:$_zacrs_enter_enabled:$_zacrs_daemon_available" > "$HOME/probe"
+    print -r -- "$BUFFER:$CURSOR:$_zacrs_popup_visible:$_zacrs_edit_transport_state:$_zacrs_daemon_available" > "$HOME/probe"
 }
 _test_outer_init() { zle _test_saved_init -f nolast; }
 _test_reload() {

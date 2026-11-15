@@ -99,7 +99,7 @@ _test_choose_and_reload() {
     _zacrs_apply ${#LBUFFER} 2 'gs ' 0 0 '' 1
     if [[ "${ZACRS_TEST_LEGACY_RELOAD:-0}" == 1 ]]; then
         # Older adapters have a live, protected daemon session but no flag.
-        unset _zacrs_enter_session_initialized
+        unset _zacrs_enter_session_initialized _zacrs_edit_transport_state
         _zacrs_enter_enabled=${ZACRS_TEST_LEGACY_STATE:-1}
     fi
     _test_load_plugin

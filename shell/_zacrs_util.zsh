@@ -110,7 +110,7 @@ _zacrs_command_context() {
 # Byte-length fields preserve multiline input without evaluation or encoders.
 # Transport failure disables edits until the next line; malformed replies need reload.
 _zacrs_abbreviation_transport_failed() {
-    _zacrs_enter_enabled=-2
+    _zacrs_edit_transport_state=-2
     _zacrs_mark_daemon_unavailable
     return 1
 }
@@ -118,7 +118,7 @@ _zacrs_abbreviation_transport_failed() {
 _zacrs_abbreviation_request() {
     local operation="$1" fd item
     shift
-    (( _zacrs_enter_enabled > 0 )) || return 1
+    (( _zacrs_edit_transport_state > 0 )) || return 1
     (( _zacrs_daemon_available )) || { _zacrs_abbreviation_transport_failed; return 1; }
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
         _zacrs_abbreviation_transport_failed
@@ -133,9 +133,9 @@ _zacrs_abbreviation_request() {
             print -r -u $fd -- "$item"
         done
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_abbreviation_transport_failed; return 1; }
-        [[ "$_zacrs_abbreviation_header" == DONE* ]] || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* ]] || { _zacrs_edit_transport_state=-1; return 1; }
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_abbreviation_transport_failed; return 1; }
-        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_enter_enabled=-1; return 1; }
+        [[ "$_zacrs_abbreviation_header" == DONE* && "$_zacrs_abbreviation_apply" == APPLY* ]] || { _zacrs_edit_transport_state=-1; return 1; }
     } always {
         exec {fd}<&-
     }
