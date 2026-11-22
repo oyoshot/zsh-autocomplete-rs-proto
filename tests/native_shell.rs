@@ -291,3 +291,44 @@ fn shell_exit_cleans_up_delayed_disowned_jobs() {
     thread::sleep(Duration::from_secs(1));
     assert!(!marker.exists(), "delayed job survived shell cleanup");
 }
+
+#[test]
+fn zsh_filesystem_provider_quotes_literal_selections_and_rejects_unknown_context() {
+    for daemon in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = tempfile::Builder::new()
+            .prefix("zacrs-files.")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let plugin = support::install_zsh_plugin(root.path(), false);
+        let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+        let (output, timed_out) = run_shell(
+            Command::new("zsh")
+                .args(["-df", "-c", include_str!("support/filesystem_provider.zsh")])
+                .env_clear()
+                .env("PATH", env::var_os("PATH").unwrap_or_default())
+                .env("HOME", root.path())
+                .env("ZDOTDIR", root.path())
+                .env("XDG_CONFIG_HOME", root.path().join("config"))
+                .env("XDG_RUNTIME_DIR", runtime.path())
+                .env("ZACRS_BIN", binary)
+                .env("ZACRS_PLUGIN", plugin)
+                .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
+                .env("TERM", "xterm-256color")
+                .env("LANG", "C.UTF-8")
+                .current_dir(root.path()),
+            Duration::from_secs(20),
+        );
+        let _ = Command::new(binary)
+            .args(["daemon", "stop"])
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .output();
+        assert!(!timed_out, "{output:?}");
+        assert!(
+            output.status.success(),
+            "daemon={daemon}\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

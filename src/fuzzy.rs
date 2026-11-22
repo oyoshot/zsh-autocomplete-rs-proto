@@ -645,6 +645,7 @@ mod tests {
         items
             .iter()
             .map(|s| Candidate {
+                literal_path: None,
                 text: s.to_string(),
                 description: String::new(),
                 kind: String::new(),
@@ -1102,6 +1103,7 @@ mod tests {
         items
             .iter()
             .map(|(text, kind)| Candidate {
+                literal_path: None,
                 text: text.to_string(),
                 description: String::new(),
                 kind: kind.to_string(),

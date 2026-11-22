@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use crate::filesystem::FilesystemQuery;
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "zsh-autocomplete-rs")]
@@ -11,6 +12,8 @@ pub struct Cli {
 pub enum Command {
     /// Popup session — Tab で起動
     Complete {
+        #[command(flatten)]
+        filesystem: FilesystemArgs,
         #[arg(long, default_value = "", allow_hyphen_values = true)]
         prefix: String,
 
@@ -64,6 +67,8 @@ pub enum Command {
     },
     /// Draw popup and exit immediately (non-blocking) — 自動トリガー用
     Render {
+        #[command(flatten)]
+        filesystem: FilesystemArgs,
         #[arg(long, default_value = "", allow_hyphen_values = true)]
         prefix: String,
 
@@ -184,4 +189,38 @@ pub enum DaemonAction {
     Stop,
     /// Check if daemon is running (exit 0 = running, 1 = not)
     Status,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct FilesystemArgs {
+    #[arg(long, requires_all=["filesystem_prefix", "filesystem_insertion_prefix"])]
+    pub filesystem_cwd: Option<String>,
+    #[arg(long, requires = "filesystem_cwd", allow_hyphen_values = true)]
+    pub filesystem_prefix: Option<String>,
+    #[arg(long, requires = "filesystem_cwd", allow_hyphen_values = true)]
+    pub filesystem_insertion_prefix: Option<String>,
+}
+impl FilesystemArgs {
+    pub fn query(self) -> std::io::Result<Option<FilesystemQuery>> {
+        match (
+            self.filesystem_cwd,
+            self.filesystem_prefix,
+            self.filesystem_insertion_prefix,
+        ) {
+            (None, None, None) => Ok(None),
+            (Some(cwd), Some(path_prefix), Some(insertion_prefix))
+                if std::path::Path::new(&cwd).is_absolute() =>
+            {
+                Ok(Some(FilesystemQuery {
+                    cwd: cwd.into(),
+                    path_prefix,
+                    insertion_prefix,
+                }))
+            }
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid filesystem query",
+            )),
+        }
+    }
 }

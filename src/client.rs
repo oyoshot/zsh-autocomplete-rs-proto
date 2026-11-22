@@ -99,6 +99,7 @@ pub fn try_daemon_complete(
     reuse_token: Option<&str>,
     context_key: Option<&str>,
     popup_key: Option<&str>,
+    filesystem: Option<&crate::filesystem::FilesystemQuery>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let stream = connect_stream()?;
@@ -110,6 +111,7 @@ pub fn try_daemon_complete(
     let mut reader = BufReader::new(stream);
 
     let request = TextCompleteRequest {
+        filesystem: filesystem.is_some(),
         cursor_row,
         cursor_col,
         term_cols,
@@ -125,6 +127,10 @@ pub fn try_daemon_complete(
         popup_key: popup_key.map(str::to_string),
     };
     writeln!(writer, "{}", request.header_line()).map_err(|_| DaemonUnavailable::NotRunning)?;
+    if let Some(query) = filesystem {
+        protocol::write_filesystem_query(&mut writer, query)
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
+    }
     writeln!(writer, "{prefix}").map_err(|_| DaemonUnavailable::NotRunning)?;
     if !candidates_tsv.trim().is_empty() {
         writeln!(writer, "{candidates_tsv}").map_err(|_| DaemonUnavailable::NotRunning)?;

@@ -8,9 +8,44 @@ pub struct Candidate {
     pub kind: String,
     pub insert_text: Option<String>,
     pub cursor_offset: Option<usize>,
+    /// Exact literal filesystem path; adapters quote this before insertion.
+    pub literal_path: Option<String>,
 }
 
 impl Candidate {
+    pub fn literal_insertion_path(&self, suffixes: &SuffixConfig) -> Option<String> {
+        self.literal_path.as_ref().map(|path| {
+            if self.base_kind() == "directory" && suffixes.suffix_for_kind("directory").is_some() {
+                path.strip_suffix('/')
+                    .filter(|base| !base.is_empty())
+                    .unwrap_or(path)
+                    .to_string()
+            } else {
+                path.clone()
+            }
+        })
+    }
+
+    pub fn literal_suffix(&self, suffixes: &SuffixConfig, dismiss: bool) -> String {
+        let path = self.literal_insertion_path(suffixes).unwrap_or_default();
+        let mut suffix = suffixes
+            .suffix_for_kind(self.base_kind())
+            .unwrap_or("")
+            .to_string();
+        // A quoted filename's trailing space is data, never a separator.
+        // Only an existing directory slash can replace the default slash suffix.
+        if self.base_kind() == "directory" && path.ends_with('/') && suffix == "/" {
+            suffix.clear();
+        }
+        if dismiss
+            && !suffix.ends_with([' ', '/'])
+            && !(self.base_kind() == "directory" && suffix.is_empty() && path.ends_with('/'))
+        {
+            suffix.push(' ');
+        }
+        suffix
+    }
+
     pub fn kind_priority(&self) -> u8 {
         match self.base_kind() {
             "directory" => 0,
@@ -102,6 +137,7 @@ impl Candidate {
             kind,
             insert_text: None,
             cursor_offset: None,
+            literal_path: None,
         }
     }
 
@@ -150,6 +186,7 @@ impl Candidate {
             kind: "abbreviation".to_string(),
             insert_text: Some(insert_text),
             cursor_offset,
+            literal_path: None,
         }
     }
 }
@@ -157,6 +194,18 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_filename_trailing_space_never_consumes_a_separator() {
+        let mut candidate = Candidate::parse_line("filename \tfile\tfile");
+        candidate.literal_path = Some("filename ".into());
+        let suffixes = SuffixConfig::default();
+        assert_eq!(candidate.literal_suffix(&suffixes, false), " ");
+        assert_eq!(candidate.literal_suffix(&suffixes, true), " ");
+        let empty = suffixes.with_override("file", "");
+        assert_eq!(candidate.literal_suffix(&empty, false), "");
+        assert_eq!(candidate.literal_suffix(&empty, true), " ");
+    }
 
     #[test]
     fn parse_with_description_and_kind() {

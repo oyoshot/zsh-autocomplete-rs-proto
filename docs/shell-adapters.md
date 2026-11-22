@@ -1,4 +1,4 @@
-# Shell adapter boundary for abbreviation edits
+# Shell adapter boundaries
 
 The shared Rust engine owns configuration, exact abbreviation lookup, selection
 protection, and literal edit results. It does not classify reserved words,
@@ -96,3 +96,57 @@ Pending completion suffixes bypass abbreviation expansion and go directly to
 the current insertion widget. Querying completion context would consume that
 state even without an edit, so restoring only the buffer and cursor is
 insufficient. Removal and retention remain the native widget's responsibility.
+
+## Filesystem fallback provider
+
+Rust owns literal filesystem enumeration and constructs structured candidates
+without passing filenames through native completion's line-delimited TSV. The
+existing selection policy remains native completion first, filesystem and shell
+command-table fallback only after native completion produces no candidates.
+PATH, aliases, builtins, functions and command rescue remain in the adapter in
+this first slice. Arbitrary native completion, asynchronous scheduling and a
+shared provider manager are later work.
+
+The Zsh adapter captures native completion context before providers can change
+it with `compset`. It supplies a literal path prefix, its insertion/display
+spelling and the current working directory. It offers this capability only at
+an unquoted literal word end, including an empty argument. Native lexical words
+must cover the input. Quoted words, substitutions, patterns, continuation input
+and cursors inside a word do not request filesystem fallback. Unlike the former
+last-space/glob fallback, unknown context cannot produce an unsafe file edit.
+Native completion continues to handle those contexts independently. Explicit
+command paths such as `./` and home-relative paths such as `~/` are supported;
+bare command words retain the command-table path. Home-relative candidates keep
+that display spelling but insert a safely quoted expanded path.
+
+Each request carries cwd; the shared daemon never uses its own cwd for lookup.
+`render-files` and `complete-files` carry three length-framed UTF-8 fields before
+the existing prefix/candidate payload. Older daemons reject the distinct verbs
+instead of interpreting a structured body as TSV. The subprocess path accepts
+the same query through arguments. Native candidate transport is unchanged.
+The daemon retains structured filesystem snapshots with candidate and active
+popup caches, so navigation and cached selection do not enumerate again. The
+adapter scopes reuse to session, generation, cwd, HOME, cursor and right-side
+input,
+with the existing exact-prefix rule. Popup snapshots require the complete buffer
+and cursor, cwd and HOME to match, so a right-side-only edit or changed home
+directory cannot reuse stale file context. A provider changing HOME after native
+context capture invalidates that captured filesystem expansion; a fresh redraw
+can collect it in the new environment. If a retry establishes new context after
+HOME changes, its cache key is refreshed before the query is submitted.
+
+Literal file paths are separate from display text and configured suffixes.
+Control characters and literal backslashes have distinct display escapes, while
+exact UTF-8 filename bytes, including tabs and newlines, survive collection and
+selection. APPLY metadata
+carries the literal selected path and suffix separately; Zsh quotes the path
+with its native quoting facility before applying the suffix. Unambiguous-prefix
+extension is disabled for this source so cancellation cannot apply unquoted
+display text. Non-UTF-8 names are skipped, never converted lossily. Hidden names
+require an explicit dot prefix. Directory symlinks are classified as directories.
+This step adds no hooks, widgets, shell option changes or helper subprocesses.
+
+Filesystem collection currently runs synchronously in the shared daemon when a
+fresh request is handled. A slow filesystem can therefore delay other requests;
+this first slice does not provide asynchronous scheduling or cancellation of an
+in-progress directory scan. Moving scheduling to Rust is a separate next step.

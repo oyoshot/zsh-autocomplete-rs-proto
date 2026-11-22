@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::app::App;
 use crate::candidate::Candidate;
@@ -30,6 +31,8 @@ struct ApplyResult {
     selection_applied: bool,
     restore_text: String,
     cursor_offset: Option<usize>,
+    literal_path: Option<String>,
+    literal_suffix: String,
 }
 
 impl ApplyResult {
@@ -42,6 +45,8 @@ impl ApplyResult {
             selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
+            literal_path: None,
+            literal_suffix: String::new(),
         }
     }
 
@@ -54,6 +59,8 @@ impl ApplyResult {
             selection_applied: true,
             restore_text: String::new(),
             cursor_offset: None,
+            literal_path: None,
+            literal_suffix: String::new(),
         }
     }
 
@@ -66,6 +73,8 @@ impl ApplyResult {
             selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
+            literal_path: None,
+            literal_suffix: String::new(),
         }
     }
 
@@ -78,6 +87,8 @@ impl ApplyResult {
             selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
+            literal_path: None,
+            literal_suffix: String::new(),
         }
     }
 
@@ -90,6 +101,8 @@ impl ApplyResult {
             selection_applied: false,
             restore_text: String::new(),
             cursor_offset: None,
+            literal_path: None,
+            literal_suffix: String::new(),
         }
     }
 }
@@ -111,6 +124,8 @@ fn encode_hex_bytes(bytes: &[u8]) -> String {
 fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Result<()> {
     TextCompleteResult {
         insert_trigger: false,
+        literal_path: result.literal_path.clone(),
+        literal_suffix: result.literal_suffix.clone(),
         code: result.code,
         text: result.text.clone(),
         chain: result.chain,
@@ -123,6 +138,7 @@ fn write_apply_result<W: Write>(writer: &mut W, result: &ApplyResult) -> io::Res
 }
 
 struct RenderParams {
+    filesystem: Arc<[Candidate]>,
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
@@ -134,6 +150,7 @@ struct RenderParams {
 }
 
 struct CompleteParams {
+    filesystem: Arc<[Candidate]>,
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
@@ -155,12 +172,14 @@ const ACTIVE_POPUP_MAX_ENTRIES: usize = 16;
 
 #[derive(Clone)]
 struct CandidateCacheEntry {
+    filesystem: Arc<[Candidate]>,
     source_prefix: String,
     tsv: String,
 }
 
 #[derive(Clone)]
 struct ActivePopupEntry {
+    filesystem: Arc<[Candidate]>,
     prefix: String,
     tsv: String,
 }
@@ -229,6 +248,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
     tsv: &str,
+    filesystem: Vec<Candidate>,
 ) {
     let config = Config::load();
     let theme = config.theme();
@@ -248,6 +268,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         workers: Vec::new(),
     };
     let params = CompleteParams {
+        filesystem: filesystem.into(),
         prefix,
         cursor_row,
         cursor_col,
@@ -371,7 +392,11 @@ impl DaemonServer {
     /// Evicts the oldest entry when `CANDIDATE_CACHE_MAX_ENTRIES` is exceeded.
     /// Re-inserting an existing key moves it to the most-recent position.
     fn store_cached_tsv(&mut self, context_key: &str, source_prefix: String, tsv: String) {
-        let entry = CandidateCacheEntry { source_prefix, tsv };
+        let entry = CandidateCacheEntry {
+            source_prefix,
+            tsv,
+            filesystem: Arc::default(),
+        };
         if self.candidate_cache.contains_key(context_key) {
             self.candidate_cache.insert(context_key.to_string(), entry);
             self.touch_cached_key(context_key);
@@ -394,7 +419,11 @@ impl DaemonServer {
     }
 
     fn store_active_popup(&mut self, popup_key: &str, prefix: String, tsv: String) {
-        let entry = ActivePopupEntry { prefix, tsv };
+        let entry = ActivePopupEntry {
+            prefix,
+            tsv,
+            filesystem: Arc::default(),
+        };
         if self.active_popups.contains_key(popup_key) {
             self.active_popups.insert(popup_key.to_string(), entry);
             self.touch_active_popup_key(popup_key);
@@ -554,6 +583,7 @@ impl DaemonServer {
                 .entered();
                 let response = self.handle_render(
                     RenderParams {
+                        filesystem: Arc::default(),
                         prefix: prefix.clone(),
                         cursor_row,
                         cursor_col,
@@ -671,6 +701,7 @@ impl DaemonServer {
 
         match request {
             TextRequest::Render(TextRenderRequest {
+                filesystem,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -682,18 +713,34 @@ impl DaemonServer {
                 command_context,
                 candidates_present,
             }) => {
-                let (mut prefix, tsv_opt) =
+                let filesystem_requested = filesystem;
+                let mut file_candidates: Arc<[Candidate]> = if filesystem {
+                    match protocol::read_filesystem_query(reader) {
+                        Ok(query) => Arc::from(query.collect()),
+                        Err(error) => {
+                            let _ = writeln!(writer, "ERROR {error}");
+                            return false;
+                        }
+                    }
+                } else {
+                    Arc::default()
+                };
+                let (mut prefix, mut tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
                         Ok(v) => v,
                         Err(()) => return false,
                     };
 
+                if filesystem_requested && tsv_opt.is_none() {
+                    tsv_opt = Some(String::new());
+                }
                 // An explicit empty candidate set can still be completed from
                 // configured abbreviations. Do not conflate it with a cache-only
                 // request, which also has no TSV lines but leaves this flag unset.
                 if tsv_opt.is_none() && candidates_present {
                     let response = self.handle_render(
                         RenderParams {
+                            filesystem: file_candidates.clone(),
                             prefix: prefix.clone(),
                             cursor_row,
                             cursor_col,
@@ -712,6 +759,8 @@ impl DaemonServer {
                         } => {
                             if let Some(ref key) = popup_key {
                                 self.store_active_popup(key, prefix, String::new());
+                                self.active_popups.get_mut(key).unwrap().filesystem =
+                                    file_candidates.clone();
                             }
                             let meta = metadata.unwrap_or_default();
                             let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
@@ -738,6 +787,7 @@ impl DaemonServer {
                         None
                     };
                     if let Some(active_popup) = active_popup {
+                        file_candidates = active_popup.filesystem;
                         prefix = active_popup.prefix;
                         let cached_tsv = active_popup.tsv;
                         let _span = info_span!(
@@ -755,6 +805,7 @@ impl DaemonServer {
                         .entered();
                         let response = self.handle_render(
                             RenderParams {
+                                filesystem: file_candidates.clone(),
                                 prefix: prefix.clone(),
                                 cursor_row,
                                 cursor_col,
@@ -773,6 +824,8 @@ impl DaemonServer {
                             } => {
                                 if let Some(ref key) = popup_key {
                                     self.store_active_popup(key, prefix, cached_tsv.clone());
+                                    self.active_popups.get_mut(key).unwrap().filesystem =
+                                        file_candidates.clone();
                                 }
                                 let meta = metadata.unwrap_or_default();
                                 let _ =
@@ -789,6 +842,7 @@ impl DaemonServer {
                         }
                     } else if let Some(ref key) = context_key {
                         if let Some(cached_tsv) = self.get_cached_tsv(key, &prefix) {
+                            file_candidates = self.candidate_cache[key].filesystem.clone();
                             let _span = info_span!(
                                 "render",
                                 protocol = "text",
@@ -804,6 +858,7 @@ impl DaemonServer {
                             .entered();
                             let response = self.handle_render(
                                 RenderParams {
+                                    filesystem: file_candidates.clone(),
                                     prefix: prefix.clone(),
                                     cursor_row,
                                     cursor_col,
@@ -822,6 +877,8 @@ impl DaemonServer {
                                 } => {
                                     if let Some(ref key) = popup_key {
                                         self.store_active_popup(key, prefix, cached_tsv.clone());
+                                        self.active_popups.get_mut(key).unwrap().filesystem =
+                                            file_candidates.clone();
                                     }
                                     let meta = metadata.unwrap_or_default();
                                     let _ = protocol::write_text_ok(
@@ -856,6 +913,7 @@ impl DaemonServer {
                 // Update cache when context_key is provided with fresh TSV.
                 if let Some(ref key) = context_key {
                     self.store_cached_tsv(key, prefix.clone(), tsv.clone());
+                    self.candidate_cache.get_mut(key).unwrap().filesystem = file_candidates.clone();
                 }
 
                 let _span = info_span!(
@@ -873,6 +931,7 @@ impl DaemonServer {
                 .entered();
                 let response = self.handle_render(
                     RenderParams {
+                        filesystem: file_candidates.clone(),
                         prefix: prefix.clone(),
                         cursor_row,
                         cursor_col,
@@ -892,6 +951,8 @@ impl DaemonServer {
                     } => {
                         if let Some(ref key) = popup_key {
                             self.store_active_popup(key, prefix, tsv);
+                            self.active_popups.get_mut(key).unwrap().filesystem =
+                                file_candidates.clone();
                         }
                         let meta = metadata.unwrap_or_default();
                         let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
@@ -908,6 +969,7 @@ impl DaemonServer {
                 false
             }
             TextRequest::Complete(TextCompleteRequest {
+                filesystem,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -922,12 +984,27 @@ impl DaemonServer {
                 context_key,
                 popup_key,
             }) => {
-                let (mut prefix, tsv_opt) =
+                let filesystem_requested = filesystem;
+                let mut file_candidates: Arc<[Candidate]> = if filesystem {
+                    match protocol::read_filesystem_query(reader) {
+                        Ok(query) => Arc::from(query.collect()),
+                        Err(error) => {
+                            let _ = writeln!(writer, "ERROR {error}");
+                            return false;
+                        }
+                    }
+                } else {
+                    Arc::default()
+                };
+                let (mut prefix, mut tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "complete") {
                         Ok(v) => v,
                         Err(()) => return false,
                     };
 
+                if filesystem_requested && tsv_opt.is_none() {
+                    tsv_opt = Some(String::new());
+                }
                 // Cache-only request: resolve TSV from cache or report miss.
                 let tsv = match tsv_opt {
                     None => {
@@ -942,6 +1019,7 @@ impl DaemonServer {
                                                 popup_key = key.as_str(),
                                                 "complete popup cache hit"
                                             );
+                                            file_candidates = active_popup.filesystem;
                                             prefix = active_popup.prefix;
                                             active_popup.tsv
                                         }
@@ -967,6 +1045,8 @@ impl DaemonServer {
                                 let key = context_key.as_deref().unwrap();
                                 match self.get_cached_tsv(key, &prefix) {
                                     Some(cached) => {
+                                        file_candidates =
+                                            self.candidate_cache[key].filesystem.clone();
                                         debug!(context_key = key, "complete cache hit");
                                         cached
                                     }
@@ -983,6 +1063,8 @@ impl DaemonServer {
                     Some(tsv) => {
                         if let Some(ref key) = context_key {
                             self.store_cached_tsv(key, prefix.clone(), tsv.clone());
+                            self.candidate_cache.get_mut(key).unwrap().filesystem =
+                                file_candidates.clone();
                         }
                         tsv
                     }
@@ -1031,6 +1113,7 @@ impl DaemonServer {
                     workers: Vec::new(),
                 };
                 let params = CompleteParams {
+                    filesystem: file_candidates.clone(),
                     prefix,
                     cursor_row,
                     cursor_col,
@@ -1089,7 +1172,7 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=2 space_expansion={}",
+                    "OK enter_expansion={} edit_context=2 filesystem=1 space_expansion={}",
                     u8::from(self.config.expand_abbreviation_on_enter),
                     u8::from(self.config.expand_abbreviation_on_space)
                 );
@@ -1188,6 +1271,7 @@ impl DaemonServer {
 
     fn handle_render(&mut self, params: RenderParams, candidates_tsv: &[u8]) -> Response {
         let RenderParams {
+            filesystem,
             prefix,
             cursor_row,
             cursor_col,
@@ -1205,7 +1289,8 @@ impl DaemonServer {
             }
         };
 
-        let mut candidates = Candidate::parse_lines_dedup(tsv_str);
+        let mut candidates = filesystem.to_vec();
+        candidates.extend(Candidate::parse_lines_dedup(tsv_str));
 
         candidates.extend(
             self.config
@@ -1320,9 +1405,13 @@ impl DaemonServer {
         tsv: &str,
         command_position: bool,
         command_context: Option<&str>,
+        filesystem: Arc<[Candidate]>,
     ) -> Option<(App, Vec<u8>)> {
-        let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
-        let mut candidates = Candidate::parse_lines_dedup(tsv);
+        let literal_files_present = !filesystem.is_empty();
+        let native_candidates_present =
+            !filesystem.is_empty() || tsv.lines().any(|line| !line.is_empty());
+        let mut candidates = filesystem.to_vec();
+        candidates.extend(Candidate::parse_lines_dedup(tsv));
 
         candidates.extend(
             self.config
@@ -1354,7 +1443,7 @@ impl DaemonServer {
 
         // When auto_insert_unambiguous is disabled, keep filter_text at the typed
         // prefix so that cancel/passthrough paths never return an extended value.
-        if !self.config.auto_insert_unambiguous {
+        if !self.config.auto_insert_unambiguous || literal_files_present {
             app.reset_filter_to_prefix();
         }
 
@@ -1389,6 +1478,7 @@ impl DaemonServer {
         tsv: &str,
     ) {
         let CompleteParams {
+            filesystem,
             prefix,
             cursor_row,
             cursor_col,
@@ -1413,22 +1503,24 @@ impl DaemonServer {
             tsv,
             command_position,
             command_context.as_deref(),
+            filesystem,
         ) {
             Some(v) => v,
             None => return,
         };
 
-        let initial_common_prefix = self
-            .config
-            .auto_insert_unambiguous
-            .then(|| app.unambiguous_prefix().map(str::to_string))
-            .flatten();
+        let initial_common_prefix = (self.config.auto_insert_unambiguous
+            && !app.all_candidates.iter().any(|c| c.literal_path.is_some()))
+        .then(|| app.unambiguous_prefix().map(str::to_string))
+        .flatten();
 
         if accept_single && app.filtered_indices.len() == 1 {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
                     &ApplyResult {
+                        literal_path: candidate.literal_insertion_path(&self.config.suffixes),
+                        literal_suffix: candidate.literal_suffix(&self.config.suffixes, false),
                         cursor_offset: candidate.cursor_offset,
                         ..ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
                             &self.config.suffixes,
@@ -1489,6 +1581,8 @@ impl DaemonServer {
                                 selection_applied: false,
                                 restore_text: app.filter_text.clone(),
                                 cursor_offset: None,
+                                literal_path: None,
+                                literal_suffix: String::new(),
                             },
                         );
                         break;
@@ -1561,6 +1655,10 @@ impl DaemonServer {
                                     let _ = write_apply_result(
                                         writer,
                                         &ApplyResult {
+                                            literal_path: c
+                                                .literal_insertion_path(&self.config.suffixes),
+                                            literal_suffix: c
+                                                .literal_suffix(&self.config.suffixes, false),
                                             cursor_offset: c.cursor_offset,
                                             ..ApplyResult::confirm(
                                                 c.text_with_suffix_for_command_position(
@@ -1587,6 +1685,10 @@ impl DaemonServer {
                                         writer,
                                         &ApplyResult {
                                             selection_applied: true,
+                                            literal_path: c
+                                                .literal_insertion_path(&self.config.suffixes),
+                                            literal_suffix: c
+                                                .literal_suffix(&self.config.suffixes, true),
                                             cursor_offset: c.cursor_offset,
                                             ..ApplyResult::dismiss_with_space(
                                                 c.text_for_dismiss_with_space(
@@ -1634,6 +1736,8 @@ impl DaemonServer {
                                     selection_applied: false,
                                     restore_text: app.filter_text.clone(),
                                     cursor_offset: None,
+                                    literal_path: None,
+                                    literal_suffix: String::new(),
                                 },
                             );
                             break;
@@ -1923,6 +2027,7 @@ mod tests {
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn read_frame_bytes<R: BufRead>(reader: &mut R) -> (String, Vec<u8>) {
         let mut header = String::new();
@@ -2026,6 +2131,119 @@ mod tests {
         let mut output = Vec::new();
         client_stream.read_to_end(&mut output).unwrap();
         output
+    }
+
+    #[test]
+    fn filesystem_snapshots_are_request_local_and_survive_cache_reuse() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("same first"), "").unwrap();
+        std::fs::write(second.path().join("same second"), "").unwrap();
+        let mut server = test_server();
+        for (directory, key, expected) in [
+            (first.path(), "first", "same first"),
+            (second.path(), "second", "same second"),
+        ] {
+            let mut request = format!(
+                "render-files 2 1 100 24 context_key={key} popup_key={key} candidates_present=1\n"
+            )
+            .into_bytes();
+            crate::protocol::write_filesystem_query(
+                &mut request,
+                &crate::filesystem::FilesystemQuery {
+                    cwd: directory.into(),
+                    path_prefix: "same".into(),
+                    insertion_prefix: "same".into(),
+                },
+            )
+            .unwrap();
+            request.extend_from_slice(b"same\nEND\n");
+            let output = run_text_request(&mut server, request);
+            assert!(
+                output.starts_with(b"OK "),
+                "{:?}",
+                String::from_utf8_lossy(&output)
+            );
+            assert_eq!(
+                server.candidate_cache[key].filesystem[0]
+                    .literal_path
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        std::fs::remove_file(first.path().join("same first")).unwrap();
+        // The stored snapshot must remain available without enumerating the now-empty directory.
+        let cached = run_text_request(
+            &mut server,
+            text_request_input(
+                "complete 2 1 100 24 context_key=first accept_single=1",
+                "same",
+                None,
+            ),
+        );
+        let result = read_text_complete_result(&cached);
+        assert_eq!(result.literal_path.as_deref(), Some("same first"));
+        let active = run_text_request(
+            &mut server,
+            text_request_input(
+                "complete 2 1 100 24 popup_key=second accept_single=1",
+                "same",
+                None,
+            ),
+        );
+        assert_eq!(
+            read_text_complete_result(&active).literal_path.as_deref(),
+            Some("same second")
+        );
+        for worker in server.workers.drain(..) {
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn filesystem_single_selection_carries_literal_path() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("space name"), "").unwrap();
+        let files = crate::filesystem::FilesystemQuery {
+            cwd: temp.path().into(),
+            path_prefix: "space".into(),
+            insertion_prefix: "space".into(),
+        }
+        .collect();
+        assert_eq!(files.len(), 1);
+        let mut server = DaemonServer::new(PathBuf::new());
+        let mut output = Vec::new();
+        server.handle_complete(
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            &mut output,
+            CompleteParams {
+                filesystem: files.into(),
+                prefix: "space".into(),
+                cursor_row: 2,
+                cursor_col: 1,
+                term_cols: 100,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                command_context: None,
+                accept_single: true,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "",
+        );
+        let mut reader = std::io::Cursor::new(output.clone());
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        let result = TextCompleteResult::read_from(&mut reader, header.trim_end());
+        assert!(
+            result.is_ok(),
+            "{:?}: {:?}",
+            String::from_utf8(output),
+            result
+        );
+        assert_eq!(result.unwrap().literal_path.as_deref(), Some("space name"));
     }
 
     #[test]
@@ -2335,6 +2553,7 @@ mod tests {
                 "gs\t\tcommand\n",
                 true,
                 None,
+                Arc::default(),
             )
             .unwrap();
         assert_eq!(app.selected_candidate().unwrap().kind, "command");
@@ -2467,6 +2686,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: prefix.to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2519,6 +2739,7 @@ mod tests {
         // Candidates exist but prefix "zzz" matches none after fuzzy filter
         let response = server.handle_render(
             RenderParams {
+                filesystem: Arc::default(),
                 prefix: "zzz".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2543,6 +2764,7 @@ mod tests {
         let mut server = test_server();
         let response = server.handle_render(
             RenderParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2574,6 +2796,7 @@ mod tests {
             server.config.auto_insert_unambiguous = auto_insert;
             let response = server.handle_render(
                 RenderParams {
+                    filesystem: Arc::default(),
                     prefix: "gi".to_string(),
                     cursor_row: 5,
                     cursor_col: 2,
@@ -2612,6 +2835,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                literal_path: None,
             }],
             "g".to_string(),
             5,
@@ -2640,6 +2864,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2670,6 +2895,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2697,6 +2923,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2725,6 +2952,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2763,6 +2991,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "g".to_string(),
                 cursor_row: 3,
                 cursor_col: 35,
@@ -2797,6 +3026,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "g".to_string(),
                 cursor_row: 5,
                 cursor_col: 35,
@@ -2838,6 +3068,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2875,6 +3106,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2914,6 +3146,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2943,6 +3176,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "g".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -2975,6 +3209,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3012,6 +3247,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3055,6 +3291,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3104,6 +3341,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: prefix.to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3152,6 +3390,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "ca".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3189,6 +3428,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "ca".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3233,6 +3473,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "null".to_string(),
                 cursor_row: 5,
                 cursor_col: 12,
@@ -3266,6 +3507,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gcm".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3311,6 +3553,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "null".to_string(),
                 cursor_row: 5,
                 cursor_col: 12,
@@ -3356,6 +3599,7 @@ mod tests {
                 &mut reader,
                 &mut writer,
                 CompleteParams {
+                    filesystem: Arc::default(),
                     prefix: "null".to_string(),
                     cursor_row: 5,
                     cursor_col: 12,
@@ -3391,6 +3635,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "missing".to_string(),
                 cursor_row: 5,
                 cursor_col: 12,
@@ -3424,6 +3669,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gcm".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3464,6 +3710,7 @@ mod tests {
 
         let response = server.handle_render(
             RenderParams {
+                filesystem: Arc::default(),
                 prefix: "gs".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3508,6 +3755,7 @@ mod tests {
 
         let response = server.handle_render(
             RenderParams {
+                filesystem: Arc::default(),
                 prefix: String::new(),
                 cursor_row: 5,
                 cursor_col: 12,
@@ -3576,6 +3824,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3617,6 +3866,7 @@ mod tests {
             &mut reader,
             &mut writer,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3662,6 +3912,7 @@ mod tests {
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
+                filesystem: Arc::default(),
                 prefix: "gi".to_string(),
                 cursor_row: 5,
                 cursor_col: 2,
@@ -3876,6 +4127,7 @@ mod tests {
         );
 
         let request = TextCompleteRequest {
+            filesystem: false,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -3914,6 +4166,7 @@ mod tests {
         );
 
         let request = TextCompleteRequest {
+            filesystem: false,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,

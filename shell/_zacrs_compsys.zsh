@@ -98,6 +98,7 @@ _zacrs_compsys_func() {
         _zacrs_abbreviation_context_func
         return 0
     fi
+    (( ${+functions[_zacrs_filesystem_context]} )) && _zacrs_filesystem_context || :
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
     typeset -gi _zacrs_ctx_valid=0

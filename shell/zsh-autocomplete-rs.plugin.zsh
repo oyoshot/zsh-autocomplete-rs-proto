@@ -43,7 +43,9 @@ _zacrs_restore_self_insert() {
     _zacrs_self_insert_wrapped=0
 }
 
-typeset -g _zacrs_prev_lbuffer=""
+typeset -g _zacrs_prev_lbuffer="" _zacrs_prev_buffer=""
+typeset -gi _zacrs_prev_cursor=0
+typeset -g _zacrs_prev_home="${HOME:-}"
 typeset -g _zacrs_suppressed=0
 typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
@@ -56,7 +58,8 @@ typeset -g _zacrs_daemon_available=0
 typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
-typeset -g _zacrs_popup_snapshot_lbuffer=""
+typeset -g _zacrs_popup_snapshot_lbuffer="" _zacrs_popup_snapshot_buffer=""
+typeset -gi _zacrs_popup_snapshot_cursor=0
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -gi _zacrs_popup_snapshot_columns=0
 typeset -gi _zacrs_popup_snapshot_lines=0
@@ -77,6 +80,7 @@ typeset -gi _zacrs_enter_expansion=0
 typeset -gi _zacrs_space_enabled=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
+typeset -gi _zacrs_filesystem_requested=0
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
 
 _zacrs_invalidate_candidate_cache() {
@@ -89,6 +93,10 @@ typeset -gi _zacrs_parsed_tty_len=0
 typeset -gi _zacrs_send_render_fd=0
 
 _zacrs_reset_popup_snapshot() {
+    _zacrs_popup_snapshot_cwd=""
+    _zacrs_popup_snapshot_home=""
+    _zacrs_popup_snapshot_buffer=""
+    _zacrs_popup_snapshot_cursor=0
     _zacrs_popup_snapshot_lbuffer=""
     _zacrs_popup_snapshot_prefix_len=0
     _zacrs_popup_snapshot_columns=0
@@ -164,6 +172,10 @@ _zacrs_end_popup_session() {
 
 _zacrs_record_popup_snapshot() {
     local prefix_len="$1"
+    _zacrs_popup_snapshot_cwd="$PWD"
+    _zacrs_popup_snapshot_home="${HOME:-}"
+    _zacrs_popup_snapshot_buffer="$BUFFER"
+    _zacrs_popup_snapshot_cursor=$CURSOR
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
     _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_columns=$COLUMNS
@@ -322,7 +334,13 @@ _zacrs_daemon_send_render() {
     (( _cands_present )) && render_cmd+=" candidates_present=1"
     render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
-    print -u $fd -- "$render_cmd"
+    if (( _cands_present && _zacrs_filesystem_requested )); then
+        render_cmd="render-files ${render_cmd#render }"
+    fi
+    print -r -u $fd -- "$render_cmd"
+    if (( _cands_present && _zacrs_filesystem_requested )); then
+        _zacrs_write_filesystem_query $fd
+    fi
     printf '%s\n' "$_pfx" >&$fd
     if [[ -n "$_cands" ]]; then
         printf '%s\n' "$_cands" >&$fd
@@ -457,6 +475,9 @@ _zacrs_render() {
     (( is_cmd_pos )) && render_args+=(--command-position)
     [[ -n "$command_context" ]] && render_args+=(--command-context "$command_context")
     [[ -n "$selected" ]] && render_args+=(--selected "$selected")
+    local -a reply
+    _zacrs_filesystem_args
+    render_args+=("${reply[@]}")
     local output
     output=$(printf '%s' "$candidates_str" | "$ZACRS_BIN" "${render_args[@]}")
     local exit_code=$?
@@ -494,14 +515,6 @@ _zacrs_clear_popup() {
 
 # === Apply completion result to LBUFFER ===
 
-_zacrs_read_done_response() {
-    local fd="$1" header="$2"
-    _zacrs_parse_done_line "$header"
-    local apply_line=""
-    IFS= read -r -u $fd apply_line || apply_line=""
-    _zacrs_parse_apply_line "$apply_line"
-}
-
 _zacrs_finish_popup_session() {
     _zacrs_popup_visible=0
     _zacrs_popup_row=0
@@ -518,6 +531,9 @@ _zacrs_line_init() {
     _zacrs_finish_popup_session
     _zacrs_end_popup_session
     _zacrs_prev_lbuffer=""
+    _zacrs_prev_buffer=""
+    _zacrs_prev_cursor=0
+    _zacrs_prev_home="${HOME:-}"
     _zacrs_suppressed=0
     _zacrs_reset_cache
 }
@@ -525,6 +541,9 @@ _zacrs_line_init() {
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local selection_applied="${7:-0}"
+    if [[ "${literal_path_known:-0}" == 1 && "$result_code" == (0|2) ]]; then
+        result_text="${(q)literal_path}${literal_suffix}"
+    fi
     local base
     local new_lbuffer="$LBUFFER"
     if (( prefix_len > 0 )); then
@@ -555,6 +574,9 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
+    _zacrs_prev_buffer="$BUFFER"
+    _zacrs_prev_cursor=${#new_lbuffer}
+    _zacrs_prev_home="${HOME:-}"
     if (( _zacrs_edit_transport_state > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
         _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
@@ -620,6 +642,10 @@ _zacrs_invoke_daemon() {
     (( reuse_visible )) && complete_args+=(--reuse-token 1)
     [[ -n "$context_key" ]] && complete_args+=(--context-key "$context_key")
 
+    local -a reply
+    reply=()
+    (( candidates_present )) && _zacrs_filesystem_args
+    complete_args+=("${reply[@]}")
     local output
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
@@ -635,18 +661,19 @@ _zacrs_invoke_daemon() {
 
     local -a lines
     lines=("${(@f)output}")
-    if [[ "${lines[1]}" == "CACHE_MISS" ]]; then
+    if [[ "${lines[1]:-}" == "CACHE_MISS" ]]; then
         return 2
     fi
-    if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
+    if [[ "${lines[1]:-}" != DONE* || "${lines[2]:-}" != APPLY* ]]; then
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
-        return 1
+        return 5
     fi
 
+    local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
-    _zacrs_parse_done_line "${lines[1]}"
+    _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
+    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
     (( result_code == 4 )) && return 4
-    _zacrs_parse_apply_line "${lines[2]}"
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
@@ -691,6 +718,9 @@ _zacrs_invoke() {
         complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
     fi
 
+    local -a reply
+    _zacrs_filesystem_args
+    complete_args+=("${reply[@]}")
     local output
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
@@ -705,14 +735,15 @@ _zacrs_invoke() {
 
     local -a lines
     lines=("${(@f)output}")
-    if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
-        return 1
+    if [[ "${lines[1]:-}" != DONE* || "${lines[2]:-}" != APPLY* ]]; then
+        return 5
     fi
 
+    local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
-    _zacrs_parse_done_line "${lines[1]}"
+    _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
     (( result_code == 4 )) && return 1
-    _zacrs_parse_apply_line "${lines[2]}"
+    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
@@ -730,6 +761,8 @@ _zacrs_encode_hex_input() {
 # Caller must declare: local prefix prefix_len candidates_str
 # (zsh dynamic scoping lets us write to these from here)
 _zacrs_collect_candidates() {
+    _zacrs_filesystem_requested=0
+    _zacrs_filesystem_valid=0
     _zacrs_captured=()
     local _zacrs_fd2
     exec {_zacrs_fd2}>&2
@@ -748,8 +781,14 @@ _zacrs_collect_candidates() {
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
     if [[ -z "$candidates_str" ]]; then
-        candidates_str="$(_zacrs_gather "$LBUFFER")"
-        if [[ -n "$candidates_str" ]]; then
+        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "${_zacrs_filesystem_home:-}" == "${HOME:-}" ]]; then
+            _zacrs_filesystem_requested=1
+            prefix="$_zacrs_filesystem_prefix"
+            prefix_len=${#_zacrs_filesystem_prefix}
+        else
+            candidates_str="$(_zacrs_gather "$LBUFFER")"
+        fi
+        if [[ -n "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
             prefix="${LBUFFER##* }"
             prefix_len=${#prefix}
         fi
@@ -768,13 +807,13 @@ _zacrs_complete_popup() {
     local reuse_visible=0
     local naive_prefix="${LBUFFER##* }"
     _zacrs_current_context_key
-    local context_key="$REPLY"
+    local context_key="$REPLY" context_home="${HOME:-}"
 
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
 
     if (( _zacrs_popup_visible )) \
-        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" && $_zacrs_popup_snapshot_cursor == $CURSOR && "${_zacrs_popup_snapshot_cwd:-}" == "$PWD" && "${_zacrs_popup_snapshot_home:-}" == "${HOME:-}" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
         && (( _zacrs_popup_snapshot_lines == LINES )); then
         reuse_visible=1
@@ -787,6 +826,11 @@ _zacrs_complete_popup() {
         _zacrs_collect_candidates
     fi
 
+    if [[ "$context_home" != "${HOME:-}" ]]; then
+        _zacrs_current_context_key
+        context_key="$REPLY"
+        context_home="${HOME:-}"
+    fi
     _zacrs_suppressed=0
 
     # Try daemon path first, fall back to subprocess
@@ -796,25 +840,40 @@ _zacrs_complete_popup() {
         local daemon_rc=$?
         if (( daemon_rc == 0 )); then
             return
+        elif (( daemon_rc == 5 )); then
+            _zacrs_clear_popup
+            return
         elif (( daemon_rc == 4 )); then
             _zacrs_clear_popup
             zle expand-or-complete
             return
         elif (( daemon_rc == 2 )); then
             _zacrs_collect_candidates
+            if [[ "$context_home" != "${HOME:-}" ]]; then
+                _zacrs_current_context_key
+                context_key="$REPLY"
+                context_home="${HOME:-}"
+            fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
-                "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1 && return
+                "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1
+            local retry_rc=$?
+            (( retry_rc == 0 )) && return
+            if (( retry_rc == 5 )); then
+                _zacrs_clear_popup
+                return
+            fi
         fi
     fi
-    if [[ -z "$candidates_str" ]]; then
+    if [[ -z "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
         _zacrs_collect_candidates
     fi
     if (( ! reuse_visible )); then
         _zacrs_clear_popup
     fi
     _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" "$cursor_row" "$cursor_col" 1 || {
+        local _invoke_rc=$?
         _zacrs_clear_popup
-        zle expand-or-complete
+        (( _invoke_rc == 5 )) || zle expand-or-complete
     }
 }
 
@@ -825,8 +884,8 @@ _zacrs_line_pre_redraw() {
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && ! _zacrs_space_enabled && PENDING == 0 )) && _zacrs_restore_self_insert
 
-    # LBUFFER が変わってなければスキップ
-    if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" ]]; then
+    # Context depends on both sides of the cursor.
+    if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" || "$BUFFER" != "$_zacrs_prev_buffer" || $CURSOR != $_zacrs_prev_cursor || "${HOME:-}" != "$_zacrs_prev_home" ]]; then
         # Defer popup clear — _zacrs_render will do selective clear to avoid flicker.
         # Just invalidate the snapshot so Tab reuse check uses fresh data.
         _zacrs_reset_popup_snapshot
@@ -846,6 +905,9 @@ _zacrs_line_pre_redraw() {
     _zacrs_redraw_deferred=0
 
     _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_prev_buffer="$BUFFER"
+    _zacrs_prev_cursor=$CURSOR
+    _zacrs_prev_home="${HOME:-}"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }
@@ -863,7 +925,7 @@ _zacrs_line_pre_redraw() {
     # context_key は引数位置で設定する。ZLE 編集セッションの世代により
     # コマンド実行後の外部状態変化を古い候補キャッシュへ持ち越さない。
     _zacrs_current_context_key
-    local context_key="$REPLY"
+    local context_key="$REPLY" context_home="${HOME:-}"
 
     # 候補収集変数
     local candidates_str="" from_gather=0
@@ -926,6 +988,8 @@ _zacrs_line_pre_redraw() {
         # _cache_rc == 2: daemon unavailable → heavy path へ
     fi
 
+    _zacrs_filesystem_requested=0
+    _zacrs_filesystem_valid=0
     # Heavy path: compsys + gather (no cache available). The PENDING guards
     # above and below are the debounce: unlike a timestamp-only delay, they
     # guarantee that the final keypress still gets a render pass.
@@ -961,8 +1025,14 @@ _zacrs_line_pre_redraw() {
     fi
     _zacrs_chain_retry=0
     if [[ -z "$candidates_str" ]]; then
-        candidates_str="$(_zacrs_gather "$LBUFFER")"
-        if [[ -n "$candidates_str" ]]; then
+        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "${_zacrs_filesystem_home:-}" == "${HOME:-}" ]]; then
+            _zacrs_filesystem_requested=1
+            prefix="$_zacrs_filesystem_prefix"
+            prefix_len=${#_zacrs_filesystem_prefix}
+        else
+            candidates_str="$(_zacrs_gather "$LBUFFER")"
+        fi
+        if [[ -n "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
             prefix="$naive_prefix"
             prefix_len=${#naive_prefix}
             from_gather=1
@@ -994,6 +1064,16 @@ _zacrs_line_pre_redraw() {
         return
     fi
 
+    # A native retry may establish a valid query in a changed HOME. Keep that
+    # snapshot under the environment actually used, never the pre-collection key.
+    if [[ "$context_home" != "${HOME:-}" ]]; then
+        _zacrs_current_context_key
+        context_key="$REPLY"
+        context_home="${HOME:-}"
+        if (( _zacrs_filesystem_requested )); then
+            _zacrs_prev_home="$context_home"
+        fi
+    fi
     # 候補あり: デーモンのキャッシュを更新しながら render
     _zacrs_render "$prefix" "$prefix_len" "$candidates_str" "$from_gather" "" "$context_key"
 }
@@ -1010,6 +1090,9 @@ _zacrs_accept_line() {
         fi
     fi
     _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_prev_buffer="$BUFFER"
+    _zacrs_prev_cursor=$CURSOR
+    _zacrs_prev_home="${HOME:-}"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
     zle reset-prompt
@@ -1044,7 +1127,7 @@ TRAPWINCH() {
     # cursor_row/cursor_col stale; in that case fall through to clear+reset
     # and let the next ZLE event render a fresh popup with correct geometry.
     if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
-        && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
+        && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" && $_zacrs_popup_snapshot_cursor == $CURSOR && "${_zacrs_popup_snapshot_cwd:-}" == "$PWD" && "${_zacrs_popup_snapshot_home:-}" == "${HOME:-}" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
         local _resize_prefix="${LBUFFER##* }" _resize_cmd_pos=0 _resize_context=""
         if _zacrs_command_context "$LBUFFER"; then

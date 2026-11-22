@@ -563,6 +563,7 @@ mod tests {
     fn popup_rows_fit_width_with_padding_and_truncated_unicode() {
         for cols in [4, 8, 20, 80] {
             let candidates = vec![Candidate {
+                literal_path: None,
                 text: "日本語の長いファイル名.txt".into(),
                 description: "長い説明文です".into(),
                 kind: String::new(),
@@ -593,6 +594,7 @@ mod tests {
         for cols in [8, 20, 80] {
             let candidates = (0..42)
                 .map(|i| Candidate {
+                    literal_path: None,
                     text: format!("item-{i:02}"),
                     description: String::new(),
                     kind: String::new(),
@@ -723,6 +725,7 @@ mod tests {
     #[test]
     fn layout_no_description() {
         let c = Candidate {
+            literal_path: None,
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),
@@ -738,6 +741,7 @@ mod tests {
     #[test]
     fn layout_with_description() {
         let c = Candidate {
+            literal_path: None,
             text: "git".to_string(),
             description: "command".to_string(),
             kind: String::new(),
@@ -756,6 +760,7 @@ mod tests {
     fn draw_to_bytes_produces_output() {
         let candidates = vec![
             Candidate {
+                literal_path: None,
                 text: "git".to_string(),
                 description: "command".to_string(),
                 kind: "command".to_string(),
@@ -763,6 +768,7 @@ mod tests {
                 cursor_offset: None,
             },
             Candidate {
+                literal_path: None,
                 text: "grep".to_string(),
                 description: "command".to_string(),
                 kind: "command".to_string(),
@@ -782,6 +788,7 @@ mod tests {
     #[test]
     fn clear_to_bytes_produces_output() {
         let candidates = vec![Candidate {
+            literal_path: None,
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),
@@ -798,6 +805,7 @@ mod tests {
     #[test]
     fn render_popup_to_bytes_handles_zero_sized_terminal_input() {
         let candidates = vec![Candidate {
+            literal_path: None,
             text: "git".to_string(),
             description: String::new(),
             kind: String::new(),

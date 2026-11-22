@@ -1,3 +1,4 @@
+use crate::filesystem::FilesystemQuery;
 use std::io::{self, BufRead, Read, Write};
 
 // Command bytes
@@ -50,6 +51,7 @@ pub enum Response {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextRenderRequest {
+    pub filesystem: bool,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -64,6 +66,7 @@ pub struct TextRenderRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextCompleteRequest {
+    pub filesystem: bool,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -112,6 +115,8 @@ pub struct TextFrameHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextCompleteResult {
+    pub literal_path: Option<String>,
+    pub literal_suffix: String,
     pub code: u8,
     pub text: String,
     pub chain: bool,
@@ -548,6 +553,17 @@ pub fn read_abbreviation_fields(
 
 impl TextRequest {
     pub fn parse_header(line: &str) -> Option<Self> {
+        // Dedicated verbs make older daemons reject structured bodies safely.
+        let expanded;
+        let line = if let Some(rest) = line.strip_prefix("render-files ") {
+            expanded = format!("render {rest} filesystem=1");
+            &expanded
+        } else if let Some(rest) = line.strip_prefix("complete-files ") {
+            expanded = format!("complete {rest} filesystem=1");
+            &expanded
+        } else {
+            line
+        };
         let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
             ["ping", "shell"] => Some(Self::ShellPing),
@@ -590,6 +606,7 @@ impl TextRequest {
                     }
                 }
                 Some(Self::Render(TextRenderRequest {
+                    filesystem: rest.contains(&"filesystem=1"),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -645,6 +662,7 @@ impl TextRequest {
                     }
                 }
                 Some(Self::Complete(TextCompleteRequest {
+                    filesystem: rest.contains(&"filesystem=1"),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -705,9 +723,20 @@ impl TextSessionRequest {
 impl TextCompleteRequest {
     pub fn header_line(&self) -> String {
         let mut line = format!(
-            "complete {} {} {} {}",
-            self.cursor_row, self.cursor_col, self.term_cols, self.term_rows
+            "{} {} {} {} {}",
+            if self.filesystem {
+                "complete-files"
+            } else {
+                "complete"
+            },
+            self.cursor_row,
+            self.cursor_col,
+            self.term_cols,
+            self.term_rows
         );
+        if self.filesystem {
+            line.push_str(" filesystem=1");
+        }
         if let Some((row, height)) = self.prev_popup {
             line.push_str(&format!(" prev_popup_row={row} prev_popup_height={height}"));
         }
@@ -812,6 +841,14 @@ impl TextCompleteResult {
             if self.chain { 1 } else { 0 },
             if self.execute { 1 } else { 0 },
         )?;
+        if let Some(path) = &self.literal_path {
+            write!(
+                writer,
+                " path_hex={} suffix_hex={}",
+                encode_hex_bytes(path.as_bytes()),
+                encode_hex_bytes(self.literal_suffix.as_bytes())
+            )?;
+        }
         if self.insert_trigger {
             write!(writer, " insert_trigger=1")?;
         }
@@ -872,13 +909,19 @@ impl TextCompleteResult {
                 (apply_fields, String::new())
             };
 
+        let mut literal_path = None;
+        let mut literal_suffix = String::new();
         let mut chain = false;
         let mut execute = false;
         let mut selection_applied = false;
         let mut cursor_offset = None;
         let mut insert_trigger = false;
         for token in flag_fields.split_whitespace() {
-            if let Some(value) = token.strip_prefix("chain=") {
+            if let Some(value) = token.strip_prefix("path_hex=") {
+                literal_path = Some(decode_text_hex(value, "path_hex")?);
+            } else if let Some(value) = token.strip_prefix("suffix_hex=") {
+                literal_suffix = decode_text_hex(value, "suffix_hex")?;
+            } else if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
             } else if let Some(value) = token.strip_prefix("execute=") {
                 execute = value == "1";
@@ -894,6 +937,8 @@ impl TextCompleteResult {
         }
 
         Ok(Self {
+            literal_path,
+            literal_suffix,
             code,
             text,
             chain,
@@ -945,9 +990,112 @@ pub fn socket_path() -> std::path::PathBuf {
     }
 }
 
+/// Length-framed UTF-8 fields keep paths independent of line/TSV delimiters.
+pub fn write_filesystem_query(mut writer: impl Write, query: &FilesystemQuery) -> io::Result<()> {
+    let cwd = query
+        .cwd
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "non-UTF-8 cwd"))?;
+    for field in [
+        cwd,
+        query.path_prefix.as_str(),
+        query.insertion_prefix.as_str(),
+    ] {
+        writeln!(writer, "{}", field.len())?;
+        writer.write_all(field.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    Ok(())
+}
+pub fn read_filesystem_query(reader: &mut impl BufRead) -> io::Result<FilesystemQuery> {
+    let mut fields = Vec::new();
+    for _ in 0..3 {
+        let mut length = String::new();
+        reader.read_line(&mut length)?;
+        let length: usize = length.trim_end().parse().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid filesystem field length",
+            )
+        })?;
+        if length > 65536 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "filesystem field too long",
+            ));
+        }
+        let mut bytes = vec![0; length];
+        reader.read_exact(&mut bytes)?;
+        let mut separator = [0];
+        reader.read_exact(&mut separator)?;
+        if separator != *b"\n" || bytes.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid filesystem field",
+            ));
+        }
+        fields.push(
+            String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+    }
+    let insertion_prefix = fields.pop().unwrap();
+    let path_prefix = fields.pop().unwrap();
+    let cwd = fields.pop().unwrap().into();
+    let query = FilesystemQuery {
+        cwd,
+        path_prefix,
+        insertion_prefix,
+    };
+    if !query.cwd.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "relative filesystem cwd",
+        ));
+    }
+    Ok(query)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filesystem_fields_preserve_delimiters_and_reject_invalid_frames() {
+        let query = crate::filesystem::FilesystemQuery {
+            cwd: "/tmp/with\nnewline".into(),
+            path_prefix: "tab\tand\nline".into(),
+            insertion_prefix: "literal\nname".into(),
+        };
+        let mut bytes = Vec::new();
+        write_filesystem_query(&mut bytes, &query).unwrap();
+        assert_eq!(
+            read_filesystem_query(&mut std::io::Cursor::new(bytes)).unwrap(),
+            query
+        );
+        for invalid in [
+            b"65537\n".as_slice(),
+            b"bad\n",
+            b"3\nabc!",
+            b"1\n\xff\n",
+            b"1\n\0\n",
+        ] {
+            assert!(read_filesystem_query(&mut std::io::Cursor::new(invalid)).is_err());
+        }
+        assert!(matches!(
+            TextRequest::parse_header("render-files 2 1 80 24"),
+            Some(TextRequest::Render(TextRenderRequest {
+                filesystem: true,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            TextRequest::parse_header("complete-files 2 1 80 24"),
+            Some(TextRequest::Complete(TextCompleteRequest {
+                filesystem: true,
+                ..
+            }))
+        ));
+    }
 
     #[test]
     fn edit_context_contract_validates_capability_and_ranges() {
@@ -1286,6 +1434,7 @@ mod tests {
     #[test]
     fn text_complete_request_header_roundtrip() {
         let request = TextCompleteRequest {
+            filesystem: false,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -1314,6 +1463,7 @@ mod tests {
         assert_eq!(
             parsed,
             TextRequest::Render(TextRenderRequest {
+                filesystem: false,
                 cursor_row: 5,
                 cursor_col: 2,
                 term_cols: 80,
@@ -1361,6 +1511,8 @@ mod tests {
     #[test]
     fn text_complete_result_roundtrip() {
         let result = TextCompleteResult {
+            literal_path: None,
+            literal_suffix: String::new(),
             insert_trigger: true,
             code: 2,
             text: "cargo ".to_string(),
@@ -1388,6 +1540,8 @@ mod tests {
     #[test]
     fn text_complete_result_roundtrip_preserves_multiline_text() {
         let result = TextCompleteResult {
+            literal_path: None,
+            literal_suffix: String::new(),
             insert_trigger: false,
             code: 0,
             text: "printf 'first\nsecond'\n".to_string(),
@@ -1417,6 +1571,8 @@ mod tests {
     #[test]
     fn text_complete_result_write_to_hex_encodes_restore_text() {
         let result = TextCompleteResult {
+            literal_path: None,
+            literal_suffix: String::new(),
             insert_trigger: false,
             code: 1,
             text: String::new(),

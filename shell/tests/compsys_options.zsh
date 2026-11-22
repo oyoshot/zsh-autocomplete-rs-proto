@@ -79,7 +79,7 @@ assert_render_gate 1 '' 'git gpo' gpo 'argument position reaches configured abbr
 assert_render_gate 1 $'git\tcommand\tcommand' 'git gpo' gpo 'shell candidates render in argument position'
 
 assert_command_context() {
-    local expected=$1 buffer=$2 description=$3
+    local expected=$1 buffer=$2 description=$3 HOME=/test/home
     local actual=""
     if _zacrs_command_context "$buffer"; then
         actual="$REPLY"
@@ -111,7 +111,7 @@ _zacrs_command_context 'echo ok |& cargo'
 }
 
 assert_context_key() {
-    local expected=$1 buffer=$2 description=$3
+    local expected=$1 buffer=$2 description=$3 HOME=/test/home
     LBUFFER="$buffer"
     _zacrs_current_context_key
     if [[ "$REPLY" != "$expected" ]]; then
@@ -129,7 +129,7 @@ encoded_pwd="${encoded_pwd// /%20}"
 typeset -gi _zacrs_candidate_cache_generation=42
 assert_context_key '' 'git' 'command position has no candidate cache key'
 assert_context_key \
-    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20" \
+    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20:19::/test/home" \
     'git add:foo%bar baz' \
     'candidate cache key includes command generation and encoded context'
 

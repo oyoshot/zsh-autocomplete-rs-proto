@@ -20,6 +20,7 @@ fn write_done_result(writer: impl Write, result: &TextCompleteResult) -> io::Res
 }
 
 struct CompleteCommand {
+    filesystem: Option<zsh_autocomplete_rs::filesystem::FilesystemQuery>,
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
@@ -41,6 +42,7 @@ struct CompleteCommand {
 
 fn run_complete(command: CompleteCommand) -> io::Result<()> {
     let CompleteCommand {
+        filesystem,
         prefix,
         cursor_row,
         cursor_col,
@@ -82,6 +84,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             reuse_token.as_deref(),
             context_key.as_deref(),
             popup_key.as_deref(),
+            filesystem.as_ref(),
         ) {
             Ok(client::CompleteSessionOutcome::Done(result)) => {
                 write_done_result(&mut writer, &result)?
@@ -95,6 +98,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         return Ok(());
     }
 
+    let files = filesystem.map(|query| query.collect()).unwrap_or_default();
     let stdout = io::stdout();
     let mut stdout_writer = BufWriter::new(stdout.lock());
     let (server_stream, client_stream) = UnixStream::pair()?;
@@ -123,6 +127,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             prev_popup_row,
             prev_popup_height,
             &tsv_for_thread,
+            files,
         );
     });
     let mut session_reader = io::BufReader::new(client_stream.try_clone()?);
@@ -146,15 +151,26 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     Ok(())
 }
 
-fn run_render(
+struct RenderCommand {
+    filesystem: Option<zsh_autocomplete_rs::filesystem::FilesystemQuery>,
     prefix: String,
     cursor_row: u16,
     cursor_col: u16,
     selected: Option<usize>,
     command_position: bool,
     command_context: Option<String>,
-    config: &config::Config,
-) -> io::Result<i32> {
+}
+
+fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32> {
+    let RenderCommand {
+        filesystem,
+        prefix,
+        cursor_row,
+        cursor_col,
+        selected,
+        command_position,
+        command_context,
+    } = command;
     // Read raw stdin before trying daemon (we need it for both paths)
     let raw_stdin: Vec<u8> = {
         let mut buf = Vec::new();
@@ -163,15 +179,17 @@ fn run_render(
     };
 
     // Try daemon first
-    if let Ok(resp) = client::try_daemon_render(
-        &prefix,
-        cursor_row,
-        cursor_col,
-        selected,
-        command_position,
-        command_context.as_deref(),
-        &raw_stdin,
-    ) {
+    if filesystem.is_none()
+        && let Ok(resp) = client::try_daemon_render(
+            &prefix,
+            cursor_row,
+            cursor_col,
+            selected,
+            command_position,
+            command_context.as_deref(),
+            &raw_stdin,
+        )
+    {
         let mut tty = tty::open_tty_write()?;
         tty.write_all(&resp.tty_bytes)?;
         tty.flush()?;
@@ -180,10 +198,10 @@ fn run_render(
         }
         return Ok(0);
     }
-
     // Fallback: direct execution
     let mut candidates =
         Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
+    candidates.extend(filesystem.map(|query| query.collect()).unwrap_or_default());
     candidates.extend(
         config
             .abbreviations
@@ -266,6 +284,7 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Complete {
+            filesystem,
             prefix,
             cursor_row,
             cursor_col,
@@ -284,6 +303,10 @@ fn main() {
             cols,
             rows,
         } => match run_complete(CompleteCommand {
+            filesystem: filesystem.query().unwrap_or_else(|e| {
+                eprintln!("{e}");
+                process::exit(1)
+            }),
             prefix,
             cursor_row,
             cursor_col,
@@ -314,6 +337,7 @@ fn main() {
             }
         },
         Command::Render {
+            filesystem,
             prefix,
             cursor_row,
             cursor_col,
@@ -323,12 +347,18 @@ fn main() {
         } => {
             let cfg = config::Config::load();
             match run_render(
-                prefix,
-                cursor_row,
-                cursor_col,
-                selected,
-                command_position,
-                command_context,
+                RenderCommand {
+                    filesystem: filesystem.query().unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        process::exit(1)
+                    }),
+                    prefix,
+                    cursor_row,
+                    cursor_col,
+                    selected,
+                    command_position,
+                    command_context,
+                },
                 &cfg,
             ) {
                 Ok(code) => process::exit(code),

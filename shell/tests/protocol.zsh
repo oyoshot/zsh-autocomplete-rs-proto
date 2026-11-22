@@ -61,4 +61,13 @@ assert_equal 0 "$selection_applied" 'missing selection flag defaults to false wi
 _zacrs_parse_apply_line 'APPLY chain=1 execute=0 selection_applied=0 restore_hex='
 assert_equal 0 "$selection_applied" 'unselected Space dismissal is parsed'
 
+for malformed in     'APPLY chain=1 path_hex=61 suffix_hex=0 restore_hex='     'APPLY chain=1 path_hex=61 restore_hex='     'APPLY text_hex=GG restore_hex='     'APPLY restore_hex=GG'     'APPLY path_hex=61 suffix_hex=20 path_hex=62 restore_hex='; do
+    if _zacrs_parse_apply_line "$malformed"; then
+        print -u2 -r -- "not ok: accepted malformed APPLY ${(qqq)malformed}"
+        (( ++failures ))
+    else
+        print -r -- 'ok: malformed APPLY is rejected'
+    fi
+done
+
 (( failures == 0 ))
