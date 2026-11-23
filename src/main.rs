@@ -1,4 +1,4 @@
-use zsh_autocomplete_rs::app::App;
+use zsh_autocomplete_rs::app::{App, InitialFilter};
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
@@ -98,9 +98,14 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         return Ok(());
     }
 
-    let files = filesystem.map(|query| query.collect()).unwrap_or_default();
     let stdout = io::stdout();
     let mut stdout_writer = BufWriter::new(stdout.lock());
+    let files = match filesystem.map(|query| query.collect()).transpose() {
+        Ok(files) => files.unwrap_or_default(),
+        Err(_) => {
+            return write_done_result(&mut stdout_writer, &TextCompleteResult::rejected_edit());
+        }
+    };
     let (server_stream, client_stream) = UnixStream::pair()?;
     let prefix_for_thread = prefix;
     let tsv_for_thread = tsv;
@@ -201,7 +206,12 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     // Fallback: direct execution
     let mut candidates =
         Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
-    candidates.extend(filesystem.map(|query| query.collect()).unwrap_or_default());
+    let files = match filesystem.map(|query| query.collect()).transpose() {
+        Ok(files) => files.unwrap_or_default(),
+        Err(_) => return Ok(1),
+    };
+    let literal_files_present = !files.is_empty();
+    candidates.extend(files);
     candidates.extend(
         config
             .abbreviations
@@ -222,15 +232,21 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
 
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new().with_kind_order(config.kind_order);
-    let mut app = App::new_with_matcher(
-        candidates, prefix, cursor_row, cursor_col, cols, rows, fuzzy,
+    let initial_filter = InitialFilter::for_completion(
+        prefix,
+        config.auto_insert_unambiguous && !literal_files_present,
+    );
+    let mut app = App::new_with_initial_filter(
+        candidates,
+        initial_filter,
+        cursor_row,
+        cursor_col,
+        cols,
+        rows,
+        fuzzy,
     );
     if app.filtered_indices.is_empty() {
         return Ok(1);
-    }
-
-    if !config.auto_insert_unambiguous {
-        app.reset_filter_to_prefix();
     }
 
     let mut tty = tty::open_tty_write()?;

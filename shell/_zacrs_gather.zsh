@@ -66,10 +66,10 @@ _zacrs_gather_command_rescue() {
 _zacrs_filesystem_context() {
     typeset -gi _zacrs_filesystem_valid=0
     typeset -g _zacrs_filesystem_prefix="" _zacrs_filesystem_lookup=""
-    typeset -g _zacrs_filesystem_home="${HOME:-}"
-    [[ -z "${PREBUFFER:-}" && ${CONTEXT:-start} == start ]] || return
+    typeset -g _zacrs_filesystem_home="${HOME:-}" _zacrs_filesystem_cwd="$PWD"
+    _zacrs_filesystem_editor || return
     [[ ${compstate[context]} == command && -z "$SUFFIX$QIPREFIX$QISUFFIX" ]] || return
-    local -a lexical=( ${(z)BUFFER} )
+    local -a lexical=( "${(@z)BUFFER}" )
     # Require the native command words to cover the complete lexical input.
     local -a native=( "${words[@]}" )
     if (( ${#native} == ${#lexical} + 1 )) && [[ -z "${native[CURRENT]}" ]]; then
@@ -80,6 +80,12 @@ _zacrs_filesystem_context() {
     for ((i=1; i<=${#native}; i++)); do
         [[ "$native[i]" == "$lexical[i]" ]] || return
     done
+    # Native words can also cover a reserved construct such as `for name`.
+    # Only accept an unambiguous, literal command head.
+    local head="${lexical[1]:-}" literal_head="${lexical[1]:-}"
+    [[ "$literal_head" == '~/'* ]] && literal_head="${literal_head[3,-1]}"
+    [[ -n "$head" && "$head" != *=* && "${(q)literal_head}" == "$literal_head" ]] || return
+    (( ${reswords[(Ie)$head]} == 0 )) || return
     local literal="${IPREFIX}${PREFIX}"
     [[ -z "$literal" || "${LBUFFER[-${#literal},-1]}" == "$literal" ]] || return
     local check="$literal"
@@ -91,7 +97,7 @@ _zacrs_filesystem_context() {
     _zacrs_filesystem_prefix="$literal"
     _zacrs_filesystem_lookup="$literal"
     if [[ "$literal" == '~/'* ]]; then
-        _zacrs_filesystem_lookup="${HOME}/${literal[3,-1]}"
+        _zacrs_filesystem_lookup="${_zacrs_filesystem_home}/${literal[3,-1]}"
     fi
     _zacrs_filesystem_valid=1
 }
@@ -99,15 +105,15 @@ _zacrs_filesystem_context() {
 # Add the same structured query to daemon and subprocess requests.
 _zacrs_filesystem_args() {
     reply=()
-    (( ${_zacrs_filesystem_requested:-0} )) || return
-    reply=(--filesystem-cwd "$PWD" --filesystem-prefix "$_zacrs_filesystem_lookup"
+    (( ${_zacrs_filesystem_requested:-0} )) || return 0
+    reply=(--filesystem-cwd "$_zacrs_filesystem_cwd" --filesystem-prefix "$_zacrs_filesystem_lookup"
         --filesystem-insertion-prefix "$_zacrs_filesystem_prefix")
 }
 
 # Byte counts are local to this transport function; no subprocess is needed.
 _zacrs_write_filesystem_query() {
     local fd=$1 LC_ALL=C item
-    for item in "$PWD" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"; do
+    for item in "$_zacrs_filesystem_cwd" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"; do
         print -r -u $fd -- "${#item}"
         print -r -u $fd -- "$item"
     done

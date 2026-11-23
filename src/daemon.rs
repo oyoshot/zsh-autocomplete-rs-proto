@@ -6,7 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::app::App;
+use crate::app::{App, InitialFilter};
 use crate::candidate::Candidate;
 use crate::config::{Config, ConfigReloader, KeyBindings, SuffixConfig, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
@@ -737,17 +737,16 @@ impl DaemonServer {
                 command_context,
                 candidates_present,
             }) => {
-                let filesystem_requested = filesystem;
-                let mut file_candidates: Arc<[Candidate]> = if filesystem {
+                let filesystem_query = if filesystem {
                     match protocol::read_filesystem_query(reader) {
-                        Ok(query) => Arc::from(query.collect()),
+                        Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
                             return false;
                         }
                     }
                 } else {
-                    Arc::default()
+                    None
                 };
                 let (mut prefix, mut tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "render") {
@@ -755,7 +754,21 @@ impl DaemonServer {
                         Err(()) => return false,
                     };
 
-                if filesystem_requested && tsv_opt.is_none() {
+                let mut file_candidates: Arc<[Candidate]> =
+                    match filesystem_query.map(|query| query.collect()).transpose() {
+                        Ok(files) => Arc::from(files.unwrap_or_default()),
+                        Err(_) => {
+                            if let Some(key) = &context_key {
+                                self.candidate_cache.remove(key);
+                            }
+                            if let Some(key) = &popup_key {
+                                self.active_popups.remove(key);
+                            }
+                            let _ = writeln!(writer, "EMPTY");
+                            return false;
+                        }
+                    };
+                if filesystem && tsv_opt.is_none() {
                     tsv_opt = Some(String::new());
                 }
                 // An explicit empty candidate set can still be completed from
@@ -1008,17 +1021,16 @@ impl DaemonServer {
                 context_key,
                 popup_key,
             }) => {
-                let filesystem_requested = filesystem;
-                let mut file_candidates: Arc<[Candidate]> = if filesystem {
+                let filesystem_query = if filesystem {
                     match protocol::read_filesystem_query(reader) {
-                        Ok(query) => Arc::from(query.collect()),
+                        Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
                             return false;
                         }
                     }
                 } else {
-                    Arc::default()
+                    None
                 };
                 let (mut prefix, mut tsv_opt) =
                     match read_prefix_and_candidates(reader, &mut writer, "complete") {
@@ -1026,7 +1038,21 @@ impl DaemonServer {
                         Err(()) => return false,
                     };
 
-                if filesystem_requested && tsv_opt.is_none() {
+                let mut file_candidates: Arc<[Candidate]> =
+                    match filesystem_query.map(|query| query.collect()).transpose() {
+                        Ok(files) => Arc::from(files.unwrap_or_default()),
+                        Err(_) => {
+                            if let Some(key) = &context_key {
+                                self.candidate_cache.remove(key);
+                            }
+                            if let Some(key) = &popup_key {
+                                self.active_popups.remove(key);
+                            }
+                            let _ = TextCompleteResult::rejected_edit().write_to(&mut writer);
+                            return false;
+                        }
+                    };
+                if filesystem && tsv_opt.is_none() {
                     tsv_opt = Some(String::new());
                 }
                 // Cache-only request: resolve TSV from cache or report miss.
@@ -1341,18 +1367,24 @@ impl DaemonServer {
             .take()
             .unwrap_or_default()
             .with_kind_order(self.config.kind_order);
-        let mut app = App::new_with_matcher(
-            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
+        let initial_filter = InitialFilter::for_completion(
+            prefix,
+            self.config.auto_insert_unambiguous && filesystem.is_empty(),
+        );
+        let mut app = App::new_with_initial_filter(
+            candidates,
+            initial_filter,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            fuzzy,
         );
 
         if app.filtered_indices.is_empty() {
             debug!("render request had no matching candidates after filter");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
-        }
-
-        if !self.config.auto_insert_unambiguous {
-            app.reset_filter_to_prefix();
         }
 
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
@@ -1461,15 +1493,19 @@ impl DaemonServer {
             .take()
             .unwrap_or_default()
             .with_kind_order(self.config.kind_order);
-        let mut app = App::new_with_matcher(
-            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
+        let initial_filter = InitialFilter::for_completion(
+            prefix,
+            self.config.auto_insert_unambiguous && !literal_files_present,
         );
-
-        // When auto_insert_unambiguous is disabled, keep filter_text at the typed
-        // prefix so that cancel/passthrough paths never return an extended value.
-        if !self.config.auto_insert_unambiguous || literal_files_present {
-            app.reset_filter_to_prefix();
-        }
+        let mut app = App::new_with_initial_filter(
+            candidates,
+            initial_filter,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            fuzzy,
+        );
 
         if app.filtered_indices.is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
@@ -2278,7 +2314,8 @@ mod tests {
             path_prefix: "space".into(),
             insertion_prefix: "space".into(),
         }
-        .collect();
+        .collect()
+        .unwrap();
         assert_eq!(files.len(), 1);
         let mut server = DaemonServer::new(PathBuf::new());
         let mut output = Vec::new();
@@ -2853,6 +2890,43 @@ mod tests {
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn filesystem_preview_keeps_typed_filter_when_auto_insert_enabled() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("project-a"), "").unwrap();
+        std::fs::write(temp.path().join("project-b"), "").unwrap();
+        let files: Arc<[crate::candidate::Candidate]> = crate::filesystem::FilesystemQuery {
+            cwd: temp.path().into(),
+            path_prefix: "p".into(),
+            insertion_prefix: "p".into(),
+        }
+        .collect()
+        .unwrap()
+        .into();
+        let preview = |auto_insert| {
+            let mut server = test_server();
+            server.config.auto_insert_unambiguous = auto_insert;
+            match server.handle_render(
+                RenderParams {
+                    filesystem: files.clone(),
+                    prefix: "p".into(),
+                    cursor_row: 5,
+                    cursor_col: 2,
+                    term_cols: 80,
+                    term_rows: 24,
+                    selected: None,
+                    command_position: false,
+                    command_context: None,
+                },
+                b"",
+            ) {
+                crate::protocol::Response::Success { tty_bytes, .. } => tty_bytes,
+                other => panic!("expected filesystem preview, got {other:?}"),
+            }
+        };
+        assert_eq!(preview(true), preview(false));
     }
 
     #[test]

@@ -315,7 +315,14 @@ fn zsh_filesystem_provider_quotes_literal_selections_and_rejects_unknown_context
                 .env("ZACRS_PLUGIN", plugin)
                 .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
                 .env("TERM", "xterm-256color")
-                .env("LANG", "C.UTF-8")
+                .env(
+                    "LC_ALL",
+                    if cfg!(target_os = "macos") {
+                        "en_US.UTF-8"
+                    } else {
+                        "C.UTF-8"
+                    },
+                )
                 .current_dir(root.path()),
             Duration::from_secs(20),
         );

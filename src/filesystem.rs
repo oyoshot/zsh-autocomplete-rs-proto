@@ -12,25 +12,35 @@ pub struct FilesystemQuery {
     pub insertion_prefix: String,
 }
 
+const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SnapshotTooLarge;
+
 impl FilesystemQuery {
-    pub fn collect(&self) -> Vec<Candidate> {
+    pub fn collect(&self) -> Result<Vec<Candidate>, SnapshotTooLarge> {
+        self.collect_with_budget(MAX_SNAPSHOT_BYTES)
+    }
+
+    fn collect_with_budget(&self, budget: usize) -> Result<Vec<Candidate>, SnapshotTooLarge> {
         if !self.cwd.is_absolute()
             || self.path_prefix.contains('\0')
             || self.insertion_prefix.contains('\0')
         {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         if !supports_lookup_prefix(Path::new(&self.path_prefix)) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let (directory, basename) = split_prefix(&self.path_prefix);
         let directory = Path::new(directory);
         let (insertion_directory, _) = split_prefix(&self.insertion_prefix);
         let lookup = self.cwd.join(directory);
         let Ok(entries) = std::fs::read_dir(lookup.as_path()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut candidates = Vec::new();
+        let mut retained_bytes = 0;
         for entry in entries.flatten() {
             // The engine uses UTF-8. Never replace invalid bytes with a different filename.
             let name = entry.file_name();
@@ -42,7 +52,9 @@ impl FilesystemQuery {
             {
                 continue;
             }
-            let is_directory = entry.path().is_dir();
+            let is_directory = entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() || (kind.is_symlink() && entry.path().is_dir()));
             let path = directory.join(&name);
             let mut display_path = format!("{insertion_directory}{name_text}");
             if is_directory {
@@ -59,17 +71,28 @@ impl FilesystemQuery {
                     text.push(c);
                 }
             }
-            candidates.push(Candidate {
+            let candidate = Candidate {
                 text,
                 description: if is_directory { "directory" } else { "file" }.into(),
                 kind: if is_directory { "directory" } else { "file" }.into(),
                 insert_text: None,
                 cursor_offset: None,
                 literal_path: Some(path),
-            });
+            };
+            // Count owned data as well as row storage. Abandon the whole query
+            // on overflow, since a partial snapshot could be auto-selected.
+            retained_bytes += size_of::<Candidate>()
+                + candidate.text.capacity()
+                + candidate.description.capacity()
+                + candidate.kind.capacity()
+                + candidate.literal_path.as_ref().unwrap().capacity();
+            if retained_bytes > budget {
+                return Err(SnapshotTooLarge);
+            }
+            candidates.push(candidate);
         }
         candidates.sort_by(|a, b| a.text.cmp(&b.text));
-        candidates
+        Ok(candidates)
     }
 }
 
@@ -88,6 +111,24 @@ fn split_prefix(prefix: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_snapshot_is_rejected_as_a_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let query = FilesystemQuery {
+            cwd: root.path().into(),
+            path_prefix: String::new(),
+            insertion_prefix: String::new(),
+        };
+        let budget = size_of::<Candidate>() + 64;
+        std::fs::write(root.path().join("first"), "").unwrap();
+        assert_eq!(query.collect_with_budget(budget).unwrap().len(), 1);
+        std::fs::write(root.path().join("other"), "").unwrap();
+        assert!(matches!(
+            query.collect_with_budget(budget),
+            Err(SnapshotTooLarge)
+        ));
+    }
+
     #[test]
     fn host_paths_preserve_relative_and_explicit_prefix_spelling() {
         let root = tempfile::tempdir().unwrap();
@@ -144,7 +185,7 @@ mod tests {
                 path_prefix: lookup_prefix,
                 insertion_prefix: display_prefix,
             };
-            let candidates = query.collect();
+            let candidates = query.collect().unwrap();
             let file = candidates.iter().find(|c| c.kind == "file").unwrap();
             assert_eq!(
                 file.literal_path.as_ref().unwrap().as_os_str(),
@@ -170,7 +211,7 @@ mod tests {
             path_prefix: "./".into(),
             insertion_prefix: "./".into(),
         };
-        assert!(query.collect().iter().any(|c| c.text == "./sample"
+        assert!(query.collect().unwrap().iter().any(|c| c.text == "./sample"
             && c.literal_path.as_ref().unwrap().as_os_str() == std::ffi::OsStr::new("./sample")));
         assert_eq!(split_prefix("../child//"), ("../child//", ""));
     }
@@ -187,15 +228,15 @@ mod tests {
             insertion_prefix: "sam".into(),
         };
         assert_eq!(
-            query.collect()[0].literal_path.as_deref(),
+            query.collect().unwrap()[0].literal_path.as_deref(),
             Some(Path::new("sample"))
         );
         query.cwd = second.path().into();
-        assert!(query.collect().is_empty());
+        assert!(query.collect().unwrap().is_empty());
         query.cwd = first.path().into();
         query.path_prefix = "dire".into();
         query.insertion_prefix = "dire".into();
-        let rows = query.collect();
+        let rows = query.collect().unwrap();
         assert_eq!(rows[0].text, format!("directory{MAIN_SEPARATOR}"));
         assert_eq!(
             rows[0].literal_path.as_deref(),
@@ -231,7 +272,7 @@ mod tests {
             path_prefix: String::new(),
             insertion_prefix: String::new(),
         };
-        let rows = query.collect();
+        let rows = query.collect().unwrap();
         let displays: std::collections::HashSet<_> = rows.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(displays.len(), 4);
         assert!(
@@ -267,7 +308,7 @@ mod tests {
             path_prefix: String::new(),
             insertion_prefix: String::new(),
         };
-        assert!(query.collect().is_empty());
+        assert!(query.collect().unwrap().is_empty());
     }
 
     #[cfg(unix)]
@@ -284,7 +325,7 @@ mod tests {
             path_prefix: String::new(),
             insertion_prefix: String::new(),
         };
-        let rows = query.collect();
+        let rows = query.collect().unwrap();
         assert_eq!(rows.len(), 5);
         assert!(rows.iter().any(
             |c| c.literal_path.as_deref() == Some(Path::new("line\nname"))
@@ -309,8 +350,8 @@ mod tests {
             path_prefix: "a*".into(),
             insertion_prefix: "a*".into(),
         };
-        assert_eq!(query.collect()[0].text, "a*b");
+        assert_eq!(query.collect().unwrap()[0].text, "a*b");
         query.cwd = second.path().into();
-        assert!(query.collect().is_empty());
+        assert!(query.collect().unwrap().is_empty());
     }
 }

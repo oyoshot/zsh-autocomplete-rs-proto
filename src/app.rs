@@ -9,6 +9,21 @@ struct CachedFilter {
     mode: MatchMode,
 }
 
+pub enum InitialFilter {
+    TypedPrefix(String),
+    CommonPrefix(String),
+}
+
+impl InitialFilter {
+    pub fn for_completion(prefix: String, expand_common_prefix: bool) -> Self {
+        if expand_common_prefix {
+            Self::CommonPrefix(prefix)
+        } else {
+            Self::TypedPrefix(prefix)
+        }
+    }
+}
+
 pub struct App {
     pub all_candidates: Vec<Candidate>,
     pub filtered_indices: Vec<usize>,
@@ -72,18 +87,47 @@ impl App {
         term_rows: u16,
         fuzzy: FuzzyMatcher,
     ) -> Self {
+        Self::new_with_initial_filter(
+            candidates,
+            InitialFilter::CommonPrefix(prefix),
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            fuzzy,
+        )
+    }
+
+    pub fn new_with_initial_filter(
+        candidates: Vec<Candidate>,
+        initial_filter: InitialFilter,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        fuzzy: FuzzyMatcher,
+    ) -> Self {
         let term_cols = term_cols.max(1);
         let term_rows = term_rows.max(1);
         let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
         let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
 
-        let lcp = compute_common_prefix(&candidates, &prefix);
+        let (prefix, filter_text) = match initial_filter {
+            InitialFilter::TypedPrefix(prefix) => {
+                let filter_text = prefix.clone();
+                (prefix, filter_text)
+            }
+            InitialFilter::CommonPrefix(prefix) => {
+                let filter_text = compute_common_prefix(&candidates, &prefix);
+                (prefix, filter_text)
+            }
+        };
         let mut app = App {
             all_candidates: candidates,
             filtered_indices: Vec::new(),
             cached_filters: HashMap::new(),
             match_mode: MatchMode::default(),
-            filter_text: lcp,
+            filter_text,
             selected: None,
             scroll_offset: 0,
             max_visible: DEFAULT_MAX_VISIBLE,
@@ -332,7 +376,7 @@ impl App {
     }
 
     /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
-    /// `filter_text` is initialized to the common prefix of all candidates at construction time.
+    /// Completion may initialize `filter_text` to the common prefix of all candidates.
     pub fn unambiguous_prefix(&self) -> Option<&str> {
         if self.filter_text.len() > self.prefix.len() {
             Some(&self.filter_text)

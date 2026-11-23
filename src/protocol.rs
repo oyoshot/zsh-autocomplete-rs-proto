@@ -828,6 +828,22 @@ impl TextFrameHeader {
 }
 
 impl TextCompleteResult {
+    /// A rejected edit must not be retried through another completion source.
+    pub fn rejected_edit() -> Self {
+        Self {
+            literal_path: None,
+            literal_suffix: String::new(),
+            code: 5,
+            text: String::new(),
+            chain: false,
+            execute: false,
+            selection_applied: false,
+            restore_text: String::new(),
+            cursor_offset: None,
+            insert_trigger: false,
+        }
+    }
+
     pub fn write_to(&self, mut writer: impl Write) -> io::Result<()> {
         let encode_text = self.text.contains(['\r', '\n']);
         if encode_text {
@@ -910,7 +926,7 @@ impl TextCompleteResult {
             };
 
         let mut literal_path = None;
-        let mut literal_suffix = String::new();
+        let mut literal_suffix = None;
         let mut chain = false;
         let mut execute = false;
         let mut selection_applied = false;
@@ -918,9 +934,23 @@ impl TextCompleteResult {
         let mut insert_trigger = false;
         for token in flag_fields.split_whitespace() {
             if let Some(value) = token.strip_prefix("path_hex=") {
-                literal_path = Some(decode_text_hex(value, "path_hex")?);
+                let path = decode_text_hex(value, "path_hex")?;
+                if literal_path.is_some() || path.is_empty() || path.contains('\0') {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid path_hex",
+                    ));
+                }
+                literal_path = Some(path);
             } else if let Some(value) = token.strip_prefix("suffix_hex=") {
-                literal_suffix = decode_text_hex(value, "suffix_hex")?;
+                let suffix = decode_text_hex(value, "suffix_hex")?;
+                if literal_suffix.is_some() || suffix.contains('\0') {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid suffix_hex",
+                    ));
+                }
+                literal_suffix = Some(suffix);
             } else if let Some(value) = token.strip_prefix("chain=") {
                 chain = value == "1";
             } else if let Some(value) = token.strip_prefix("execute=") {
@@ -936,9 +966,15 @@ impl TextCompleteResult {
             }
         }
 
+        if literal_path.is_some() != literal_suffix.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "literal path and suffix metadata must be paired",
+            ));
+        }
         Ok(Self {
             literal_path,
-            literal_suffix,
+            literal_suffix: literal_suffix.unwrap_or_default(),
             code,
             text,
             chain,
@@ -1535,6 +1571,33 @@ mod tests {
             TextCompleteResult::read_from(&mut reader, done).unwrap(),
             result
         );
+    }
+
+    #[test]
+    fn text_complete_result_requires_unique_paired_literal_metadata() {
+        for fields in [
+            "path_hex=61",
+            "suffix_hex=20",
+            "path_hex=61 path_hex=62 suffix_hex=20",
+            "path_hex=61 suffix_hex= suffix_hex=20",
+            "path_hex= suffix_hex=20",
+            "path_hex=00 suffix_hex=20",
+            "path_hex=61 suffix_hex=00",
+            "path_hex=ff suffix_hex=20",
+            "path_hex=61 suffix_hex=ff",
+        ] {
+            let apply = format!("APPLY chain=0 {fields} restore_hex=\n");
+            let error =
+                TextCompleteResult::read_from(&mut apply.as_bytes(), "DONE 0 display").unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{fields}");
+        }
+        let result = TextCompleteResult::read_from(
+            &mut b"APPLY path_hex=61 suffix_hex= restore_hex=\n".as_slice(),
+            "DONE 0 display",
+        )
+        .unwrap();
+        assert_eq!(result.literal_path.as_deref(), Some("a"));
+        assert!(result.literal_suffix.is_empty());
     }
 
     #[test]

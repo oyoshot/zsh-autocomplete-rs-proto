@@ -48,6 +48,7 @@ _zacrs_get_cursor_pos() {
 # Sets REPLY to an empty string at command position.
 _zacrs_current_context_key() {
     REPLY=""
+    _zacrs_filesystem_editor || return 0
     local lbase=""
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "
@@ -199,6 +200,11 @@ _zacrs_abbreviation_context_func() {
         [[ "$native_words[i]" == "${_zacrs_abbr_words[i]}" ]] || return 0
     done
     _zacrs_abbr_valid=1
+}
+
+# File queries and their reusable snapshots require a top-level command editor.
+_zacrs_filesystem_editor() {
+    (( ${ZLE_RECURSIVE:-0} == 0 )) && [[ "${CONTEXT:-start}" == start && -z "${PREBUFFER:-}" ]]
 }
 
 # Only primary command editing may update the daemon's abbreviation session.

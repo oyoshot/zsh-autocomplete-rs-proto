@@ -170,8 +170,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
         return Err(DaemonUnavailable::EmptyResult);
     }
     if initial_header.starts_with("DONE ") {
-        return TextCompleteResult::read_from(reader, initial_header)
-            .map_err(|_| DaemonUnavailable::NotRunning);
+        return read_complete_result(reader, initial_header);
     }
 
     let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
@@ -231,6 +230,20 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 }
             }
         }
+    }
+}
+
+fn read_complete_result(
+    reader: &mut impl BufRead,
+    header: &str,
+) -> Result<TextCompleteResult, DaemonUnavailable> {
+    match TextCompleteResult::read_from(reader, header) {
+        Ok(result) => Ok(result),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            // Never rewrite malformed metadata into a valid-looking shell edit.
+            Ok(TextCompleteResult::rejected_edit())
+        }
+        Err(_) => Err(DaemonUnavailable::NotRunning),
     }
 }
 
@@ -324,9 +337,7 @@ impl SessionState {
                 if clear_on_done {
                     self.clear_popup(tty_writer)?;
                 }
-                TextCompleteResult::read_from(reader, value)
-                    .map(Some)
-                    .map_err(|_| DaemonUnavailable::NotRunning)
+                read_complete_result(reader, value).map(Some)
             }
             "NONE" => Ok(None),
             _ => Err(DaemonUnavailable::NotRunning),
@@ -887,6 +898,22 @@ mod tests {
         assert!(result.chain);
         assert!(!result.execute);
         assert_eq!(result.restore_text, "cargo ");
+    }
+
+    #[test]
+    fn malformed_literal_reply_is_rejected_without_rewriting_display_text() {
+        let mut reader = b"APPLY execute=1 path_hex=61 restore_hex=\n".as_slice();
+        let result = run_text_popup_session(
+            &mut reader,
+            &mut Vec::new(),
+            "DONE 0 display",
+            vec![],
+            None,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(result, TextCompleteResult::rejected_edit());
     }
 
     #[test]

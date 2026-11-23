@@ -123,10 +123,11 @@ shared provider manager are later work.
 The Zsh adapter captures native completion context before providers can change
 it with `compset`. It supplies a literal path prefix, its insertion/display
 spelling and the current working directory. It offers this capability only at
-an unquoted literal word end, including an empty argument. Native lexical words
-must cover the input. Quoted words, substitutions, patterns, continuation input
-and cursors inside a word do not request filesystem fallback. Unlike the former
-last-space/glob fallback, unknown context cannot produce an unsafe file edit.
+an unquoted literal word end of a simple command, including an empty argument.
+Zsh's lexical words must cover the input and the command head must be literal
+and non-reserved. Quoted words, substitutions, patterns, cursors inside a word,
+and continuation or recursive editors do not request filesystem fallback. When
+the adapter cannot verify the context, it leaves filesystem edits disabled.
 Native completion continues to handle those contexts independently. Explicit
 command paths such as `./` and home-relative paths such as `~/` are supported;
 bare command words retain the command-table path. Home-relative candidates keep
@@ -139,14 +140,14 @@ instead of interpreting a structured body as TSV. The subprocess path accepts
 the same query through arguments. Native candidate transport is unchanged.
 The daemon retains structured filesystem snapshots with candidate and active
 popup caches, so navigation and cached selection do not enumerate again. The
-adapter scopes reuse to session, generation, cwd, HOME, cursor and right-side
-input,
-with the existing exact-prefix rule. Popup snapshots require the complete buffer
-and cursor, cwd and HOME to match, so a right-side-only edit or changed home
-directory cannot reuse stale file context. A provider changing HOME after native
-context capture invalidates that captured filesystem expansion; a fresh redraw
-can collect it in the new environment. If a retry establishes new context after
-HOME changes, its cache key is refreshed before the query is submitted.
+adapter only reuses cached candidates in top-level command editing. The cache
+scopes reuse to session, generation, cwd, HOME, cursor and right-side input
+with the existing exact-prefix rule. Popup snapshots require the complete buffer,
+cursor, cwd and HOME to match. If a cache-only Tab handoff fails, the adapter
+collects the current query before falling back to the subprocess. A provider
+changing cwd or HOME after native context capture invalidates the captured
+filesystem query. A retry that observes the new environment refreshes the key
+before submitting the query.
 
 Literal file paths are separate from display text and configured suffixes.
 Directory separators are presentation/insertion metadata, not stored inside
@@ -156,10 +157,16 @@ Control characters and literal backslashes have distinct display escapes, while
 exact UTF-8 filename bytes, including tabs and newlines, survive collection and
 selection. APPLY metadata
 carries the literal selected path and suffix separately; Zsh quotes the path
-with its native quoting facility before applying the suffix. Unambiguous-prefix
+with its native quoting facility before applying the suffix, including quoting
+otherwise bare words that match a global alias. Unambiguous-prefix
 extension is disabled for this source so cancellation cannot apply unquoted
-display text. Non-UTF-8 names are skipped, never converted lossily. Hidden names
+display text. Preview and interactive selection start with the typed filter.
+Non-UTF-8 names are skipped, never converted lossily. Hidden names
 require an explicit dot prefix. Directory symlinks are classified as directories.
+Each query budgets 1 MiB for candidate rows and owned path/display data. If the
+query exceeds that budget, it drops the entire set so a partial set cannot be
+selected automatically. Typing a narrower prefix can bring the set within the
+budget.
 This step adds no hooks, widgets, shell option changes or helper subprocesses.
 
 Filesystem collection currently runs synchronously in the shared daemon when a

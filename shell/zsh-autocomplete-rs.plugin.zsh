@@ -45,7 +45,8 @@ _zacrs_restore_self_insert() {
 
 typeset -g _zacrs_prev_lbuffer="" _zacrs_prev_buffer=""
 typeset -gi _zacrs_prev_cursor=0
-typeset -g _zacrs_prev_home="${HOME:-}"
+typeset -g _zacrs_prev_home="${HOME:-}" _zacrs_prev_cwd="$PWD"
+typeset -gi _zacrs_prev_primary_editor=0
 typeset -g _zacrs_suppressed=0
 typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
@@ -171,6 +172,7 @@ _zacrs_end_popup_session() {
 }
 
 _zacrs_record_popup_snapshot() {
+    _zacrs_filesystem_editor || { _zacrs_reset_popup_snapshot; return 0; }
     local prefix_len="$1"
     _zacrs_popup_snapshot_cwd="$PWD"
     _zacrs_popup_snapshot_home="${HOME:-}"
@@ -534,6 +536,7 @@ _zacrs_line_init() {
     _zacrs_prev_buffer=""
     _zacrs_prev_cursor=0
     _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
     _zacrs_suppressed=0
     _zacrs_reset_cache
 }
@@ -543,6 +546,16 @@ _zacrs_apply() {
     local selection_applied="${7:-0}"
     if [[ "${literal_path_known:-0}" == 1 && "$result_code" == (0|2) ]]; then
         result_text="${(q)literal_path}${literal_suffix}"
+        if (( ${#galiases} )); then
+            # A directory suffix can be part of the alias token.
+            local -a literal_words=( "${(@z)result_text}" )
+            if (( ${+galiases[$literal_words[1]]} )); then
+                result_text="${(qq)literal_path}${literal_suffix}"
+                literal_words=( "${(@z)result_text}" )
+                # Zsh also allows aliases explicitly named with quote characters.
+                (( ! ${+galiases[$literal_words[1]]} )) || return 0
+            fi
+        fi
     fi
     local base
     local new_lbuffer="$LBUFFER"
@@ -577,6 +590,7 @@ _zacrs_apply() {
     _zacrs_prev_buffer="$BUFFER"
     _zacrs_prev_cursor=${#new_lbuffer}
     _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
     if (( _zacrs_edit_transport_state > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
         _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
@@ -673,6 +687,7 @@ _zacrs_invoke_daemon() {
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
     _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
+    (( result_code == 5 )) && return 5
     (( result_code == 4 )) && return 4
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
@@ -742,6 +757,7 @@ _zacrs_invoke() {
     local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
+    (( result_code == 5 )) && return 5
     (( result_code == 4 )) && return 1
     _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
     _zacrs_finish_popup_session
@@ -761,6 +777,7 @@ _zacrs_encode_hex_input() {
 # Caller must declare: local prefix prefix_len candidates_str
 # (zsh dynamic scoping lets us write to these from here)
 _zacrs_collect_candidates() {
+    candidates_str=""
     _zacrs_filesystem_requested=0
     _zacrs_filesystem_valid=0
     _zacrs_captured=()
@@ -781,7 +798,7 @@ _zacrs_collect_candidates() {
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
     if [[ -z "$candidates_str" ]]; then
-        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "${_zacrs_filesystem_home:-}" == "${HOME:-}" ]]; then
+        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "$_zacrs_filesystem_home" == "${HOME:-}" && "$_zacrs_filesystem_cwd" == "$PWD" ]]; then
             _zacrs_filesystem_requested=1
             prefix="$_zacrs_filesystem_prefix"
             prefix_len=${#_zacrs_filesystem_prefix}
@@ -807,12 +824,13 @@ _zacrs_complete_popup() {
     local reuse_visible=0
     local naive_prefix="${LBUFFER##* }"
     _zacrs_current_context_key
-    local context_key="$REPLY" context_home="${HOME:-}"
+    local context_key="$REPLY" context_home="${HOME:-}" context_cwd="$PWD"
 
+    _zacrs_filesystem_requested=0
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
 
-    if (( _zacrs_popup_visible )) \
+    if (( _zacrs_popup_visible )) && _zacrs_filesystem_editor \
         && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" && $_zacrs_popup_snapshot_cursor == $CURSOR && "${_zacrs_popup_snapshot_cwd:-}" == "$PWD" && "${_zacrs_popup_snapshot_home:-}" == "${HOME:-}" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
         && (( _zacrs_popup_snapshot_lines == LINES )); then
@@ -823,13 +841,15 @@ _zacrs_complete_popup() {
     fi
 
     if (( ! reuse_visible )) || (( ! _zacrs_daemon_available )); then
+        reuse_visible=0
         _zacrs_collect_candidates
     fi
 
-    if [[ "$context_home" != "${HOME:-}" ]]; then
+    if [[ "$context_home" != "${HOME:-}" || "$context_cwd" != "$PWD" ]]; then
         _zacrs_current_context_key
         context_key="$REPLY"
         context_home="${HOME:-}"
+        context_cwd="$PWD"
     fi
     _zacrs_suppressed=0
 
@@ -848,11 +868,13 @@ _zacrs_complete_popup() {
             zle expand-or-complete
             return
         elif (( daemon_rc == 2 )); then
+            reuse_visible=0
             _zacrs_collect_candidates
-            if [[ "$context_home" != "${HOME:-}" ]]; then
+            if [[ "$context_home" != "${HOME:-}" || "$context_cwd" != "$PWD" ]]; then
                 _zacrs_current_context_key
                 context_key="$REPLY"
                 context_home="${HOME:-}"
+                context_cwd="$PWD"
             fi
             _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
                 "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1
@@ -865,6 +887,7 @@ _zacrs_complete_popup() {
         fi
     fi
     if [[ -z "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
+        reuse_visible=0
         _zacrs_collect_candidates
     fi
     if (( ! reuse_visible )); then
@@ -884,8 +907,12 @@ _zacrs_line_pre_redraw() {
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && ! _zacrs_space_enabled && PENDING == 0 )) && _zacrs_restore_self_insert
 
-    # Context depends on both sides of the cursor.
-    if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" || "$BUFFER" != "$_zacrs_prev_buffer" || $CURSOR != $_zacrs_prev_cursor || "${HOME:-}" != "$_zacrs_prev_home" ]]; then
+    # Context depends on both sides of the cursor and the current editor.
+    local -i primary_editor=0
+    _zacrs_filesystem_editor && primary_editor=1
+    if [[ "$LBUFFER" != "$_zacrs_prev_lbuffer" || "$BUFFER" != "$_zacrs_prev_buffer" ||
+        $CURSOR != $_zacrs_prev_cursor || "${HOME:-}" != "$_zacrs_prev_home" ||
+        "$PWD" != "$_zacrs_prev_cwd" || $primary_editor != $_zacrs_prev_primary_editor ]]; then
         # Defer popup clear — _zacrs_render will do selective clear to avoid flicker.
         # Just invalidate the snapshot so Tab reuse check uses fresh data.
         _zacrs_reset_popup_snapshot
@@ -907,7 +934,9 @@ _zacrs_line_pre_redraw() {
     _zacrs_prev_lbuffer="$LBUFFER"
     _zacrs_prev_buffer="$BUFFER"
     _zacrs_prev_cursor=$CURSOR
+    _zacrs_prev_primary_editor=$primary_editor
     _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }
@@ -925,7 +954,7 @@ _zacrs_line_pre_redraw() {
     # context_key は引数位置で設定する。ZLE 編集セッションの世代により
     # コマンド実行後の外部状態変化を古い候補キャッシュへ持ち越さない。
     _zacrs_current_context_key
-    local context_key="$REPLY" context_home="${HOME:-}"
+    local context_key="$REPLY" context_home="${HOME:-}" context_cwd="$PWD"
 
     # 候補収集変数
     local candidates_str="" from_gather=0
@@ -1025,7 +1054,7 @@ _zacrs_line_pre_redraw() {
     fi
     _zacrs_chain_retry=0
     if [[ -z "$candidates_str" ]]; then
-        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "${_zacrs_filesystem_home:-}" == "${HOME:-}" ]]; then
+        if (( ${_zacrs_filesystem_valid:-0} )) && [[ "$_zacrs_filesystem_home" == "${HOME:-}" && "$_zacrs_filesystem_cwd" == "$PWD" ]]; then
             _zacrs_filesystem_requested=1
             prefix="$_zacrs_filesystem_prefix"
             prefix_len=${#_zacrs_filesystem_prefix}
@@ -1064,14 +1093,16 @@ _zacrs_line_pre_redraw() {
         return
     fi
 
-    # A native retry may establish a valid query in a changed HOME. Keep that
+    # A native retry may establish a valid query in a changed HOME or cwd. Keep that
     # snapshot under the environment actually used, never the pre-collection key.
-    if [[ "$context_home" != "${HOME:-}" ]]; then
+    if [[ "$context_home" != "${HOME:-}" || "$context_cwd" != "$PWD" ]]; then
         _zacrs_current_context_key
         context_key="$REPLY"
         context_home="${HOME:-}"
+        context_cwd="$PWD"
         if (( _zacrs_filesystem_requested )); then
             _zacrs_prev_home="$context_home"
+            _zacrs_prev_cwd="$context_cwd"
         fi
     fi
     # 候補あり: デーモンのキャッシュを更新しながら render
@@ -1093,6 +1124,7 @@ _zacrs_accept_line() {
     _zacrs_prev_buffer="$BUFFER"
     _zacrs_prev_cursor=$CURSOR
     _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
     _zacrs_chain_retry=0
     _zacrs_reset_cache
     zle reset-prompt
@@ -1126,7 +1158,7 @@ TRAPWINCH() {
     # A width change reflows the prompt and input line, making the cached
     # cursor_row/cursor_col stale; in that case fall through to clear+reset
     # and let the next ZLE event render a fresh popup with correct geometry.
-    if (( _zacrs_popup_visible && _zacrs_daemon_available )) \
+    if (( _zacrs_popup_visible && _zacrs_daemon_available )) && _zacrs_filesystem_editor \
         && [[ "$_zacrs_popup_snapshot_buffer" == "$BUFFER" && $_zacrs_popup_snapshot_cursor == $CURSOR && "${_zacrs_popup_snapshot_cwd:-}" == "$PWD" && "${_zacrs_popup_snapshot_home:-}" == "${HOME:-}" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
         local _resize_prefix="${LBUFFER##* }" _resize_cmd_pos=0 _resize_context=""

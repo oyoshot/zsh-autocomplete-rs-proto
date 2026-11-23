@@ -10,7 +10,11 @@ mkdir -p "$HOME/files"
 : > "$HOME/files/trailing "
 mkdir -p "$HOME/new-home/files"
 : > "$HOME/new-home/files/space new-home"
-mkdir -p "$HOME/files/directory"
+mkdir -p "$HOME/files/directory" "$HOME/new-cwd"
+: > "$HOME/files/NAME"
+: > "$HOME/files/far"
+: > "$HOME/files/foobar"
+: > "$HOME/new-cwd/space new-cwd"
 cat > "$HOME/.zshrc" <<'RC'
 unsetopt MONITOR
 _test_root="$HOME"
@@ -49,7 +53,7 @@ _test_run() {
         12) BUFFER='probe '; expected=''; select=0 ;;
         13) BUFFER='probe trail'; expected='trailing  ' ;;
         14) BUFFER='probe trail'; expected='trailing  '; accept_single=0; _zacrs_cursor_stale=' ' ;;
-        15|16|17|18|19|20|21|22) select=0 ;;
+        15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30) select=0 ;;
     esac
     if (( _test_index == 15 )); then
         BUFFER='probe space'; CURSOR=${#BUFFER}
@@ -179,6 +183,137 @@ _test_run() {
         inserted="${inserted% }"
         [[ "${(Q)inserted}" == "$expected" ]] || { print -r -- retry-home-poisoned-cache > "$_test_root/state"; return; }
         functions[_zacrs_get_cursor_pos]="$saved_cursor"
+    elif (( _test_index == 23 )); then
+        local prefix='' prefix_len=0 candidates_str=''
+        BUFFER='for fo'; CURSOR=${#BUFFER}
+        _zacrs_collect_candidates
+        [[ $_zacrs_filesystem_requested == 0 && "$BUFFER" == 'for fo' ]] || { print -r -- loop-variable-query > "$_test_root/state"; return; }
+        BUFFER='~/files/dire'; CURSOR=${#BUFFER}
+        _zacrs_collect_candidates
+        [[ $_zacrs_filesystem_requested == 1 && "$_zacrs_filesystem_lookup" == "$HOME/files/dire" ]] || { print -r -- home-command-path > "$_test_root/state"; return; }
+    elif (( _test_index == 24 )); then
+        local saved_provider="$functions[_main_complete]"
+        _test_glob_provider=0
+        _main_complete() { _test_glob_provider=1; return 0; }
+        BUFFER='probe space no-match-*'; CURSOR=11
+        () { setopt localoptions globsubst; zle _zacrs_compsys; }
+        functions[_main_complete]="$saved_provider"
+        (( _test_glob_provider )) || { print -r -- glob-blocked-native > "$_test_root/state"; return; }
+    elif (( _test_index == 25 )); then
+        local saved_bin="$ZACRS_BIN" saved_cursor="$functions[_zacrs_get_cursor_pos]" saved_retry="$functions[_zacrs_maybe_retry_daemon]"
+        local _zacrs_daemon_available=0
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        _zacrs_maybe_retry_daemon() { return 0; }
+        _test_native_render_bin() { print -r -- called > "$_test_root/native-render"; }
+        ZACRS_BIN=_test_native_render_bin
+        _zacrs_filesystem_requested=0
+        BUFFER='probe fil'; CURSOR=${#BUFFER}
+        () { setopt localoptions errreturn; _zacrs_render fil 3 $'file\tfile\tfile'; }
+        ZACRS_BIN="$saved_bin"
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"; functions[_zacrs_maybe_retry_daemon]="$saved_retry"
+        [[ -f "$_test_root/native-render" ]] || { print -r -- empty-filesystem-args-blocked-render > "$_test_root/state"; return; }
+    elif (( _test_index == 26 )); then
+        alias -g NAME=expanded 'directory/=expanded'
+        probe() { print -r -- "$@" > "$_test_root/argv"; }
+        local prefix='' prefix_len=0 candidates_str=''
+        local typed expected_arg
+        for typed expected_arg in NA NAME dire directory/ NA ''; do
+            [[ -z "$expected_arg" ]] && alias -g "'NAME'=expanded"
+            BUFFER="probe $typed"; CURSOR=${#BUFFER}
+            _zacrs_collect_candidates
+            if [[ "$ZACRS_TEST_DAEMON" == 1 ]]; then
+                _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" 2 1 0 alias-path 1 1
+            else
+                _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" 2 1 1
+            fi
+            if [[ -n "$expected_arg" ]]; then
+                eval "$BUFFER"
+                [[ "$(<"$_test_root/argv")" == "$expected_arg" ]] || { print -r -- alias-expanded-literal > "$_test_root/state"; return; }
+            else
+                [[ "$BUFFER" == 'probe NA' ]] || { print -r -- alias-quoted-literal > "$_test_root/state"; return; }
+            fi
+        done
+        unalias NAME 'directory/' "'NAME'"
+        unfunction probe
+    elif (( _test_index == 27 )); then
+        local old_cwd="$PWD" saved_provider="$functions[_main_complete]" saved_cursor="$functions[_zacrs_get_cursor_pos]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        _test_retry_provider_calls=0
+        _main_complete() { (( ++_test_retry_provider_calls )); cd "$_test_root/new-cwd"; return 0; }
+        BUFFER='probe spa'; CURSOR=${#BUFFER}
+        local prefix='' prefix_len=0 candidates_str=''
+        _zacrs_collect_candidates
+        [[ $_zacrs_filesystem_requested == 0 && "$PWD" == "$_test_root/new-cwd" ]] || { print -r -- mutable-cwd-query > "$_test_root/state"; return; }
+        cd "$old_cwd"
+        _test_retry_provider_calls=0
+        _zacrs_prev_lbuffer=''; _zacrs_prev_buffer=''
+        _zacrs_chain_retry=1
+        _zacrs_invalidate_candidate_cache
+        functions[_test_actual_redraw]="$_test_production_redraw"
+        _test_actual_redraw
+        [[ $_test_retry_provider_calls == 2 && $_zacrs_filesystem_requested == 1 && "$_zacrs_filesystem_cwd" == "$PWD" && "$_zacrs_popup_snapshot_cwd" == "$PWD" && "$_zacrs_prev_cwd" == "$PWD" ]] || { print -r -- retry-cwd-query > "$_test_root/state"; return; }
+        functions[_main_complete]="$saved_provider"
+        cd "$old_cwd"
+        _test_actual_redraw
+        _zacrs_complete_popup
+        local inserted="${BUFFER#probe }"
+        inserted="${inserted% }"
+        [[ "${(Q)inserted}" == 'space name' ]] || { print -r -- retry-cwd-poisoned-cache > "$_test_root/state"; return; }
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+    elif (( _test_index == 28 && ZACRS_TEST_DAEMON )); then
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]" saved_daemon="$functions[_zacrs_invoke_daemon]" saved_cli="$functions[_zacrs_invoke]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        _zacrs_invalidate_candidate_cache
+        functions[_test_actual_redraw]="$_test_production_redraw"
+        BUFFER='probe f'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        BUFFER='probe fo'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        BUFFER='probe f'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 && "$_zacrs_filesystem_lookup" == fo ]] || { print -r -- cache-handoff-not-seeded > "$_test_root/state"; return; }
+        _zacrs_invoke_daemon() { _test_daemon_reuse=$6; return 1; }
+        _zacrs_invoke() { _test_cli_query="$_zacrs_filesystem_requested:$_zacrs_filesystem_lookup:$1"; return 0; }
+        _zacrs_complete_popup
+        functions[_zacrs_invoke_daemon]="$saved_daemon"; functions[_zacrs_invoke]="$saved_cli"
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        [[ $_test_daemon_reuse == 1 && "$_test_cli_query" == 1:f:f ]] || { print -r -- stale-cli-query > "$_test_root/state"; return; }
+    elif (( _test_index == 29 )); then
+        local saved_bin="$ZACRS_BIN" before='probe space' code=0
+        _test_no_edit_bin() { print -r -- 'DONE 5 '; print -r -- 'APPLY chain=0 execute=0 restore_hex='; }
+        ZACRS_BIN=_test_no_edit_bin
+        BUFFER="$before"; CURSOR=${#BUFFER}
+        _zacrs_filesystem_requested=0
+        _zacrs_invoke space 5 '' 2 1 1 || code=$?
+        ZACRS_BIN="$saved_bin"
+        [[ $code == 5 && "$BUFFER" == "$before" ]] || { print -r -- no-edit-status-lost > "$_test_root/state"; return; }
+    elif (( _test_index == 30 )); then
+        # Restore the fields of a primary preview to exercise the reuse gate
+        # independently of normal prompt-transition cleanup.
+        [[ "$CONTEXT" != start || -n "$PREBUFFER" ]] || { print -r -- expected-continuation-editor > "$_test_root/state"; return; }
+        BUFFER='probe f'; CURSOR=${#BUFFER}
+        _zacrs_popup_visible=1
+        _zacrs_popup_snapshot_buffer="$BUFFER"; _zacrs_popup_snapshot_cursor=$CURSOR
+        _zacrs_popup_snapshot_cwd="$PWD"; _zacrs_popup_snapshot_home="$HOME"
+        _zacrs_popup_snapshot_columns=$COLUMNS; _zacrs_popup_snapshot_lines=$LINES
+        _zacrs_current_context_key
+        [[ -z "$REPLY" ]] || { print -r -- continuation-cache-key > "$_test_root/state"; return; }
+        local saved_invoke="$functions[_zacrs_invoke_daemon]"
+        _zacrs_daemon_available=1
+        _zacrs_invoke_daemon() { _test_cont_result="$_zacrs_filesystem_requested:$6:$7"; return 0; }
+        _zacrs_complete_popup
+        functions[_zacrs_invoke_daemon]="$saved_invoke"
+        [[ "$_test_cont_result" == '0:0:' && "$BUFFER" == 'probe f' ]] || { print -r -- continuation-reused-primary > "$_test_root/state"; return; }
+        # An identical line must also miss the redraw early return on transition.
+        _zacrs_prev_lbuffer="$LBUFFER"; _zacrs_prev_buffer="$BUFFER"; _zacrs_prev_cursor=$CURSOR
+        _zacrs_prev_cwd="$PWD"; _zacrs_prev_home="$HOME"; _zacrs_prev_primary_editor=1
+        local saved_send="$functions[_zacrs_daemon_send_render]" saved_render="$functions[_zacrs_render]"
+        _test_cont_result=unchanged
+        _zacrs_daemon_send_render() { _test_cont_result=stale-cache; return 3; }
+        _zacrs_render() { [[ "$_test_cont_result" == unchanged ]] && _test_cont_result="$_zacrs_filesystem_requested:$6"; }
+        _test_actual_redraw
+        functions[_zacrs_daemon_send_render]="$saved_send"; functions[_zacrs_render]="$saved_render"
+        [[ "$_test_cont_result" == '0:' && "$BUFFER" == 'probe f' ]] || { print -r -- continuation-redraw-reused-primary > "$_test_root/state"; return; }
     fi
     if (( _test_index >= 15 )); then
         (( ${+literal_path_known} + ${+literal_path} + ${+literal_suffix} == 0 )) || { print -r -- leaked-literal-state > "$_test_root/state"; return; }
@@ -215,6 +350,10 @@ _test_run() {
 }
 zle -N _test_run
 bindkey '^T' _test_run
+_test_start_continuation() { BUFFER='probe "'; CURSOR=${#BUFFER}; zle .accept-line; }
+zle -N _test_start_continuation
+bindkey '^G' _test_start_continuation
+PS2='CONT> '
 PROMPT='READY> '
 RPROMPT=''
 print -r -- ready > "$HOME/ready"
@@ -232,7 +371,16 @@ for attempt in {1..300}; do
     sleep .01
 done
 [[ "$output" == *'READY> '* ]] || { print -u2 -r -- "not ready: ${(qqq)output}"; exit 1; }
-for case_index in {1..22}; do
+for case_index in {1..30}; do
+    if (( case_index == 30 )); then
+        zpty -w -n files $'\x07'
+        for attempt in {1..300}; do
+            zpty -r -t files chunk 2>/dev/null && output+="$chunk"
+            [[ "$output" == *'CONT> '* ]] && break
+            sleep .01
+        done
+        [[ "$output" == *'CONT> '* ]] || { print -u2 -r -- 'continuation prompt missing'; exit 1; }
+    fi
     : > "$_test_root/state"
     zpty -w -n files $'\x14'
     for attempt in {1..300}; do
