@@ -108,12 +108,21 @@ mod tests {
     fn non_utf8_names_are_skipped_without_lossy_substitution() {
         use std::os::unix::ffi::OsStringExt;
         let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
+        match std::fs::write(
             temp.path()
                 .join(std::ffi::OsString::from_vec(vec![b'a', 0xff])),
             "",
-        )
-        .unwrap();
+        ) {
+            Ok(()) => {}
+            Err(error)
+                if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) =>
+            {
+                // Some macOS filesystems reject this name before it can be collected.
+                eprintln!("filesystem rejects the non-UTF-8 fixture: {error}");
+                return;
+            }
+            Err(error) => panic!("failed to create non-UTF-8 fixture: {error}"),
+        }
         let query = FilesystemQuery {
             cwd: temp.path().into(),
             path_prefix: String::new(),
