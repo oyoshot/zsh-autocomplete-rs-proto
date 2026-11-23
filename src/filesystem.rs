@@ -1,6 +1,7 @@
-//! Portable, literal filesystem candidate collection. Shell syntax is not parsed here.
+//! Host-native filesystem candidate collection.
+//! Shell syntax and display spelling remain adapter-supplied facts.
 use crate::candidate::Candidate;
-use std::path::{Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf, is_separator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesystemQuery {
@@ -19,36 +20,38 @@ impl FilesystemQuery {
         {
             return Vec::new();
         }
+        if !supports_lookup_prefix(Path::new(&self.path_prefix)) {
+            return Vec::new();
+        }
         let (directory, basename) = split_prefix(&self.path_prefix);
+        let directory = Path::new(directory);
         let (insertion_directory, _) = split_prefix(&self.insertion_prefix);
-        let lookup = if Path::new(directory).is_absolute() {
-            PathBuf::from(directory)
-        } else {
-            self.cwd.join(directory)
-        };
-        let Ok(entries) = std::fs::read_dir(lookup) else {
+        let lookup = self.cwd.join(directory);
+        let Ok(entries) = std::fs::read_dir(lookup.as_path()) else {
             return Vec::new();
         };
         let mut candidates = Vec::new();
         for entry in entries.flatten() {
             // The engine uses UTF-8. Never replace invalid bytes with a different filename.
-            let Ok(name) = entry.file_name().into_string() else {
+            let name = entry.file_name();
+            let Some(name_text) = name.to_str() else {
                 continue;
             };
-            if !name.starts_with(basename) || (name.starts_with('.') && !basename.starts_with('.'))
+            if !name_text.starts_with(basename)
+                || (name_text.starts_with('.') && !basename.starts_with('.'))
             {
                 continue;
             }
             let is_directory = entry.path().is_dir();
-            let mut path = format!("{directory}{name}");
-            let mut display_path = format!("{insertion_directory}{name}");
+            let path = directory.join(&name);
+            let mut display_path = format!("{insertion_directory}{name_text}");
             if is_directory {
-                path.push('/');
-                display_path.push('/');
+                // Presentation keeps its separator separate from the actual path.
+                display_path.push(MAIN_SEPARATOR);
             }
             let mut text = String::with_capacity(display_path.len());
             for c in display_path.chars() {
-                if c == '\\' {
+                if c == '\\' && !is_separator(c) {
                     text.push_str("\\\\");
                 } else if c.is_control() {
                     text.extend(c.escape_default());
@@ -70,15 +73,153 @@ impl FilesystemQuery {
     }
 }
 
+// A drive-qualified relative path requires per-drive shell state that this
+// verified cwd-relative/absolute query does not supply. Decide before I/O.
+fn supports_lookup_prefix(prefix: &Path) -> bool {
+    !matches!(prefix.components().next(), Some(Component::Prefix(_))) || prefix.is_absolute()
+}
+
 fn split_prefix(prefix: &str) -> (&str, &str) {
     prefix
-        .rfind('/')
+        .rfind(is_separator)
         .map_or(("", prefix), |i| (&prefix[..=i], &prefix[i + 1..]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_paths_preserve_relative_and_explicit_prefix_spelling() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("child")).unwrap();
+        std::fs::write(root.path().join("sample"), "").unwrap();
+        std::fs::create_dir(root.path().join("sample-dir")).unwrap();
+        let cases: [(PathBuf, String, String, PathBuf, String); 6] = [
+            (
+                root.path().to_path_buf(),
+                "sam".into(),
+                "sam".into(),
+                PathBuf::from("sample"),
+                "sample".into(),
+            ),
+            (
+                root.path().to_path_buf(),
+                "./sam".into(),
+                "./sam".into(),
+                PathBuf::from("./sample"),
+                "./sample".into(),
+            ),
+            (
+                root.path().join("child"),
+                "../sam".into(),
+                "../sam".into(),
+                PathBuf::from("../sample"),
+                "../sample".into(),
+            ),
+            (
+                root.path().to_path_buf(),
+                "child//../sam".into(),
+                "child//../sam".into(),
+                PathBuf::from("child//../sample"),
+                "child//../sample".into(),
+            ),
+            (
+                root.path().to_path_buf(),
+                root.path().join("sam").to_str().unwrap().into(),
+                root.path().join("sam").to_str().unwrap().into(),
+                root.path().join("sample"),
+                root.path().join("sample").to_str().unwrap().into(),
+            ),
+            (
+                root.path().to_path_buf(),
+                root.path().join("sam").to_str().unwrap().into(),
+                "~/sam".into(),
+                root.path().join("sample"),
+                "~/sample".into(),
+            ),
+        ];
+        for (cwd, lookup_prefix, display_prefix, expected_path, expected_text) in cases {
+            let query = FilesystemQuery {
+                cwd,
+                path_prefix: lookup_prefix,
+                insertion_prefix: display_prefix,
+            };
+            let candidates = query.collect();
+            let file = candidates.iter().find(|c| c.kind == "file").unwrap();
+            assert_eq!(
+                file.literal_path.as_ref().unwrap().as_os_str(),
+                expected_path.as_os_str()
+            );
+            assert_eq!(file.text, expected_text);
+            let directory = candidates.iter().find(|c| c.kind == "directory").unwrap();
+            assert!(directory.text.ends_with(MAIN_SEPARATOR));
+            assert!(
+                !directory
+                    .literal_path
+                    .as_ref()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .ends_with(is_separator)
+            );
+        }
+        // Prefix splitting must retain a typed trailing separator rather than
+        // treating the directory itself as a basename to complete.
+        let query = FilesystemQuery {
+            cwd: root.path().to_path_buf(),
+            path_prefix: "./".into(),
+            insertion_prefix: "./".into(),
+        };
+        assert!(query.collect().iter().any(|c| c.text == "./sample"
+            && c.literal_path.as_ref().unwrap().as_os_str() == std::ffi::OsStr::new("./sample")));
+        assert_eq!(split_prefix("../child//"), ("../child//", ""));
+    }
+
+    #[test]
+    fn collection_uses_host_separators_and_request_cwd() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::create_dir(first.path().join("directory")).unwrap();
+        std::fs::write(first.path().join("sample"), "").unwrap();
+        let mut query = FilesystemQuery {
+            cwd: first.path().into(),
+            path_prefix: "sam".into(),
+            insertion_prefix: "sam".into(),
+        };
+        assert_eq!(
+            query.collect()[0].literal_path.as_deref(),
+            Some(Path::new("sample"))
+        );
+        query.cwd = second.path().into();
+        assert!(query.collect().is_empty());
+        query.cwd = first.path().into();
+        query.path_prefix = "dire".into();
+        query.insertion_prefix = "dire".into();
+        let rows = query.collect();
+        assert_eq!(rows[0].text, format!("directory{MAIN_SEPARATOR}"));
+        assert_eq!(
+            rows[0].literal_path.as_deref(),
+            Some(Path::new("directory"))
+        );
+        let host_prefix = format!("child{MAIN_SEPARATOR}");
+        assert_eq!(split_prefix(&host_prefix), (host_prefix.as_str(), ""));
+    }
+
+    #[test]
+    fn lookup_prefix_policy_does_not_depend_on_filesystem_contents() {
+        assert!(supports_lookup_prefix(Path::new("child")));
+        assert!(supports_lookup_prefix(Path::new("./child")));
+        if is_separator('\\') {
+            assert!(!supports_lookup_prefix(Path::new("C:child")));
+            assert!(!supports_lookup_prefix(Path::new(r"C:child\sam")));
+            assert!(supports_lookup_prefix(Path::new(r"C:\child")));
+        } else {
+            // On hosts without drive syntax this is an ordinary relative name.
+            assert!(supports_lookup_prefix(Path::new("C:child")));
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn display_distinguishes_controls_from_literal_backslashes() {
         let temp = tempfile::tempdir().unwrap();
@@ -94,16 +235,14 @@ mod tests {
         let displays: std::collections::HashSet<_> = rows.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(displays.len(), 4);
         assert!(
-            rows.iter()
-                .any(|c| c.text == "tab\\tname" && c.literal_path.as_deref() == Some("tab\tname"))
+            rows.iter().any(|c| c.text == "tab\\tname"
+                && c.literal_path.as_deref() == Some(Path::new("tab\tname")))
         );
-        assert!(
-            rows.iter().any(
-                |c| c.text == "tab\\\\tname" && c.literal_path.as_deref() == Some("tab\\tname")
-            )
-        );
+        assert!(rows.iter().any(|c| c.text == "tab\\\\tname"
+            && c.literal_path.as_deref() == Some(Path::new("tab\\tname"))));
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_utf8_names_are_skipped_without_lossy_substitution() {
         use std::os::unix::ffi::OsStringExt;
@@ -131,6 +270,7 @@ mod tests {
         assert!(query.collect().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn literal_candidates_preserve_controls_and_classify_symlink_directories() {
         let temp = tempfile::tempdir().unwrap();
@@ -146,13 +286,18 @@ mod tests {
         };
         let rows = query.collect();
         assert_eq!(rows.len(), 5);
-        assert!(rows.iter().any(|c| c.literal_path.as_deref()==Some("line\nname") && c.text=="line\\nname"));
+        assert!(rows.iter().any(
+            |c| c.literal_path.as_deref() == Some(Path::new("line\nname"))
+                && c.text == "line\\nname"
+        ));
         assert!(
             rows.iter()
-                .any(|c| c.literal_path.as_deref() == Some("link/") && c.kind == "directory")
+                .any(|c| c.literal_path.as_deref() == Some(Path::new("link"))
+                    && c.kind == "directory")
         );
         assert!(!rows.iter().any(|c| c.text.starts_with('.')));
     }
+    #[cfg(unix)]
     #[test]
     fn cwd_and_prefix_are_request_local_and_literal() {
         let first = tempfile::tempdir().unwrap();

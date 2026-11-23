@@ -1,5 +1,6 @@
 use crate::config::SuffixConfig;
 use std::collections::HashMap;
+use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf, is_separator};
 
 #[derive(Clone)]
 pub struct Candidate {
@@ -8,42 +9,35 @@ pub struct Candidate {
     pub kind: String,
     pub insert_text: Option<String>,
     pub cursor_offset: Option<usize>,
-    /// Exact literal filesystem path; adapters quote this before insertion.
-    pub literal_path: Option<String>,
+    /// Filesystem identity without presentation separators or configured suffixes.
+    pub literal_path: Option<PathBuf>,
 }
 
 impl Candidate {
-    pub fn literal_insertion_path(&self, suffixes: &SuffixConfig) -> Option<String> {
-        self.literal_path.as_ref().map(|path| {
-            if self.base_kind() == "directory" && suffixes.suffix_for_kind("directory").is_some() {
-                path.strip_suffix('/')
-                    .filter(|base| !base.is_empty())
-                    .unwrap_or(path)
-                    .to_string()
-            } else {
-                path.clone()
-            }
-        })
-    }
-
-    pub fn literal_suffix(&self, suffixes: &SuffixConfig, dismiss: bool) -> String {
-        let path = self.literal_insertion_path(suffixes).unwrap_or_default();
-        let mut suffix = suffixes
-            .suffix_for_kind(self.base_kind())
-            .unwrap_or("")
+    /// Borrow the filesystem path and compute its separate shell insertion suffix.
+    /// Default directory presentation follows the host; explicit suffixes remain policy.
+    pub fn literal_insertion(
+        &self,
+        configured_suffix: Option<&str>,
+        dismiss: bool,
+    ) -> Option<(&Path, String)> {
+        let path = self.literal_path.as_deref()?;
+        let directory = self.base_kind() == "directory";
+        let root = directory && path.has_root() && path.parent().is_none();
+        let mut suffix = configured_suffix
+            .unwrap_or(if directory { MAIN_SEPARATOR_STR } else { "" })
             .to_string();
-        // A quoted filename's trailing space is data, never a separator.
-        // Only an existing directory slash can replace the default slash suffix.
-        if self.base_kind() == "directory" && path.ends_with('/') && suffix == "/" {
+        if root && suffix == MAIN_SEPARATOR_STR {
             suffix.clear();
         }
+        // A quoted filename's trailing space is data, never a separator.
         if dismiss
-            && !suffix.ends_with([' ', '/'])
-            && !(self.base_kind() == "directory" && suffix.is_empty() && path.ends_with('/'))
+            && !suffix.ends_with(|c| c == ' ' || is_separator(c))
+            && !(root && suffix.is_empty())
         {
             suffix.push(' ');
         }
-        suffix
+        Some((path, suffix))
     }
 
     pub fn kind_priority(&self) -> u8 {
@@ -78,7 +72,7 @@ impl Candidate {
         let base_text = self
             .kind
             .eq("directory")
-            .then(|| self.text.strip_suffix('/'))
+            .then(|| self.text.strip_suffix(is_separator))
             .flatten()
             .filter(|base| !base.is_empty())
             .unwrap_or(&self.text);
@@ -100,8 +94,8 @@ impl Candidate {
         }
         if is_command_position
             && self.kind.is_empty()
-            && !self.text.ends_with('/')
-            && !self.text.contains('/')
+            && !self.text.ends_with(is_separator)
+            && !self.text.contains(is_separator)
         {
             let command_suffix = suffixes.suffix_for_kind("command").unwrap_or(" ");
             if command_suffix.is_empty() || self.text.ends_with(command_suffix) {
@@ -119,7 +113,7 @@ impl Candidate {
         is_command_position: bool,
     ) -> String {
         let text = self.text_with_suffix_for_command_position(suffixes, is_command_position);
-        if text.ends_with([' ', '/']) {
+        if text.ends_with(|c| c == ' ' || is_separator(c)) {
             text
         } else {
             format!("{text} ")
@@ -199,12 +193,85 @@ mod tests {
     fn literal_filename_trailing_space_never_consumes_a_separator() {
         let mut candidate = Candidate::parse_line("filename \tfile\tfile");
         candidate.literal_path = Some("filename ".into());
-        let suffixes = SuffixConfig::default();
-        assert_eq!(candidate.literal_suffix(&suffixes, false), " ");
-        assert_eq!(candidate.literal_suffix(&suffixes, true), " ");
-        let empty = suffixes.with_override("file", "");
-        assert_eq!(candidate.literal_suffix(&empty, false), "");
-        assert_eq!(candidate.literal_suffix(&empty, true), " ");
+        assert_eq!(
+            candidate.literal_insertion(Some(" "), false),
+            Some((Path::new("filename "), " ".into()))
+        );
+        assert_eq!(
+            candidate.literal_insertion(Some(" "), true),
+            Some((Path::new("filename "), " ".into()))
+        );
+        assert_eq!(
+            candidate.literal_insertion(Some(""), false),
+            Some((Path::new("filename "), "".into()))
+        );
+        assert_eq!(
+            candidate.literal_insertion(Some(""), true),
+            Some((Path::new("filename "), " ".into()))
+        );
+    }
+
+    #[test]
+    fn literal_directory_suffixes_are_separate_from_the_path() {
+        let mut candidate = Candidate::parse_line("./directory/\tdirectory\tdirectory");
+        candidate.literal_path = Some("./directory".into());
+        for (configured, dismiss, expected) in [
+            (None, false, MAIN_SEPARATOR_STR),
+            (None, true, MAIN_SEPARATOR_STR),
+            (Some("/"), false, "/"),
+            (Some("/"), true, "/"),
+            (Some(""), false, ""),
+            (Some(""), true, " "),
+            (Some("!"), false, "!"),
+            (Some("!"), true, "! "),
+            (Some(" "), false, " "),
+            (Some(" "), true, " "),
+        ] {
+            let (path, suffix) = candidate.literal_insertion(configured, dismiss).unwrap();
+            assert_eq!(path.as_os_str(), std::ffi::OsStr::new("./directory"));
+            assert_eq!(suffix, expected);
+        }
+        candidate.literal_path = Some(std::path::MAIN_SEPARATOR_STR.into());
+        assert_eq!(candidate.literal_insertion(None, true).unwrap().1, "");
+        assert_eq!(
+            candidate
+                .literal_insertion(Some(MAIN_SEPARATOR_STR), false)
+                .unwrap()
+                .1,
+            ""
+        );
+        assert_eq!(
+            candidate.literal_insertion(Some("!"), true).unwrap().1,
+            "! "
+        );
+    }
+
+    #[test]
+    fn host_directory_separator_is_metadata_and_explicit_override_is_preserved() {
+        let mut candidate = Candidate::parse_line("directory\t\tdirectory");
+        candidate.literal_path = Some(PathBuf::from("directory"));
+        assert_eq!(
+            candidate.literal_insertion(None, false).unwrap().1,
+            MAIN_SEPARATOR_STR
+        );
+        assert_eq!(
+            candidate
+                .literal_insertion(Some(MAIN_SEPARATOR_STR), true)
+                .unwrap()
+                .1,
+            MAIN_SEPARATOR_STR
+        );
+        assert_eq!(candidate.literal_insertion(Some("/"), true).unwrap().1, "/");
+        assert_eq!(
+            candidate.literal_insertion(Some("\\"), true).unwrap().1,
+            if is_separator('\\') { "\\" } else { "\\ " }
+        );
+        let suffixed =
+            Candidate::parse_line(&format!("directory{MAIN_SEPARATOR_STR}\t\tdirectory"));
+        assert_eq!(
+            suffixed.text_with_suffix(&SuffixConfig::default().with_override("directory", "")),
+            "directory"
+        );
     }
 
     #[test]
@@ -269,7 +336,7 @@ mod tests {
         assert_eq!(candidates.len(), 2);
         assert_eq!(
             candidates[0].text_with_suffix(&SuffixConfig::default()),
-            "foo/"
+            format!("foo{MAIN_SEPARATOR_STR}")
         );
         assert_eq!(
             candidates[1].text_with_suffix(&SuffixConfig::default()),
@@ -315,13 +382,19 @@ mod tests {
     #[test]
     fn text_with_suffix_directory() {
         let c = Candidate::parse_line("src\t\tdirectory");
-        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "src/");
+        assert_eq!(
+            c.text_with_suffix(&SuffixConfig::default()),
+            format!("src{MAIN_SEPARATOR_STR}")
+        );
     }
 
     #[test]
     fn text_with_suffix_directory_already_slashed() {
         let c = Candidate::parse_line("src/\t\tdirectory");
-        assert_eq!(c.text_with_suffix(&SuffixConfig::default()), "src/");
+        assert_eq!(
+            c.text_with_suffix(&SuffixConfig::default()),
+            format!("src{MAIN_SEPARATOR_STR}")
+        );
     }
 
     #[test]
@@ -356,7 +429,10 @@ mod tests {
         let file = Candidate::parse_line("src/main.rs\t\tfile");
         let suffixes = SuffixConfig::default();
 
-        assert_eq!(directory.text_with_suffix(&suffixes), "src/");
+        assert_eq!(
+            directory.text_with_suffix(&suffixes),
+            format!("src{MAIN_SEPARATOR_STR}")
+        );
         assert_eq!(file.text_with_suffix(&suffixes), "src/main.rs ");
     }
 
@@ -433,7 +509,7 @@ mod tests {
         let c = Candidate::parse_line("src\t\tdirectory");
         assert_eq!(
             c.text_for_dismiss_with_space(&SuffixConfig::default(), false),
-            "src/"
+            format!("src{MAIN_SEPARATOR_STR}")
         );
     }
 

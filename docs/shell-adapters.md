@@ -99,6 +99,19 @@ insufficient. Removal and retention remain the native widget's responsibility.
 
 ## Filesystem fallback provider
 
+The shared filesystem logic delegates path construction and separator handling
+to the host through `std::path`; portability remains an engine goal. Filesystem
+identities are owned `PathBuf` values and borrowed `Path` values at lookup
+boundaries. Directory separators are display/insertion metadata, using the host
+default unless configuration overrides it. Prefix inputs remain incomplete UTF-8
+text supplied by the adapter, not a shell grammar. Drive-qualified relative
+prefixes are declined because this query does not carry per-drive shell cwd.
+
+Linux and macOS are currently validated with the Zsh adapter, Unix sockets and
+Unix terminal/PTY integration. Those transport and adapter implementations are
+platform-specific; host-aware path logic does not claim a working Windows
+runtime or complete coverage of Windows partial-path syntax.
+
 Rust owns literal filesystem enumeration and constructs structured candidates
 without passing filenames through native completion's line-delimited TSV. The
 existing selection policy remains native completion first, filesystem and shell
@@ -136,6 +149,9 @@ can collect it in the new environment. If a retry establishes new context after
 HOME changes, its cache key is refreshed before the query is submitted.
 
 Literal file paths are separate from display text and configured suffixes.
+Directory separators are presentation/insertion metadata, not stored inside
+the candidate path. The selected path is converted to UTF-8 only at the IPC
+boundary; the existing non-UTF-8 limitation remains explicit.
 Control characters and literal backslashes have distinct display escapes, while
 exact UTF-8 filename bytes, including tabs and newlines, survive collection and
 selection. APPLY metadata

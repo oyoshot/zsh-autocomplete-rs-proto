@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::app::App;
 use crate::candidate::Candidate;
-use crate::config::{Config, ConfigReloader, KeyBindings, Theme, config_path};
+use crate::config::{Config, ConfigReloader, KeyBindings, SuffixConfig, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
@@ -36,6 +36,30 @@ struct ApplyResult {
 }
 
 impl ApplyResult {
+    fn with_literal_candidate(
+        mut self,
+        candidate: &Candidate,
+        suffixes: &SuffixConfig,
+        dismiss: bool,
+    ) -> Self {
+        self.cursor_offset = candidate.cursor_offset;
+        if let Some((path, suffix)) =
+            candidate.literal_insertion(suffixes.suffix_for_kind(candidate.base_kind()), dismiss)
+        {
+            let Some(text) = path.to_str() else {
+                return Self::cancel(String::new());
+            };
+            self.literal_path = Some(text.to_owned());
+            self.literal_suffix = suffix;
+            self.chain = should_chain_after_apply(&self.literal_suffix)
+                || (candidate.base_kind() == "directory"
+                    && path.has_root()
+                    && path.parent().is_none()
+                    && self.literal_suffix.is_empty());
+        }
+        self
+    }
+
     fn apply_only(text: String) -> Self {
         Self {
             chain: should_chain_after_apply(&text),
@@ -108,7 +132,7 @@ impl ApplyResult {
 }
 
 fn should_chain_after_apply(text: &str) -> bool {
-    text.ends_with([' ', '/'])
+    text.ends_with(|c| c == ' ' || std::path::is_separator(c))
 }
 
 fn encode_hex_bytes(bytes: &[u8]) -> String {
@@ -1518,15 +1542,15 @@ impl DaemonServer {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
-                    &ApplyResult {
-                        literal_path: candidate.literal_insertion_path(&self.config.suffixes),
-                        literal_suffix: candidate.literal_suffix(&self.config.suffixes, false),
-                        cursor_offset: candidate.cursor_offset,
-                        ..ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
-                            &self.config.suffixes,
-                            command_position,
-                        ))
-                    },
+                    &ApplyResult::apply_only(candidate.text_with_suffix_for_command_position(
+                        &self.config.suffixes,
+                        command_position,
+                    ))
+                    .with_literal_candidate(
+                        candidate,
+                        &self.config.suffixes,
+                        false,
+                    ),
                 );
             } else {
                 let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
@@ -1654,19 +1678,13 @@ impl DaemonServer {
                                 Some(c) => {
                                     let _ = write_apply_result(
                                         writer,
-                                        &ApplyResult {
-                                            literal_path: c
-                                                .literal_insertion_path(&self.config.suffixes),
-                                            literal_suffix: c
-                                                .literal_suffix(&self.config.suffixes, false),
-                                            cursor_offset: c.cursor_offset,
-                                            ..ApplyResult::confirm(
-                                                c.text_with_suffix_for_command_position(
-                                                    &self.config.suffixes,
-                                                    command_position,
-                                                ),
-                                            )
-                                        },
+                                        &ApplyResult::confirm(
+                                            c.text_with_suffix_for_command_position(
+                                                &self.config.suffixes,
+                                                command_position,
+                                            ),
+                                        )
+                                        .with_literal_candidate(c, &self.config.suffixes, false),
                                     );
                                 }
                                 None => {
@@ -1685,18 +1703,14 @@ impl DaemonServer {
                                         writer,
                                         &ApplyResult {
                                             selection_applied: true,
-                                            literal_path: c
-                                                .literal_insertion_path(&self.config.suffixes),
-                                            literal_suffix: c
-                                                .literal_suffix(&self.config.suffixes, true),
-                                            cursor_offset: c.cursor_offset,
                                             ..ApplyResult::dismiss_with_space(
                                                 c.text_for_dismiss_with_space(
                                                     &self.config.suffixes,
                                                     command_position,
                                                 ),
                                             )
-                                        },
+                                        }
+                                        .with_literal_candidate(c, &self.config.suffixes, true),
                                     );
                                 }
                                 None => {
@@ -2168,7 +2182,7 @@ mod tests {
                 server.candidate_cache[key].filesystem[0]
                     .literal_path
                     .as_deref(),
-                Some(expected)
+                Some(std::path::Path::new(expected))
             );
         }
         std::fs::remove_file(first.path().join("same first")).unwrap();
@@ -2197,6 +2211,61 @@ mod tests {
         );
         for worker in server.workers.drain(..) {
             worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn literal_candidate_boundary_keeps_path_and_suffix_separate() {
+        let mut candidate =
+            crate::candidate::Candidate::parse_line("./directory/\tdirectory\tdirectory");
+        candidate.literal_path = Some(PathBuf::from("./directory"));
+        for (configured, dismiss, expected) in [
+            ("/", false, "/"),
+            ("/", true, "/"),
+            ("", false, ""),
+            ("", true, " "),
+            ("!", false, "!"),
+            ("!", true, "! "),
+        ] {
+            let suffixes =
+                crate::config::SuffixConfig::default().with_override("directory", configured);
+            let result = super::ApplyResult::confirm(candidate.text.clone())
+                .with_literal_candidate(&candidate, &suffixes, dismiss);
+            assert_eq!(result.literal_path.as_deref(), Some("./directory"));
+            assert_eq!(result.literal_suffix, expected);
+            assert_eq!(
+                result.chain,
+                expected.ends_with(|c| c == ' ' || std::path::is_separator(c))
+            );
+        }
+        let mut trailing = crate::candidate::Candidate::parse_line("trailing \tfile\tfile");
+        trailing.literal_path = Some(PathBuf::from("trailing "));
+        let empty = crate::config::SuffixConfig::default().with_override("file", "");
+        let confirm = super::ApplyResult::confirm(trailing.text.clone())
+            .with_literal_candidate(&trailing, &empty, false);
+        assert_eq!(confirm.literal_path.as_deref(), Some("trailing "));
+        assert!(confirm.literal_suffix.is_empty());
+        assert!(
+            !confirm.chain,
+            "a quoted filename space is not an insertion separator"
+        );
+        let dismiss = super::ApplyResult::dismiss_with_space(trailing.text.clone())
+            .with_literal_candidate(&trailing, &empty, true);
+        assert_eq!(dismiss.literal_suffix, " ");
+        assert!(dismiss.chain);
+        #[cfg(unix)]
+        {
+            // The public model cannot turn an invalid path into a different UTF-8 filename.
+            use std::os::unix::ffi::OsStringExt;
+            candidate.literal_path = Some(std::ffi::OsString::from_vec(vec![b'a', 0xff]).into());
+            let result = super::ApplyResult::confirm("unusable".into()).with_literal_candidate(
+                &candidate,
+                &crate::config::SuffixConfig::default(),
+                false,
+            );
+            assert_eq!(result.code, 1);
+            assert!(result.literal_path.is_none());
+            assert!(result.text.is_empty());
         }
     }
 
