@@ -199,6 +199,8 @@ pub struct FilesystemArgs {
     pub filesystem_prefix: Option<String>,
     #[arg(long, requires = "filesystem_cwd", allow_hyphen_values = true)]
     pub filesystem_insertion_prefix: Option<String>,
+    #[arg(long, requires = "filesystem_cwd")]
+    pub filesystem_ignore_case: bool,
 }
 impl FilesystemArgs {
     pub fn query(self) -> std::io::Result<Option<FilesystemQuery>> {
@@ -215,6 +217,7 @@ impl FilesystemArgs {
                     cwd: cwd.into(),
                     path_prefix,
                     insertion_prefix,
+                    ignore_case: self.filesystem_ignore_case,
                 }))
             }
             _ => Err(std::io::Error::new(

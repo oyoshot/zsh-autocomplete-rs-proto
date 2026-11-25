@@ -234,7 +234,8 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new().with_kind_order(config.kind_order);
     let initial_filter = InitialFilter::for_completion(
         prefix,
-        config.auto_insert_unambiguous && !literal_files_present,
+        config.auto_insert_unambiguous,
+        literal_files_present,
     );
     let mut app = App::new_with_initial_filter(
         candidates,

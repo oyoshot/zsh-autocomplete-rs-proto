@@ -52,6 +52,7 @@ pub enum Response {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextRenderRequest {
     pub filesystem: bool,
+    pub filesystem_ignore_case: bool,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -66,7 +67,9 @@ pub struct TextRenderRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextCompleteRequest {
+    pub literal_paths: bool,
     pub filesystem: bool,
+    pub filesystem_ignore_case: bool,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -607,6 +610,7 @@ impl TextRequest {
                 }
                 Some(Self::Render(TextRenderRequest {
                     filesystem: rest.contains(&"filesystem=1"),
+                    filesystem_ignore_case: rest.contains(&"filesystem_ignore_case=1"),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -662,7 +666,9 @@ impl TextRequest {
                     }
                 }
                 Some(Self::Complete(TextCompleteRequest {
+                    literal_paths: rest.contains(&"literal_paths=1"),
                     filesystem: rest.contains(&"filesystem=1"),
+                    filesystem_ignore_case: rest.contains(&"filesystem_ignore_case=1"),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -734,8 +740,11 @@ impl TextCompleteRequest {
             self.term_cols,
             self.term_rows
         );
-        if self.filesystem {
-            line.push_str(" filesystem=1");
+        if self.filesystem && self.filesystem_ignore_case {
+            line.push_str(" filesystem_ignore_case=1");
+        }
+        if self.literal_paths {
+            line.push_str(" literal_paths=1");
         }
         if let Some((row, height)) = self.prev_popup {
             line.push_str(&format!(" prev_popup_row={row} prev_popup_height={height}"));
@@ -1043,7 +1052,10 @@ pub fn write_filesystem_query(mut writer: impl Write, query: &FilesystemQuery) -
     }
     Ok(())
 }
-pub fn read_filesystem_query(reader: &mut impl BufRead) -> io::Result<FilesystemQuery> {
+pub fn read_filesystem_query(
+    reader: &mut impl BufRead,
+    ignore_case: bool,
+) -> io::Result<FilesystemQuery> {
     let mut fields = Vec::new();
     for _ in 0..3 {
         let mut length = String::new();
@@ -1081,6 +1093,7 @@ pub fn read_filesystem_query(reader: &mut impl BufRead) -> io::Result<Filesystem
         cwd,
         path_prefix,
         insertion_prefix,
+        ignore_case,
     };
     if !query.cwd.is_absolute() {
         return Err(io::Error::new(
@@ -1101,11 +1114,12 @@ mod tests {
             cwd: "/tmp/with\nnewline".into(),
             path_prefix: "tab\tand\nline".into(),
             insertion_prefix: "literal\nname".into(),
+            ignore_case: false,
         };
         let mut bytes = Vec::new();
         write_filesystem_query(&mut bytes, &query).unwrap();
         assert_eq!(
-            read_filesystem_query(&mut std::io::Cursor::new(bytes)).unwrap(),
+            read_filesystem_query(&mut std::io::Cursor::new(bytes), false).unwrap(),
             query
         );
         for invalid in [
@@ -1115,7 +1129,7 @@ mod tests {
             b"1\n\xff\n",
             b"1\n\0\n",
         ] {
-            assert!(read_filesystem_query(&mut std::io::Cursor::new(invalid)).is_err());
+            assert!(read_filesystem_query(&mut std::io::Cursor::new(invalid), false).is_err());
         }
         assert!(matches!(
             TextRequest::parse_header("render-files 2 1 80 24"),
@@ -1470,7 +1484,9 @@ mod tests {
     #[test]
     fn text_complete_request_header_roundtrip() {
         let request = TextCompleteRequest {
-            filesystem: false,
+            literal_paths: true,
+            filesystem: true,
+            filesystem_ignore_case: true,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -1500,6 +1516,7 @@ mod tests {
             parsed,
             TextRequest::Render(TextRenderRequest {
                 filesystem: false,
+                filesystem_ignore_case: false,
                 cursor_row: 5,
                 cursor_col: 2,
                 term_cols: 80,

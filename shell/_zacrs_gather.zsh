@@ -61,45 +61,48 @@ _zacrs_gather_command_rescue() {
     done
 }
 
-# Capture only native, literal word-end context before providers can call compset.
+# Verify the native word-end facts captured before providers could call compset.
 # No shell expression is evaluated. Unknown contexts do not request files.
 _zacrs_filesystem_context() {
-    typeset -gi _zacrs_filesystem_valid=0
-    typeset -g _zacrs_filesystem_prefix="" _zacrs_filesystem_lookup=""
-    typeset -g _zacrs_filesystem_home="${HOME:-}" _zacrs_filesystem_cwd="$PWD"
-    _zacrs_filesystem_editor || return
-    [[ ${compstate[context]} == command && -z "$SUFFIX$QIPREFIX$QISUFFIX" ]] || return
+    local -i current=$1
+    local literal="$2"
+    shift 2
     local -a lexical=( "${(@z)BUFFER}" )
     # Require the native command words to cover the complete lexical input.
-    local -a native=( "${words[@]}" )
-    if (( ${#native} == ${#lexical} + 1 )) && [[ -z "${native[CURRENT]}" ]]; then
-        native[CURRENT]=()
+    local -a native=( "$@" )
+    (( current <= ${#native} )) || return
+    [[ "${native[current]}" == "$literal" ]] || return
+    if (( ${#native} == ${#lexical} + 1 )) && [[ -z "$literal" ]]; then
+        native[current]=()
     fi
     (( ${#native} == ${#lexical} )) || return
-    local -i i
-    for ((i=1; i<=${#native}; i++)); do
-        [[ "$native[i]" == "$lexical[i]" ]] || return
-    done
+    # Quote each element before joining so spaces within words cannot hide a
+    # different token boundary.
+    [[ "${(j: :)${(@qq)native}}" == "${(j: :)${(@qq)lexical}}" ]] || return
     # Native words can also cover a reserved construct such as `for name`.
     # Only accept an unambiguous, literal command head.
     local head="${lexical[1]:-}" literal_head="${lexical[1]:-}"
     [[ "$literal_head" == '~/'* ]] && literal_head="${literal_head[3,-1]}"
-    [[ -n "$head" && "$head" != *=* && "${(q)literal_head}" == "$literal_head" ]] || return
+    [[ -n "$head" && "$head" != *=* && ( -z "$literal_head" || "${(q)literal_head}" == "$literal_head" ) ]] || return
     (( ${reswords[(Ie)$head]} == 0 )) || return
-    local literal="${IPREFIX}${PREFIX}"
     [[ -z "$literal" || "${LBUFFER[-${#literal},-1]}" == "$literal" ]] || return
     local check="$literal"
     [[ "$check" == '~/'* ]] && check="${check[3,-1]}"
     [[ -z "$check" || "${(q)check}" == "$check" ]] || return
     # Bare command words retain the shell command-table path. Explicit paths
     # and argument positions may also offer filesystem candidates.
-    (( CURRENT > 1 )) || [[ "$literal" == */* ]] || return
-    _zacrs_filesystem_prefix="$literal"
-    _zacrs_filesystem_lookup="$literal"
+    (( current > 1 )) || [[ "$literal" == */* ]] || return
+    typeset -g _zacrs_filesystem_prefix="$literal" _zacrs_filesystem_lookup="$literal"
     if [[ "$literal" == '~/'* ]]; then
         _zacrs_filesystem_lookup="${_zacrs_filesystem_home}/${literal[3,-1]}"
     fi
     _zacrs_filesystem_valid=1
+}
+
+_zacrs_filesystem_query_current() {
+    (( ${_zacrs_filesystem_valid:-0} )) &&
+        [[ "$_zacrs_filesystem_home" == "${HOME:-}" && "$_zacrs_filesystem_cwd" == "$PWD" &&
+            "$_zacrs_filesystem_case_glob" == "${options[caseglob]}" ]]
 }
 
 # Add the same structured query to daemon and subprocess requests.
@@ -108,6 +111,8 @@ _zacrs_filesystem_args() {
     (( ${_zacrs_filesystem_requested:-0} )) || return 0
     reply=(--filesystem-cwd "$_zacrs_filesystem_cwd" --filesystem-prefix "$_zacrs_filesystem_lookup"
         --filesystem-insertion-prefix "$_zacrs_filesystem_prefix")
+    [[ "$_zacrs_filesystem_case_glob" == off ]] && reply+=(--filesystem-ignore-case)
+    return 0
 }
 
 # Byte counts are local to this transport function; no subprocess is needed.

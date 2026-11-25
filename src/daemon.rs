@@ -385,6 +385,17 @@ pub fn status() -> bool {
 }
 
 impl DaemonServer {
+    fn invalidate_snapshots(&mut self, context_key: Option<&str>, popup_key: Option<&str>) {
+        if let Some(key) = context_key {
+            self.candidate_cache.remove(key);
+            self.candidate_cache_order.retain(|k| k != key);
+        }
+        if let Some(key) = popup_key {
+            self.active_popups.remove(key);
+            self.active_popup_order.retain(|k| k != key);
+        }
+    }
+
     fn touch_cached_key(&mut self, context_key: &str) {
         if self.candidate_cache.contains_key(context_key) {
             self.candidate_cache_order.retain(|k| k != context_key);
@@ -726,6 +737,7 @@ impl DaemonServer {
         match request {
             TextRequest::Render(TextRenderRequest {
                 filesystem,
+                filesystem_ignore_case,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -738,7 +750,7 @@ impl DaemonServer {
                 candidates_present,
             }) => {
                 let filesystem_query = if filesystem {
-                    match protocol::read_filesystem_query(reader) {
+                    match protocol::read_filesystem_query(reader, filesystem_ignore_case) {
                         Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
@@ -758,12 +770,7 @@ impl DaemonServer {
                     match filesystem_query.map(|query| query.collect()).transpose() {
                         Ok(files) => Arc::from(files.unwrap_or_default()),
                         Err(_) => {
-                            if let Some(key) = &context_key {
-                                self.candidate_cache.remove(key);
-                            }
-                            if let Some(key) = &popup_key {
-                                self.active_popups.remove(key);
-                            }
+                            self.invalidate_snapshots(context_key.as_deref(), popup_key.as_deref());
                             let _ = writeln!(writer, "EMPTY");
                             return false;
                         }
@@ -1006,7 +1013,9 @@ impl DaemonServer {
                 false
             }
             TextRequest::Complete(TextCompleteRequest {
+                literal_paths,
                 filesystem,
+                filesystem_ignore_case,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -1022,7 +1031,7 @@ impl DaemonServer {
                 popup_key,
             }) => {
                 let filesystem_query = if filesystem {
-                    match protocol::read_filesystem_query(reader) {
+                    match protocol::read_filesystem_query(reader, filesystem_ignore_case) {
                         Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
@@ -1042,12 +1051,7 @@ impl DaemonServer {
                     match filesystem_query.map(|query| query.collect()).transpose() {
                         Ok(files) => Arc::from(files.unwrap_or_default()),
                         Err(_) => {
-                            if let Some(key) = &context_key {
-                                self.candidate_cache.remove(key);
-                            }
-                            if let Some(key) = &popup_key {
-                                self.active_popups.remove(key);
-                            }
+                            self.invalidate_snapshots(context_key.as_deref(), popup_key.as_deref());
                             let _ = TextCompleteResult::rejected_edit().write_to(&mut writer);
                             return false;
                         }
@@ -1119,6 +1123,13 @@ impl DaemonServer {
                         tsv
                     }
                 };
+
+                // Cached paths can only be handed to clients that preserve
+                // literal insertion metadata when they forward the selection.
+                if !filesystem && !literal_paths && !file_candidates.is_empty() {
+                    let _ = TextCompleteResult::rejected_edit().write_to(&mut writer);
+                    return false;
+                }
 
                 let _span = info_span!(
                     "complete",
@@ -1369,7 +1380,8 @@ impl DaemonServer {
             .with_kind_order(self.config.kind_order);
         let initial_filter = InitialFilter::for_completion(
             prefix,
-            self.config.auto_insert_unambiguous && filesystem.is_empty(),
+            self.config.auto_insert_unambiguous,
+            !filesystem.is_empty(),
         );
         let mut app = App::new_with_initial_filter(
             candidates,
@@ -1495,7 +1507,8 @@ impl DaemonServer {
             .with_kind_order(self.config.kind_order);
         let initial_filter = InitialFilter::for_completion(
             prefix,
-            self.config.auto_insert_unambiguous && !literal_files_present,
+            self.config.auto_insert_unambiguous,
+            literal_files_present,
         );
         let mut app = App::new_with_initial_filter(
             candidates,
@@ -2204,6 +2217,7 @@ mod tests {
                     cwd: directory.into(),
                     path_prefix: "same".into(),
                     insertion_prefix: "same".into(),
+                    ignore_case: false,
                 },
             )
             .unwrap();
@@ -2222,11 +2236,25 @@ mod tests {
             );
         }
         std::fs::remove_file(first.path().join("same first")).unwrap();
+        for key in ["context_key=first", "popup_key=second"] {
+            let legacy = run_text_request(
+                &mut server,
+                text_request_input(
+                    &format!("complete 2 1 100 24 {key} accept_single=1"),
+                    "same",
+                    None,
+                ),
+            );
+            assert_eq!(
+                read_text_complete_result(&legacy),
+                TextCompleteResult::rejected_edit()
+            );
+        }
         // The stored snapshot must remain available without enumerating the now-empty directory.
         let cached = run_text_request(
             &mut server,
             text_request_input(
-                "complete 2 1 100 24 context_key=first accept_single=1",
+                "complete 2 1 100 24 context_key=first accept_single=1 literal_paths=1",
                 "same",
                 None,
             ),
@@ -2236,7 +2264,7 @@ mod tests {
         let active = run_text_request(
             &mut server,
             text_request_input(
-                "complete 2 1 100 24 popup_key=second accept_single=1",
+                "complete 2 1 100 24 popup_key=second accept_single=1 literal_paths=1",
                 "same",
                 None,
             ),
@@ -2248,6 +2276,22 @@ mod tests {
         for worker in server.workers.drain(..) {
             worker.join().unwrap();
         }
+    }
+
+    #[test]
+    fn invalidating_snapshots_leaves_no_old_eviction_positions() {
+        let mut server = test_server();
+        server.store_cached_tsv("retry", "f".into(), String::new());
+        server.store_active_popup("retry", "f".into(), String::new());
+        server.store_cached_tsv("other", "f".into(), String::new());
+        server.store_active_popup("other", "f".into(), String::new());
+        server.invalidate_snapshots(Some("retry"), Some("retry"));
+        assert!(!server.candidate_cache.contains_key("retry"));
+        assert!(!server.active_popups.contains_key("retry"));
+        server.store_cached_tsv("retry", "fo".into(), String::new());
+        server.store_active_popup("retry", "fo".into(), String::new());
+        assert_eq!(server.candidate_cache_order, ["other", "retry"]);
+        assert_eq!(server.active_popup_order, ["other", "retry"]);
     }
 
     #[test]
@@ -2313,6 +2357,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: "space".into(),
             insertion_prefix: "space".into(),
+            ignore_case: false,
         }
         .collect()
         .unwrap();
@@ -2901,6 +2946,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: "p".into(),
             insertion_prefix: "p".into(),
+            ignore_case: false,
         }
         .collect()
         .unwrap()
@@ -4270,7 +4316,9 @@ mod tests {
         );
 
         let request = TextCompleteRequest {
+            literal_paths: true,
             filesystem: false,
+            filesystem_ignore_case: false,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -4309,7 +4357,9 @@ mod tests {
         );
 
         let request = TextCompleteRequest {
+            literal_paths: true,
             filesystem: false,
+            filesystem_ignore_case: false,
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,

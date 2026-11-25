@@ -12,11 +12,18 @@ struct CachedFilter {
 pub enum InitialFilter {
     TypedPrefix(String),
     CommonPrefix(String),
+    CollectedFiles(String),
 }
 
 impl InitialFilter {
-    pub fn for_completion(prefix: String, expand_common_prefix: bool) -> Self {
-        if expand_common_prefix {
+    pub fn for_completion(
+        prefix: String,
+        expand_common_prefix: bool,
+        collected_files: bool,
+    ) -> Self {
+        if collected_files {
+            Self::CollectedFiles(prefix)
+        } else if expand_common_prefix {
             Self::CommonPrefix(prefix)
         } else {
             Self::TypedPrefix(prefix)
@@ -112,8 +119,9 @@ impl App {
         let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
         let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
 
+        let collected_files = matches!(initial_filter, InitialFilter::CollectedFiles(_));
         let (prefix, filter_text) = match initial_filter {
-            InitialFilter::TypedPrefix(prefix) => {
+            InitialFilter::TypedPrefix(prefix) | InitialFilter::CollectedFiles(prefix) => {
                 let filter_text = prefix.clone();
                 (prefix, filter_text)
             }
@@ -139,18 +147,22 @@ impl App {
             fuzzy,
         };
         app.sync_max_visible();
-        app.update_filter();
+        app.update_filter_with_scope(None, collected_files);
         app
     }
 
     pub fn update_filter(&mut self) {
-        self.update_filter_with_scope(None);
+        self.update_filter_with_scope(None, false);
     }
 
-    fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>) {
-        let result =
+    fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>, collected_files: bool) {
+        let mut result =
             self.fuzzy
                 .filter_with_mode(&self.all_candidates, &self.filter_text, fuzzy_scope);
+        if collected_files {
+            self.fuzzy
+                .include_collected_files(&self.all_candidates, &mut result.matches);
+        }
         self.filtered_indices = result
             .matches
             .into_iter()
@@ -253,7 +265,7 @@ impl App {
             return;
         }
         let previous = std::mem::take(&mut self.filtered_indices);
-        self.update_filter_with_scope(Some(&previous));
+        self.update_filter_with_scope(Some(&previous), false);
     }
 
     pub fn backspace(&mut self) -> bool {

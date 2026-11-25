@@ -226,6 +226,37 @@ impl FuzzyMatcher {
             })
             .collect()
     }
+
+    /// The provider already checked the initial literal prefix. Keep those
+    /// matches even if smart case or display escaping obscures the prefix.
+    pub(crate) fn include_collected_files(
+        &self,
+        candidates: &[Candidate],
+        matches: &mut Vec<ScoredMatch>,
+    ) {
+        if matches.len() == candidates.len() {
+            return;
+        }
+        let mut matched = vec![false; candidates.len()];
+        for row in matches.iter() {
+            matched[row.candidate_idx] = true;
+        }
+        let previous_len = matches.len();
+        matches.extend(
+            candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.literal_path.is_some() && !matched[index]).then_some(ScoredMatch {
+                        candidate_idx: index,
+                        score: 0,
+                    })
+                }),
+        );
+        if matches.len() != previous_len {
+            sort_scored_matches(matches, candidates, &self.kind_order);
+        }
+    }
 }
 
 fn has_typo_rescue_candidates(candidates: &[Candidate], fuzzy_scope: Option<&[usize]>) -> bool {

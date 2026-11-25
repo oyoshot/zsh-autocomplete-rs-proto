@@ -2,6 +2,7 @@
 //! Shell syntax and display spelling remain adapter-supplied facts.
 use crate::candidate::Candidate;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf, is_separator};
+use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesystemQuery {
@@ -10,6 +11,7 @@ pub struct FilesystemQuery {
     pub path_prefix: String,
     /// Literal spelling used for candidates (may differ after home expansion).
     pub insertion_prefix: String,
+    pub ignore_case: bool,
 }
 
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
@@ -39,6 +41,13 @@ impl FilesystemQuery {
         let Ok(entries) = std::fs::read_dir(lookup.as_path()) else {
             return Ok(Vec::new());
         };
+        let folded_prefix: Vec<_> = if self.ignore_case {
+            basename
+                .case_fold_with(Variant::Simple, Locale::NonTurkic)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut candidates = Vec::new();
         let mut retained_bytes = 0;
         for entry in entries.flatten() {
@@ -47,8 +56,15 @@ impl FilesystemQuery {
             let Some(name_text) = name.to_str() else {
                 continue;
             };
+            if name_text.starts_with('.') && !basename.starts_with('.') {
+                continue;
+            }
             if !name_text.starts_with(basename)
-                || (name_text.starts_with('.') && !basename.starts_with('.'))
+                && !(self.ignore_case && {
+                    let mut folded_name =
+                        name_text.case_fold_with(Variant::Simple, Locale::NonTurkic);
+                    folded_prefix.iter().all(|&c| folded_name.next() == Some(c))
+                })
             {
                 continue;
             }
@@ -111,6 +127,29 @@ fn split_prefix(prefix: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn case_insensitive_prefixes_preserve_the_names_on_disk() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Ωmega"), "").unwrap();
+        std::fs::write(root.path().join(".Ωmega"), "").unwrap();
+        let mut query = FilesystemQuery {
+            cwd: root.path().into(),
+            path_prefix: "ωM".into(),
+            insertion_prefix: "ωM".into(),
+            ignore_case: false,
+        };
+        assert!(query.collect().unwrap().is_empty());
+        query.ignore_case = true;
+        let candidates = query.collect().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].text, "Ωmega");
+        assert_eq!(
+            candidates[0].literal_path.as_deref(),
+            Some(Path::new("Ωmega"))
+        );
+    }
+
     #[test]
     fn oversized_snapshot_is_rejected_as_a_whole() {
         let root = tempfile::tempdir().unwrap();
@@ -118,6 +157,7 @@ mod tests {
             cwd: root.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
+            ignore_case: false,
         };
         let budget = size_of::<Candidate>() + 64;
         std::fs::write(root.path().join("first"), "").unwrap();
@@ -184,6 +224,7 @@ mod tests {
                 cwd,
                 path_prefix: lookup_prefix,
                 insertion_prefix: display_prefix,
+                ignore_case: false,
             };
             let candidates = query.collect().unwrap();
             let file = candidates.iter().find(|c| c.kind == "file").unwrap();
@@ -210,6 +251,7 @@ mod tests {
             cwd: root.path().to_path_buf(),
             path_prefix: "./".into(),
             insertion_prefix: "./".into(),
+            ignore_case: false,
         };
         assert!(query.collect().unwrap().iter().any(|c| c.text == "./sample"
             && c.literal_path.as_ref().unwrap().as_os_str() == std::ffi::OsStr::new("./sample")));
@@ -226,6 +268,7 @@ mod tests {
             cwd: first.path().into(),
             path_prefix: "sam".into(),
             insertion_prefix: "sam".into(),
+            ignore_case: false,
         };
         assert_eq!(
             query.collect().unwrap()[0].literal_path.as_deref(),
@@ -271,6 +314,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
+            ignore_case: false,
         };
         let rows = query.collect().unwrap();
         let displays: std::collections::HashSet<_> = rows.iter().map(|c| c.text.as_str()).collect();
@@ -307,6 +351,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
+            ignore_case: false,
         };
         assert!(query.collect().unwrap().is_empty());
     }
@@ -324,6 +369,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
+            ignore_case: false,
         };
         let rows = query.collect().unwrap();
         assert_eq!(rows.len(), 5);
@@ -349,6 +395,7 @@ mod tests {
             cwd: first.path().into(),
             path_prefix: "a*".into(),
             insertion_prefix: "a*".into(),
+            ignore_case: false,
         };
         assert_eq!(query.collect().unwrap()[0].text, "a*b");
         query.cwd = second.path().into();

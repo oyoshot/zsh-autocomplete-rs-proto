@@ -120,12 +120,15 @@ PATH, aliases, builtins, functions and command rescue remain in the adapter in
 this first slice. Arbitrary native completion, asynchronous scheduling and a
 shared provider manager are later work.
 
-The Zsh adapter captures native completion context before providers can change
-it with `compset`. It supplies a literal path prefix, its insertion/display
-spelling and the current working directory. It offers this capability only at
-an unquoted literal word end of a simple command, including an empty argument.
-Zsh's lexical words must cover the input and the command head must be literal
-and non-reserved. Quoted words, substitutions, patterns, cursors inside a word,
+The Zsh adapter captures the native words and prefix before providers can
+change them with `compset`. Only when native completion leaves no candidates
+does the adapter lex the full buffer to verify the capture. It supplies a
+literal path prefix, its insertion/display spelling and the current working
+directory. It offers this capability only at an unquoted literal word end of
+a simple command, including an empty argument. The full raw word must match
+the captured prefix, Zsh's lexical words must cover the input, and the command
+head must be literal and non-reserved. Quoted or escaped words, substitutions,
+patterns, cursors inside a word,
 and continuation or recursive editors do not request filesystem fallback. When
 the adapter cannot verify the context, it leaves filesystem edits disabled.
 Native completion continues to handle those contexts independently. Explicit
@@ -137,13 +140,19 @@ Each request carries cwd; the shared daemon never uses its own cwd for lookup.
 `render-files` and `complete-files` carry three length-framed UTF-8 fields before
 the existing prefix/candidate payload. Older daemons reject the distinct verbs
 instead of interpreting a structured body as TSV. The subprocess path accepts
-the same query through arguments. Native candidate transport is unchanged.
+the same query through arguments. When `CASE_GLOB` is off, the adapter requests
+case-insensitive basename matching. Rust uses Unicode simple case folding and
+retains the name's original spelling for display and selection.
 The daemon retains structured filesystem snapshots with candidate and active
 popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
-scopes reuse to session, generation, cwd, HOME, cursor and right-side input
-with the existing exact-prefix rule. Popup snapshots require the complete buffer,
-cursor, cwd and HOME to match. If a cache-only Tab handoff fails, the adapter
+scopes reuse to session, generation, cwd, HOME, `CASE_GLOB`, cursor and
+right-side input with the existing exact-prefix rule. Popup snapshots require
+the complete buffer, cursor, cwd, HOME and `CASE_GLOB` to match. For a cached
+filesystem selection, the client must advertise `literal_paths=1` so the
+daemon can return the path and suffix without risking their loss in transit.
+Without that capability the daemon returns a no-edit result. If the daemon
+connection fails during a cache-only Tab handoff, the adapter
 collects the current query before falling back to the subprocess. A provider
 changing cwd or HOME after native context capture invalidates the captured
 filesystem query. A retry that observes the new environment refreshes the key
@@ -158,7 +167,7 @@ exact UTF-8 filename bytes, including tabs and newlines, survive collection and
 selection. APPLY metadata
 carries the literal selected path and suffix separately; Zsh quotes the path
 with its native quoting facility before applying the suffix, including quoting
-otherwise bare words that match a global alias. Unambiguous-prefix
+tokens that match an ordinary or global alias. Unambiguous-prefix
 extension is disabled for this source so cancellation cannot apply unquoted
 display text. Preview and interactive selection start with the typed filter.
 Non-UTF-8 names are skipped, never converted lossily. Hidden names
