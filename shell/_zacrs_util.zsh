@@ -42,6 +42,21 @@ _zacrs_get_cursor_pos() {
     _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
 }
 
+# Write the glob and literal-word policy into the caller's _zacrs_file_option_key.
+_zacrs_file_options() {
+    _zacrs_file_option_key="${options[caseglob]}:${options[casepaths]:-off}:${options[extendedglob]}:${options[magicequalsubst]}:${options[multibyte]}:${options[globdots]}"
+}
+
+_zacrs_file_context_matches() {
+    local _zacrs_file_option_key
+    _zacrs_file_options
+    [[ "$1" == "$PWD" && "$2" == "${HOME:-}" && "$3" == "$_zacrs_file_option_key" ]]
+}
+
+_zacrs_pwd_matches_cwd() {
+    [[ "$PWD" == /* && . -ef "$PWD" ]]
+}
+
 # Build the daemon candidate-cache key for the current argument position.
 # The shell-managed generation scopes reuse to one executed command. It is
 # advanced from preexec so every accepting ZLE widget follows the same path.
@@ -54,6 +69,7 @@ _zacrs_current_context_key() {
         lbase="${LBUFFER% *} "
     fi
     [[ -z "$lbase" ]] && return 0
+    _zacrs_pwd_matches_cwd || return 0
 
     local -a _ctx_fields=("$PWD" "$lbase" "${RBUFFER:-}" "${HOME:-}")
     _ctx_fields=("${(@)_ctx_fields//\%/%25}")
@@ -87,7 +103,9 @@ _zacrs_current_context_key() {
             _ctx_fields=("${(@)_ctx_fields//${_ctx_spaces[i]}/${_ctx_escapes[i]}}")
         done
     fi
-    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${CURSOR:-${#LBUFFER}}:${_ctx_fields[3]}:${_ctx_fields[4]}:${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}"
+    local _zacrs_file_option_key
+    _zacrs_file_options
+    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${CURSOR:-${#LBUFFER}}:${_ctx_fields[3]}:${_ctx_fields[4]}:$_zacrs_file_option_key"
 }
 
 # Check if the last word in buffer is in command position

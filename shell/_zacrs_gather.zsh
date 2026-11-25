@@ -104,9 +104,9 @@ _zacrs_filesystem_context() {
 }
 
 _zacrs_filesystem_query_current() {
-    (( ${_zacrs_filesystem_valid:-0} )) &&
-        [[ "$_zacrs_filesystem_home" == "${HOME:-}" && "$_zacrs_filesystem_cwd" == "$PWD" &&
-            "$_zacrs_filesystem_file_options" == "${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}" ]]
+    (( ${_zacrs_filesystem_valid:-0} )) || return 1
+    _zacrs_file_context_matches "$_zacrs_filesystem_cwd" "$_zacrs_filesystem_home" "$_zacrs_filesystem_file_options" &&
+        _zacrs_pwd_matches_cwd
 }
 
 # Add the same structured query to daemon and subprocess requests.

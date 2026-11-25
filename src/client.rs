@@ -904,18 +904,23 @@ mod tests {
 
     #[test]
     fn malformed_literal_reply_is_rejected_without_rewriting_display_text() {
-        let mut reader = b"APPLY execute=1 path_hex=61 restore_hex=\n".as_slice();
-        let result = run_text_popup_session(
-            &mut reader,
-            &mut Vec::new(),
-            "DONE 0 display",
-            vec![],
-            None,
-            0,
-            0,
-        )
-        .unwrap();
-        assert_eq!(result, TextCompleteResult::rejected_edit());
+        for apply in [
+            "APPLY execute=1 path_hex=61 restore_hex=\n",
+            "APPLY chain=0 execute=0",
+            "APPLY chain=0 execute=0 path_hex=61 suffix_hex=a€ restore_hex=\n",
+        ] {
+            let result = run_text_popup_session(
+                &mut apply.as_bytes(),
+                &mut Vec::new(),
+                "DONE 0 display with spaces",
+                vec![],
+                None,
+                0,
+                0,
+            )
+            .unwrap();
+            assert_eq!(result, TextCompleteResult::rejected_edit(), "{apply}");
+        }
     }
 
     #[test]

@@ -945,6 +945,12 @@ impl TextCompleteResult {
 
         let mut apply = String::new();
         reader.read_line(&mut apply)?;
+        if !apply.ends_with('\n') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "incomplete APPLY line",
+            ));
+        }
         let apply = trim_line_end(&apply);
 
         if !apply.starts_with("APPLY ") {
@@ -1046,7 +1052,10 @@ pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) ->
 }
 
 pub fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.is_empty() || !hex.len().is_multiple_of(2) {
+    if hex.is_empty()
+        || !hex.len().is_multiple_of(2)
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return None;
     }
 
@@ -1643,6 +1652,8 @@ mod tests {
             "path_hex=61 suffix_hex=00",
             "path_hex=ff suffix_hex=20",
             "path_hex=61 suffix_hex=ff",
+            "path_hex=a€ suffix_hex=20",
+            "path_hex=61 suffix_hex=a€",
         ] {
             let apply = format!("APPLY chain=0 {fields} restore_hex=\n");
             let error =

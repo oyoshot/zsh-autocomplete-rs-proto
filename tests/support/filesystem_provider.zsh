@@ -17,6 +17,13 @@ mkdir -p "$HOME/files/directory" "$HOME/new-cwd"
 mkdir -p "$HOME/files/Folder" "$HOME/files/dots"
 : > "$HOME/files/Folder/Name"
 : > "$HOME/files/dots/.hidden"
+: > "$HOME/files/a~bee"
+mkdir -p "$HOME/files/Repeat" "$HOME/cwd-original" "$HOME/cwd-retargeted"
+: > "$HOME/files/Repeat/fuzzy.rs"
+: > "$HOME/files/Repeat/future.rs"
+: > "$HOME/cwd-original/match-original"
+: > "$HOME/cwd-retargeted/match-wrong"
+ln -s "$HOME/cwd-original" "$HOME/logical-cwd"
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$1" > "$HOME/argv"' > "$HOME/files/local"
 chmod +x "$HOME/files/local"
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$1" > "$HOME/argv"' > "$HOME/files/tool.py"
@@ -462,6 +469,57 @@ _test_run() {
         functions[_zacrs_invoke_daemon]="$saved_complete"
         _zacrs_initialize_daemon
     elif (( _test_index == 39 )); then
+        setopt localoptions no_extended_glob
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        BUFFER='probe a~b'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- syntax-preview-missing > "$_test_root/state"; return; }
+        _zacrs_current_context_key; local original_key="$REPLY"
+        setopt extended_glob
+        _zacrs_current_context_key
+        [[ "$REPLY" != "$original_key" ]] || { print -r -- syntax-cache-key-reused > "$_test_root/state"; return; }
+        _zacrs_complete_popup
+        [[ "$BUFFER" == 'probe a~b' && $_zacrs_filesystem_requested == 0 ]] || { print -r -- syntax-tab-reused > "$_test_root/state"; return; }
+        # Also exercise cache-first redraw when the buffer is identical.
+        unsetopt extended_glob
+        _zacrs_prev_buffer=''
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- syntax-preview-not-restored > "$_test_root/state"; return; }
+        setopt extended_glob
+        _test_actual_redraw
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        [[ $_zacrs_popup_visible == 0 ]] || { print -r -- syntax-redraw-reused > "$_test_root/state"; return; }
+    elif (( _test_index == 40 )); then
+        setopt localoptions no_chase_links
+        local old_cwd="$PWD" saved_cursor="$functions[_zacrs_get_cursor_pos]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        cd -- "$_test_root/logical-cwd"
+        [[ "$PWD" == "$_test_root/logical-cwd" ]] || { print -r -- cwd-fixture-not-logical > "$_test_root/state"; return; }
+        BUFFER='probe match'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- logical-cwd-preview-missing > "$_test_root/state"; return; }
+        ln -sfn "$_test_root/cwd-retargeted" "$_test_root/logical-cwd"
+        [[ -f match-original && -f "$PWD/match-wrong" ]] || { print -r -- cwd-fixture-not-retargeted > "$_test_root/state"; return; }
+        _zacrs_current_context_key
+        [[ -z "$REPLY" ]] || { print -r -- retargeted-cwd-key > "$_test_root/state"; return; }
+        _zacrs_complete_popup
+        [[ "$BUFFER" == 'probe match' && $_zacrs_filesystem_requested == 0 ]] || { print -r -- retargeted-cwd-selection > "$_test_root/state"; return; }
+        cd -- "$old_cwd"
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+    elif (( _test_index == 41 )); then
+        setopt localoptions no_case_glob no_case_paths
+        BUFFER='probe rEpeat//./fu'; CURSOR=${#BUFFER}
+        local prefix='' prefix_len=0 candidates_str=''
+        _zacrs_collect_candidates
+        _zacrs_cursor_stale=$'z\t\r'
+        if (( ZACRS_TEST_DAEMON )); then
+            _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" 2 1 0 narrow-preserved-spelling 1 1
+        else
+            _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" 2 1 1
+        fi
+        [[ "$BUFFER" == 'probe Repeat/fuzzy.rs ' && $CURSOR == ${#BUFFER} ]] || { print -r -- "corrected-path-narrowing:$BUFFER" > "$_test_root/state"; return; }
+    elif (( _test_index == 42 )); then
         # Restore the fields of a primary preview to exercise the reuse gate
         # independently of normal prompt-transition cleanup.
         [[ "$CONTEXT" != start || -n "$PREBUFFER" ]] || { print -r -- expected-continuation-editor > "$_test_root/state"; return; }
@@ -470,7 +528,9 @@ _test_run() {
         _zacrs_popup_snapshot_buffer="$BUFFER"; _zacrs_popup_snapshot_cursor=$CURSOR
         _zacrs_popup_snapshot_cwd="$PWD"; _zacrs_popup_snapshot_home="$HOME"
         _zacrs_popup_snapshot_daemon=1
-        _zacrs_popup_snapshot_file_options=${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}
+        local _zacrs_file_option_key
+        _zacrs_file_options
+        _zacrs_popup_snapshot_file_options="$_zacrs_file_option_key"
         _zacrs_popup_snapshot_columns=$COLUMNS; _zacrs_popup_snapshot_lines=$LINES
         _zacrs_current_context_key
         [[ -z "$REPLY" ]] || { print -r -- continuation-cache-key > "$_test_root/state"; return; }
@@ -547,8 +607,8 @@ for attempt in {1..300}; do
     sleep .01
 done
 [[ "$output" == *'READY> '* ]] || { print -u2 -r -- "not ready: ${(qqq)output}"; exit 1; }
-for case_index in {1..39}; do
-    if (( case_index == 39 )); then
+for case_index in {1..42}; do
+    if (( case_index == 42 )); then
         zpty -w -n files $'\x07'
         for attempt in {1..300}; do
             zpty -r -t files chunk 2>/dev/null && output+="$chunk"

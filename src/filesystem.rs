@@ -24,17 +24,21 @@ pub struct FilesystemOptions {
 }
 
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
-const MAX_PARENT_SCAN_ENTRIES: usize = 65_536;
+const MAX_SCANNED_ENTRIES: usize = 65_536;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SnapshotTooLarge;
 
 impl FilesystemQuery {
     pub fn collect(&self) -> Result<Vec<Candidate>, SnapshotTooLarge> {
-        self.collect_with_budget(MAX_SNAPSHOT_BYTES)
+        self.collect_with_budget(MAX_SNAPSHOT_BYTES, MAX_SCANNED_ENTRIES)
     }
 
-    fn collect_with_budget(&self, budget: usize) -> Result<Vec<Candidate>, SnapshotTooLarge> {
+    fn collect_with_budget(
+        &self,
+        budget: usize,
+        mut remaining_entries: usize,
+    ) -> Result<Vec<Candidate>, SnapshotTooLarge> {
         if !self.cwd.is_absolute()
             || self.path_prefix.contains('\0')
             || self.insertion_prefix.contains('\0')
@@ -51,11 +55,14 @@ impl FilesystemQuery {
         {
             return Ok(Vec::new());
         }
-        let (directory, basename) = split_prefix(&self.path_prefix);
-        let directory = Path::new(directory);
+        let (typed_directory, basename) = split_prefix(&self.path_prefix);
+        let directory = Path::new(typed_directory);
         let (insertion_directory, _) = split_prefix(&self.insertion_prefix);
         let (exact_directory, resolved_directories) = if self.options.ignore_parent_case {
-            (None, self.resolve_directories(directory, budget)?)
+            (
+                None,
+                self.resolve_directories(directory, budget, &mut remaining_entries)?,
+            )
         } else {
             (Some(directory), Vec::new())
         };
@@ -80,14 +87,11 @@ impl FilesystemQuery {
         {
             let corrected_display;
             let insertion_directory = if self.options.ignore_parent_case {
-                let Some(actual) = directory.to_str() else {
+                let Some(spelling) = corrected_directory_spelling(typed_directory, directory)
+                else {
                     continue;
                 };
-                corrected_display = if actual.is_empty() || actual.ends_with(is_separator) {
-                    format!("{display_anchor}{actual}")
-                } else {
-                    format!("{display_anchor}{actual}{MAIN_SEPARATOR}")
-                };
+                corrected_display = format!("{display_anchor}{spelling}");
                 &corrected_display
             } else {
                 insertion_directory
@@ -95,7 +99,9 @@ impl FilesystemQuery {
             let Ok(entries) = std::fs::read_dir(self.cwd.join(directory)) else {
                 continue;
             };
-            for entry in entries.flatten() {
+            for entry in entries {
+                remaining_entries = remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
+                let Ok(entry) = entry else { continue };
                 // The engine uses UTF-8. Never replace invalid bytes with a different filename.
                 let name = entry.file_name();
                 let Some(name_text) = name.to_str() else {
@@ -172,9 +178,9 @@ impl FilesystemQuery {
         &self,
         directory: &Path,
         budget: usize,
+        remaining_entries: &mut usize,
     ) -> Result<Vec<PathBuf>, SnapshotTooLarge> {
         let mut directories = vec![PathBuf::new()];
-        let mut remaining_entries = MAX_PARENT_SCAN_ENTRIES;
         for component in directory.components() {
             let Component::Normal(name) = component else {
                 for path in &mut directories {
@@ -193,7 +199,8 @@ impl FilesystemQuery {
                     continue;
                 };
                 for entry in entries {
-                    remaining_entries = remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
+                    *remaining_entries =
+                        remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
                     let Ok(entry) = entry else { continue };
                     let name = entry.file_name();
                     if name
@@ -222,6 +229,33 @@ impl FilesystemQuery {
 
 fn fold(text: &str) -> impl Iterator<Item = char> + '_ {
     text.case_fold_with(Variant::Simple, Locale::NonTurkic)
+}
+
+/// Substitute the on-disk names without normalizing the typed separators or dots.
+fn corrected_directory_spelling(typed: &str, resolved: &Path) -> Option<String> {
+    let prefix_len = match Path::new(typed).components().next() {
+        Some(Component::Prefix(prefix)) => prefix.as_os_str().len(),
+        _ => 0,
+    };
+    let (prefix, rest) = typed.split_at(prefix_len);
+    let mut names = resolved
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        });
+    let mut spelling = String::with_capacity(typed.len());
+    spelling.push_str(prefix);
+    for part in rest.split_inclusive(is_separator) {
+        let (typed_name, separator) = part.split_at(part.trim_end_matches(is_separator).len());
+        let name = match typed_name {
+            "" | "." | ".." => typed_name,
+            _ => names.next()?.to_str()?,
+        };
+        spelling.push_str(name);
+        spelling.push_str(separator);
+    }
+    names.next().is_none().then_some(spelling)
 }
 
 // A drive-qualified relative path requires per-drive shell state that this
@@ -310,12 +344,51 @@ mod tests {
         };
         let budget = size_of::<Candidate>() + 64;
         std::fs::write(root.path().join("first"), "").unwrap();
-        assert_eq!(query.collect_with_budget(budget).unwrap().len(), 1);
+        assert_eq!(
+            query
+                .collect_with_budget(budget, MAX_SCANNED_ENTRIES)
+                .unwrap()
+                .len(),
+            1
+        );
         std::fs::write(root.path().join("other"), "").unwrap();
         assert!(matches!(
-            query.collect_with_budget(budget),
+            query.collect_with_budget(budget, MAX_SCANNED_ENTRIES),
             Err(SnapshotTooLarge)
         ));
+    }
+
+    #[test]
+    fn scan_limit_counts_nonmatching_entries_across_parent_and_leaf() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("Folder");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(root.path().join("unrelated"), "").unwrap();
+        std::fs::write(parent.join("first"), "").unwrap();
+        std::fs::write(parent.join("second"), "").unwrap();
+        let mut query = FilesystemQuery {
+            cwd: root.path().into(),
+            path_prefix: "absent".into(),
+            insertion_prefix: "absent".into(),
+            options: FilesystemOptions::default(),
+        };
+        assert!(query.collect_with_budget(MAX_SNAPSHOT_BYTES, 1).is_err());
+        assert!(
+            query
+                .collect_with_budget(MAX_SNAPSHOT_BYTES, 2)
+                .unwrap()
+                .is_empty()
+        );
+        query.path_prefix = format!("folder{MAIN_SEPARATOR}absent");
+        query.insertion_prefix = query.path_prefix.clone();
+        query.options.ignore_parent_case = true;
+        assert!(query.collect_with_budget(MAX_SNAPSHOT_BYTES, 3).is_err());
+        assert!(
+            query
+                .collect_with_budget(MAX_SNAPSHOT_BYTES, 4)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -127,9 +127,10 @@ encoded_pwd="${encoded_pwd//\%/%25}"
 encoded_pwd="${encoded_pwd//:/%3A}"
 encoded_pwd="${encoded_pwd// /%20}"
 typeset -gi _zacrs_candidate_cache_generation=42
+_zacrs_file_options
 assert_context_key '' 'git' 'command position has no candidate cache key'
 assert_context_key \
-    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20:19::/test/home:${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}" \
+    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20:19::/test/home:$_zacrs_file_option_key" \
     'git add:foo%bar baz' \
     'candidate cache key includes command generation and encoded context'
 
