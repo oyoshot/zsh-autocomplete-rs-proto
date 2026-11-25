@@ -113,7 +113,7 @@ pub fn try_daemon_complete(
     let request = TextCompleteRequest {
         literal_paths: true,
         filesystem: filesystem.is_some(),
-        filesystem_ignore_case: filesystem.is_some_and(|query| query.ignore_case),
+        filesystem_options: filesystem.map(|query| query.options).unwrap_or_default(),
         cursor_row,
         cursor_col,
         term_cols,

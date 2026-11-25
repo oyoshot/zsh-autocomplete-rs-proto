@@ -128,27 +128,32 @@ directory. It offers this capability only at an unquoted literal word end of
 a simple command, including an empty argument. The full raw word must match
 the captured prefix, Zsh's lexical words must cover the input, and the command
 head must be literal and non-reserved. Quoted or escaped words, substitutions,
-patterns, cursors inside a word,
-and continuation or recursive editors do not request filesystem fallback. When
+patterns, cursors inside a word, and continuation or recursive editors do not
+request filesystem fallback. When
 the adapter cannot verify the context, it leaves filesystem edits disabled.
 Native completion continues to handle those contexts independently. Explicit
 command paths such as `./` and home-relative paths such as `~/` are supported;
 bare command words retain the command-table path. Home-relative candidates keep
 that display spelling but insert a safely quoted expanded path.
 
-Each request carries cwd; the shared daemon never uses its own cwd for lookup.
+Each request carries an absolute lookup base. Zsh supplies cwd for an ordinary
+relative path and HOME for a home-relative path.
 `render-files` and `complete-files` carry three length-framed UTF-8 fields before
-the existing prefix/candidate payload. Older daemons reject the distinct verbs
-instead of interpreting a structured body as TSV. The subprocess path accepts
-the same query through arguments. When `CASE_GLOB` is off, the adapter requests
-case-insensitive basename matching. Rust uses Unicode simple case folding and
-retains the name's original spelling for display and selection.
+the existing prefix/candidate payload. The adapter requires `filesystem=2` in
+the daemon handshake for these requests. With an older daemon, it uses the
+subprocess for filesystem preview and selection while keeping native
+completion and abbreviation requests on the daemon.
+When `CASE_GLOB` is off, the adapter requests case-insensitive basename matching
+and carries that policy into the popup filter. With `CASE_PATHS` also off, Rust
+resolves typed parent components case-insensitively using Unicode simple case
+folding and retains the actual directory spelling for display and selection.
+`GLOB_DOTS` allows a basename without an explicit dot to match hidden entries.
 The daemon retains structured filesystem snapshots with candidate and active
 popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
-scopes reuse to session, generation, cwd, HOME, `CASE_GLOB`, cursor and
+scopes reuse to session, generation, cwd, HOME, the three glob options, cursor and
 right-side input with the existing exact-prefix rule. Popup snapshots require
-the complete buffer, cursor, cwd, HOME and `CASE_GLOB` to match. For a cached
+the complete buffer, cursor, cwd, HOME and glob options to match. For a cached
 filesystem selection, the client must advertise `literal_paths=1` so the
 daemon can return the path and suffix without risking their loss in transit.
 Without that capability the daemon returns a no-edit result. If the daemon
@@ -167,16 +172,15 @@ exact UTF-8 filename bytes, including tabs and newlines, survive collection and
 selection. APPLY metadata
 carries the literal selected path and suffix separately; Zsh quotes the path
 with its native quoting facility before applying the suffix, including quoting
-tokens that match an ordinary or global alias. Unambiguous-prefix
+tokens that match an ordinary, global or suffix alias. Unambiguous-prefix
 extension is disabled for this source so cancellation cannot apply unquoted
 display text. Preview and interactive selection start with the typed filter.
-Non-UTF-8 names are skipped, never converted lossily. Hidden names
-require an explicit dot prefix. Directory symlinks are classified as directories.
-Each query budgets 1 MiB for candidate rows and owned path/display data. If the
-query exceeds that budget, it drops the entire set so a partial set cannot be
-selected automatically. Typing a narrower prefix can bring the set within the
-budget.
-This step adds no hooks, widgets, shell option changes or helper subprocesses.
+Non-UTF-8 names are skipped, never converted lossily. Directory symlinks are
+classified as directories. Each query budgets 1 MiB for candidate rows and
+owned path/display data. Case-insensitive traversal also limits parent
+directories to 1 MiB of path data at each level and scans at most 65,536 parent
+entries. Exceeding a limit drops the entire set so a partial set cannot be
+selected automatically.
 
 Filesystem collection currently runs synchronously in the shared daemon when a
 fresh request is handled. A slow filesystem can therefore delay other requests;

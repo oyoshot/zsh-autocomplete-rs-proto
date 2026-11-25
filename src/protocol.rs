@@ -1,4 +1,4 @@
-use crate::filesystem::FilesystemQuery;
+use crate::filesystem::{FilesystemOptions, FilesystemQuery};
 use std::io::{self, BufRead, Read, Write};
 
 // Command bytes
@@ -52,7 +52,7 @@ pub enum Response {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextRenderRequest {
     pub filesystem: bool,
-    pub filesystem_ignore_case: bool,
+    pub filesystem_options: FilesystemOptions,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -69,7 +69,7 @@ pub struct TextRenderRequest {
 pub struct TextCompleteRequest {
     pub literal_paths: bool,
     pub filesystem: bool,
-    pub filesystem_ignore_case: bool,
+    pub filesystem_options: FilesystemOptions,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -554,6 +554,15 @@ pub fn read_abbreviation_fields(
     Ok(fields)
 }
 
+fn filesystem_options_from_header(tokens: &[&str]) -> FilesystemOptions {
+    FilesystemOptions {
+        ignore_case: tokens.contains(&"filesystem_ignore_case=1"),
+        ignore_parent_case: tokens.contains(&"filesystem_ignore_parent_case=1"),
+        include_hidden: tokens.contains(&"filesystem_include_hidden=1"),
+        absolute_insertion: tokens.contains(&"filesystem_absolute_insertion=1"),
+    }
+}
+
 impl TextRequest {
     pub fn parse_header(line: &str) -> Option<Self> {
         // Dedicated verbs make older daemons reject structured bodies safely.
@@ -610,7 +619,7 @@ impl TextRequest {
                 }
                 Some(Self::Render(TextRenderRequest {
                     filesystem: rest.contains(&"filesystem=1"),
-                    filesystem_ignore_case: rest.contains(&"filesystem_ignore_case=1"),
+                    filesystem_options: filesystem_options_from_header(rest),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -668,7 +677,7 @@ impl TextRequest {
                 Some(Self::Complete(TextCompleteRequest {
                     literal_paths: rest.contains(&"literal_paths=1"),
                     filesystem: rest.contains(&"filesystem=1"),
-                    filesystem_ignore_case: rest.contains(&"filesystem_ignore_case=1"),
+                    filesystem_options: filesystem_options_from_header(rest),
                     cursor_row: parse_u16_token(cursor_row)?,
                     cursor_col: parse_u16_token(cursor_col)?,
                     term_cols: parse_u16_token(term_cols)?,
@@ -740,8 +749,29 @@ impl TextCompleteRequest {
             self.term_cols,
             self.term_rows
         );
-        if self.filesystem && self.filesystem_ignore_case {
-            line.push_str(" filesystem_ignore_case=1");
+        if self.filesystem {
+            for (enabled, flag) in [
+                (
+                    self.filesystem_options.ignore_case,
+                    " filesystem_ignore_case=1",
+                ),
+                (
+                    self.filesystem_options.ignore_parent_case,
+                    " filesystem_ignore_parent_case=1",
+                ),
+                (
+                    self.filesystem_options.include_hidden,
+                    " filesystem_include_hidden=1",
+                ),
+                (
+                    self.filesystem_options.absolute_insertion,
+                    " filesystem_absolute_insertion=1",
+                ),
+            ] {
+                if enabled {
+                    line.push_str(flag);
+                }
+            }
         }
         if self.literal_paths {
             line.push_str(" literal_paths=1");
@@ -1054,7 +1084,7 @@ pub fn write_filesystem_query(mut writer: impl Write, query: &FilesystemQuery) -
 }
 pub fn read_filesystem_query(
     reader: &mut impl BufRead,
-    ignore_case: bool,
+    options: FilesystemOptions,
 ) -> io::Result<FilesystemQuery> {
     let mut fields = Vec::new();
     for _ in 0..3 {
@@ -1093,7 +1123,7 @@ pub fn read_filesystem_query(
         cwd,
         path_prefix,
         insertion_prefix,
-        ignore_case,
+        options,
     };
     if !query.cwd.is_absolute() {
         return Err(io::Error::new(
@@ -1114,12 +1144,12 @@ mod tests {
             cwd: "/tmp/with\nnewline".into(),
             path_prefix: "tab\tand\nline".into(),
             insertion_prefix: "literal\nname".into(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         let mut bytes = Vec::new();
         write_filesystem_query(&mut bytes, &query).unwrap();
         assert_eq!(
-            read_filesystem_query(&mut std::io::Cursor::new(bytes), false).unwrap(),
+            read_filesystem_query(&mut std::io::Cursor::new(bytes), query.options).unwrap(),
             query
         );
         for invalid in [
@@ -1129,7 +1159,13 @@ mod tests {
             b"1\n\xff\n",
             b"1\n\0\n",
         ] {
-            assert!(read_filesystem_query(&mut std::io::Cursor::new(invalid), false).is_err());
+            assert!(
+                read_filesystem_query(
+                    &mut std::io::Cursor::new(invalid),
+                    FilesystemOptions::default()
+                )
+                .is_err()
+            );
         }
         assert!(matches!(
             TextRequest::parse_header("render-files 2 1 80 24"),
@@ -1486,7 +1522,12 @@ mod tests {
         let request = TextCompleteRequest {
             literal_paths: true,
             filesystem: true,
-            filesystem_ignore_case: true,
+            filesystem_options: FilesystemOptions {
+                ignore_case: true,
+                ignore_parent_case: true,
+                include_hidden: true,
+                absolute_insertion: true,
+            },
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -1516,7 +1557,7 @@ mod tests {
             parsed,
             TextRequest::Render(TextRenderRequest {
                 filesystem: false,
-                filesystem_ignore_case: false,
+                filesystem_options: FilesystemOptions::default(),
                 cursor_row: 5,
                 cursor_col: 2,
                 term_cols: 80,

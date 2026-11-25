@@ -737,7 +737,7 @@ impl DaemonServer {
         match request {
             TextRequest::Render(TextRenderRequest {
                 filesystem,
-                filesystem_ignore_case,
+                filesystem_options,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -750,7 +750,7 @@ impl DaemonServer {
                 candidates_present,
             }) => {
                 let filesystem_query = if filesystem {
-                    match protocol::read_filesystem_query(reader, filesystem_ignore_case) {
+                    match protocol::read_filesystem_query(reader, filesystem_options) {
                         Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
@@ -1015,7 +1015,7 @@ impl DaemonServer {
             TextRequest::Complete(TextCompleteRequest {
                 literal_paths,
                 filesystem,
-                filesystem_ignore_case,
+                filesystem_options,
                 cursor_row,
                 cursor_col,
                 term_cols,
@@ -1031,7 +1031,7 @@ impl DaemonServer {
                 popup_key,
             }) => {
                 let filesystem_query = if filesystem {
-                    match protocol::read_filesystem_query(reader, filesystem_ignore_case) {
+                    match protocol::read_filesystem_query(reader, filesystem_options) {
                         Ok(query) => Some(query),
                         Err(error) => {
                             let _ = writeln!(writer, "ERROR {error}");
@@ -1233,7 +1233,7 @@ impl DaemonServer {
                 self.maybe_reload_config();
                 let _ = writeln!(
                     writer,
-                    "OK enter_expansion={} edit_context=2 filesystem=1 space_expansion={}",
+                    "OK enter_expansion={} edit_context=2 filesystem=2 space_expansion={}",
                     u8::from(self.config.expand_abbreviation_on_enter),
                     u8::from(self.config.expand_abbreviation_on_space)
                 );
@@ -2217,7 +2217,7 @@ mod tests {
                     cwd: directory.into(),
                     path_prefix: "same".into(),
                     insertion_prefix: "same".into(),
-                    ignore_case: false,
+                    options: Default::default(),
                 },
             )
             .unwrap();
@@ -2298,7 +2298,7 @@ mod tests {
     fn literal_candidate_boundary_keeps_path_and_suffix_separate() {
         let mut candidate =
             crate::candidate::Candidate::parse_line("./directory/\tdirectory\tdirectory");
-        candidate.literal_path = Some(PathBuf::from("./directory"));
+        candidate.literal_path = Some(PathBuf::from("./directory").into());
         for (configured, dismiss, expected) in [
             ("/", false, "/"),
             ("/", true, "/"),
@@ -2319,7 +2319,7 @@ mod tests {
             );
         }
         let mut trailing = crate::candidate::Candidate::parse_line("trailing \tfile\tfile");
-        trailing.literal_path = Some(PathBuf::from("trailing "));
+        trailing.literal_path = Some(PathBuf::from("trailing ").into());
         let empty = crate::config::SuffixConfig::default().with_override("file", "");
         let confirm = super::ApplyResult::confirm(trailing.text.clone())
             .with_literal_candidate(&trailing, &empty, false);
@@ -2337,7 +2337,8 @@ mod tests {
         {
             // The public model cannot turn an invalid path into a different UTF-8 filename.
             use std::os::unix::ffi::OsStringExt;
-            candidate.literal_path = Some(std::ffi::OsString::from_vec(vec![b'a', 0xff]).into());
+            candidate.literal_path =
+                Some(PathBuf::from(std::ffi::OsString::from_vec(vec![b'a', 0xff])).into());
             let result = super::ApplyResult::confirm("unusable".into()).with_literal_candidate(
                 &candidate,
                 &crate::config::SuffixConfig::default(),
@@ -2357,7 +2358,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: "space".into(),
             insertion_prefix: "space".into(),
-            ignore_case: false,
+            options: Default::default(),
         }
         .collect()
         .unwrap();
@@ -2946,7 +2947,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: "p".into(),
             insertion_prefix: "p".into(),
-            ignore_case: false,
+            options: Default::default(),
         }
         .collect()
         .unwrap()
@@ -4318,7 +4319,7 @@ mod tests {
         let request = TextCompleteRequest {
             literal_paths: true,
             filesystem: false,
-            filesystem_ignore_case: false,
+            filesystem_options: Default::default(),
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,
@@ -4359,7 +4360,7 @@ mod tests {
         let request = TextCompleteRequest {
             literal_paths: true,
             filesystem: false,
-            filesystem_ignore_case: false,
+            filesystem_options: Default::default(),
             cursor_row: 5,
             cursor_col: 2,
             term_cols: 80,

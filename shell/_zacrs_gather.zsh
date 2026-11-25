@@ -92,9 +92,13 @@ _zacrs_filesystem_context() {
     # Bare command words retain the shell command-table path. Explicit paths
     # and argument positions may also offer filesystem candidates.
     (( current > 1 )) || [[ "$literal" == */* ]] || return
-    typeset -g _zacrs_filesystem_prefix="$literal" _zacrs_filesystem_lookup="$literal"
+    typeset -g _zacrs_filesystem_prefix="$literal" _zacrs_filesystem_lookup="$literal" _zacrs_filesystem_base="$_zacrs_filesystem_cwd"
     if [[ "$literal" == '~/'* ]]; then
-        _zacrs_filesystem_lookup="${_zacrs_filesystem_home}/${literal[3,-1]}"
+        [[ "$_zacrs_filesystem_home" == /* ]] || return
+        _zacrs_filesystem_base="$_zacrs_filesystem_home"
+        _zacrs_filesystem_lookup="${literal[3,-1]}"
+        # Repeated separators after ~/ are still relative to the home anchor.
+        _zacrs_filesystem_lookup="${_zacrs_filesystem_lookup#"${_zacrs_filesystem_lookup%%[^/]*}"}"
     fi
     _zacrs_filesystem_valid=1
 }
@@ -102,23 +106,26 @@ _zacrs_filesystem_context() {
 _zacrs_filesystem_query_current() {
     (( ${_zacrs_filesystem_valid:-0} )) &&
         [[ "$_zacrs_filesystem_home" == "${HOME:-}" && "$_zacrs_filesystem_cwd" == "$PWD" &&
-            "$_zacrs_filesystem_case_glob" == "${options[caseglob]}" ]]
+            "$_zacrs_filesystem_file_options" == "${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}" ]]
 }
 
 # Add the same structured query to daemon and subprocess requests.
 _zacrs_filesystem_args() {
     reply=()
     (( ${_zacrs_filesystem_requested:-0} )) || return 0
-    reply=(--filesystem-cwd "$_zacrs_filesystem_cwd" --filesystem-prefix "$_zacrs_filesystem_lookup"
+    reply=(--filesystem-cwd "$_zacrs_filesystem_base" --filesystem-prefix "$_zacrs_filesystem_lookup"
         --filesystem-insertion-prefix "$_zacrs_filesystem_prefix")
-    [[ "$_zacrs_filesystem_case_glob" == off ]] && reply+=(--filesystem-ignore-case)
+    [[ "$_zacrs_filesystem_file_options" == off:* ]] && reply+=(--filesystem-ignore-case)
+    [[ "$_zacrs_filesystem_file_options" == off:off:* ]] && reply+=(--filesystem-ignore-parent-case)
+    [[ "$_zacrs_filesystem_file_options" == *:on ]] && reply+=(--filesystem-include-hidden)
+    [[ "$_zacrs_filesystem_prefix" == '~/'* ]] && reply+=(--filesystem-absolute-insertion)
     return 0
 }
 
 # Byte counts are local to this transport function; no subprocess is needed.
 _zacrs_write_filesystem_query() {
     local fd=$1 LC_ALL=C item
-    for item in "$_zacrs_filesystem_cwd" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"; do
+    for item in "$_zacrs_filesystem_base" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"; do
         print -r -u $fd -- "${#item}"
         print -r -u $fd -- "$item"
     done

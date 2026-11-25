@@ -87,7 +87,7 @@ _zacrs_current_context_key() {
             _ctx_fields=("${(@)_ctx_fields//${_ctx_spaces[i]}/${_ctx_escapes[i]}}")
         done
     fi
-    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${CURSOR:-${#LBUFFER}}:${_ctx_fields[3]}:${_ctx_fields[4]}:${options[caseglob]}"
+    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${CURSOR:-${#LBUFFER}}:${_ctx_fields[3]}:${_ctx_fields[4]}:${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}"
 }
 
 # Check if the last word in buffer is in command position

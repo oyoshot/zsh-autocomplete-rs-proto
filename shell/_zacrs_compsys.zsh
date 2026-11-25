@@ -111,7 +111,7 @@ _zacrs_compsys_func() {
         _zacrs_file_buffer="$BUFFER"
         _zacrs_file_cursor=$CURSOR
         typeset -g _zacrs_filesystem_home="${HOME:-}" _zacrs_filesystem_cwd="$PWD"
-        typeset -g _zacrs_filesystem_case_glob=${options[caseglob]}
+        typeset -g _zacrs_filesystem_file_options=${options[caseglob]}:${options[casepaths]:-off}:${options[globdots]}
     fi
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0

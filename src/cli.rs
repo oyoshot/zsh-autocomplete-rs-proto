@@ -1,4 +1,4 @@
-use crate::filesystem::FilesystemQuery;
+use crate::filesystem::{FilesystemOptions, FilesystemQuery};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -201,6 +201,12 @@ pub struct FilesystemArgs {
     pub filesystem_insertion_prefix: Option<String>,
     #[arg(long, requires = "filesystem_cwd")]
     pub filesystem_ignore_case: bool,
+    #[arg(long, requires = "filesystem_cwd")]
+    pub filesystem_ignore_parent_case: bool,
+    #[arg(long, requires = "filesystem_cwd")]
+    pub filesystem_include_hidden: bool,
+    #[arg(long, requires = "filesystem_cwd")]
+    pub filesystem_absolute_insertion: bool,
 }
 impl FilesystemArgs {
     pub fn query(self) -> std::io::Result<Option<FilesystemQuery>> {
@@ -217,7 +223,12 @@ impl FilesystemArgs {
                     cwd: cwd.into(),
                     path_prefix,
                     insertion_prefix,
-                    ignore_case: self.filesystem_ignore_case,
+                    options: FilesystemOptions {
+                        ignore_case: self.filesystem_ignore_case,
+                        ignore_parent_case: self.filesystem_ignore_parent_case,
+                        include_hidden: self.filesystem_include_hidden,
+                        absolute_insertion: self.filesystem_absolute_insertion,
+                    },
                 }))
             }
             _ => Err(std::io::Error::new(

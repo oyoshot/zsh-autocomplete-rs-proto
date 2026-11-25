@@ -10,10 +10,40 @@ pub struct Candidate {
     pub insert_text: Option<String>,
     pub cursor_offset: Option<usize>,
     /// Filesystem identity without presentation separators or configured suffixes.
-    pub literal_path: Option<PathBuf>,
+    pub literal_path: Option<LiteralPath>,
+}
+
+#[derive(Clone)]
+pub struct LiteralPath {
+    pub path: PathBuf,
+    pub ignore_case: bool,
+}
+
+impl std::ops::Deref for LiteralPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(test)]
+impl From<PathBuf> for LiteralPath {
+    fn from(path: PathBuf) -> Self {
+        Self {
+            path,
+            ignore_case: false,
+        }
+    }
 }
 
 impl Candidate {
+    pub(crate) fn filesystem_ignores_case(&self) -> bool {
+        self.literal_path
+            .as_ref()
+            .is_some_and(|file| file.ignore_case)
+    }
+
     /// Borrow the filesystem path and compute its separate shell insertion suffix.
     /// Default directory presentation follows the host; explicit suffixes remain policy.
     pub fn literal_insertion(
@@ -192,7 +222,7 @@ mod tests {
     #[test]
     fn literal_filename_trailing_space_never_consumes_a_separator() {
         let mut candidate = Candidate::parse_line("filename \tfile\tfile");
-        candidate.literal_path = Some("filename ".into());
+        candidate.literal_path = Some(PathBuf::from("filename ").into());
         assert_eq!(
             candidate.literal_insertion(Some(" "), false),
             Some((Path::new("filename "), " ".into()))
@@ -214,7 +244,7 @@ mod tests {
     #[test]
     fn literal_directory_suffixes_are_separate_from_the_path() {
         let mut candidate = Candidate::parse_line("./directory/\tdirectory\tdirectory");
-        candidate.literal_path = Some("./directory".into());
+        candidate.literal_path = Some(PathBuf::from("./directory").into());
         for (configured, dismiss, expected) in [
             (None, false, MAIN_SEPARATOR_STR),
             (None, true, MAIN_SEPARATOR_STR),
@@ -231,7 +261,7 @@ mod tests {
             assert_eq!(path.as_os_str(), std::ffi::OsStr::new("./directory"));
             assert_eq!(suffix, expected);
         }
-        candidate.literal_path = Some(std::path::MAIN_SEPARATOR_STR.into());
+        candidate.literal_path = Some(PathBuf::from(std::path::MAIN_SEPARATOR_STR).into());
         assert_eq!(candidate.literal_insertion(None, true).unwrap().1, "");
         assert_eq!(
             candidate
@@ -249,7 +279,7 @@ mod tests {
     #[test]
     fn host_directory_separator_is_metadata_and_explicit_override_is_preserved() {
         let mut candidate = Candidate::parse_line("directory\t\tdirectory");
-        candidate.literal_path = Some(PathBuf::from("directory"));
+        candidate.literal_path = Some(PathBuf::from("directory").into());
         assert_eq!(
             candidate.literal_insertion(None, false).unwrap().1,
             MAIN_SEPARATOR_STR

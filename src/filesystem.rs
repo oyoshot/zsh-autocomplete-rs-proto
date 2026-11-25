@@ -1,6 +1,6 @@
 //! Host-native filesystem candidate collection.
 //! Shell syntax and display spelling remain adapter-supplied facts.
-use crate::candidate::Candidate;
+use crate::candidate::{Candidate, LiteralPath};
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf, is_separator};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 
@@ -11,10 +11,20 @@ pub struct FilesystemQuery {
     pub path_prefix: String,
     /// Literal spelling used for candidates (may differ after home expansion).
     pub insertion_prefix: String,
+    pub options: FilesystemOptions,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FilesystemOptions {
     pub ignore_case: bool,
+    pub ignore_parent_case: bool,
+    pub include_hidden: bool,
+    /// Resolve relative to the supplied cwd and insert the absolute result.
+    pub absolute_insertion: bool,
 }
 
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
+const MAX_PARENT_SCAN_ENTRIES: usize = 65_536;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SnapshotTooLarge;
@@ -31,85 +41,187 @@ impl FilesystemQuery {
         {
             return Ok(Vec::new());
         }
-        if !supports_lookup_prefix(Path::new(&self.path_prefix)) {
+        let prefix = Path::new(&self.path_prefix);
+        if !supports_lookup_prefix(prefix)
+            || (self.options.absolute_insertion
+                && matches!(
+                    prefix.components().next(),
+                    Some(Component::Prefix(_) | Component::RootDir)
+                ))
+        {
             return Ok(Vec::new());
         }
         let (directory, basename) = split_prefix(&self.path_prefix);
         let directory = Path::new(directory);
         let (insertion_directory, _) = split_prefix(&self.insertion_prefix);
-        let lookup = self.cwd.join(directory);
-        let Ok(entries) = std::fs::read_dir(lookup.as_path()) else {
-            return Ok(Vec::new());
+        let (exact_directory, resolved_directories) = if self.options.ignore_parent_case {
+            (None, self.resolve_directories(directory, budget)?)
+        } else {
+            (Some(directory), Vec::new())
         };
-        let folded_prefix: Vec<_> = if self.ignore_case {
-            basename
-                .case_fold_with(Variant::Simple, Locale::NonTurkic)
-                .collect()
+        let display_anchor = if self.options.ignore_parent_case {
+            let Some(anchor) = self.insertion_prefix.strip_suffix(&self.path_prefix) else {
+                return Ok(Vec::new());
+            };
+            anchor
+        } else {
+            ""
+        };
+        let folded_prefix: Vec<_> = if self.options.ignore_case {
+            fold(basename).collect()
         } else {
             Vec::new()
         };
         let mut candidates = Vec::new();
         let mut retained_bytes = 0;
-        for entry in entries.flatten() {
-            // The engine uses UTF-8. Never replace invalid bytes with a different filename.
-            let name = entry.file_name();
-            let Some(name_text) = name.to_str() else {
-                continue;
-            };
-            if name_text.starts_with('.') && !basename.starts_with('.') {
-                continue;
-            }
-            if !name_text.starts_with(basename)
-                && !(self.ignore_case && {
-                    let mut folded_name =
-                        name_text.case_fold_with(Variant::Simple, Locale::NonTurkic);
-                    folded_prefix.iter().all(|&c| folded_name.next() == Some(c))
-                })
-            {
-                continue;
-            }
-            let is_directory = entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_dir() || (kind.is_symlink() && entry.path().is_dir()));
-            let path = directory.join(&name);
-            let mut display_path = format!("{insertion_directory}{name_text}");
-            if is_directory {
-                // Presentation keeps its separator separate from the actual path.
-                display_path.push(MAIN_SEPARATOR);
-            }
-            let mut text = String::with_capacity(display_path.len());
-            for c in display_path.chars() {
-                if c == '\\' && !is_separator(c) {
-                    text.push_str("\\\\");
-                } else if c.is_control() {
-                    text.extend(c.escape_default());
+        for directory in exact_directory
+            .into_iter()
+            .chain(resolved_directories.iter().map(PathBuf::as_path))
+        {
+            let corrected_display;
+            let insertion_directory = if self.options.ignore_parent_case {
+                let Some(actual) = directory.to_str() else {
+                    continue;
+                };
+                corrected_display = if actual.is_empty() || actual.ends_with(is_separator) {
+                    format!("{display_anchor}{actual}")
                 } else {
-                    text.push(c);
-                }
-            }
-            let candidate = Candidate {
-                text,
-                description: if is_directory { "directory" } else { "file" }.into(),
-                kind: if is_directory { "directory" } else { "file" }.into(),
-                insert_text: None,
-                cursor_offset: None,
-                literal_path: Some(path),
+                    format!("{display_anchor}{actual}{MAIN_SEPARATOR}")
+                };
+                &corrected_display
+            } else {
+                insertion_directory
             };
-            // Count owned data as well as row storage. Abandon the whole query
-            // on overflow, since a partial snapshot could be auto-selected.
-            retained_bytes += size_of::<Candidate>()
-                + candidate.text.capacity()
-                + candidate.description.capacity()
-                + candidate.kind.capacity()
-                + candidate.literal_path.as_ref().unwrap().capacity();
-            if retained_bytes > budget {
-                return Err(SnapshotTooLarge);
+            let Ok(entries) = std::fs::read_dir(self.cwd.join(directory)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                // The engine uses UTF-8. Never replace invalid bytes with a different filename.
+                let name = entry.file_name();
+                let Some(name_text) = name.to_str() else {
+                    continue;
+                };
+                if !self.options.include_hidden
+                    && name_text.starts_with('.')
+                    && !basename.starts_with('.')
+                {
+                    continue;
+                }
+                if !name_text.starts_with(basename)
+                    && !(self.options.ignore_case && {
+                        let mut folded_name = fold(name_text);
+                        folded_prefix.iter().all(|&c| folded_name.next() == Some(c))
+                    })
+                {
+                    continue;
+                }
+                let is_directory = entry.file_type().is_ok_and(|kind| {
+                    kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())
+                });
+                let path = directory.join(&name);
+                let path = if self.options.absolute_insertion {
+                    self.cwd.join(path)
+                } else {
+                    path
+                };
+                let mut display_path = format!("{insertion_directory}{name_text}");
+                if is_directory {
+                    // Presentation keeps its separator separate from the actual path.
+                    display_path.push(MAIN_SEPARATOR);
+                }
+                let mut text = String::with_capacity(display_path.len());
+                for c in display_path.chars() {
+                    if c == '\\' && !is_separator(c) {
+                        text.push_str("\\\\");
+                    } else if c.is_control() {
+                        text.extend(c.escape_default());
+                    } else {
+                        text.push(c);
+                    }
+                }
+                let path_bytes = path.capacity();
+                let candidate = Candidate {
+                    text,
+                    description: if is_directory { "directory" } else { "file" }.into(),
+                    kind: if is_directory { "directory" } else { "file" }.into(),
+                    insert_text: None,
+                    cursor_offset: None,
+                    literal_path: Some(LiteralPath {
+                        path,
+                        ignore_case: self.options.ignore_case,
+                    }),
+                };
+                // Count owned data as well as row storage. Abandon the whole query
+                // on overflow, since a partial snapshot could be auto-selected.
+                retained_bytes += size_of::<Candidate>()
+                    + candidate.text.capacity()
+                    + candidate.description.capacity()
+                    + candidate.kind.capacity()
+                    + path_bytes;
+                if retained_bytes > budget {
+                    return Err(SnapshotTooLarge);
+                }
+                candidates.push(candidate);
             }
-            candidates.push(candidate);
         }
         candidates.sort_by(|a, b| a.text.cmp(&b.text));
         Ok(candidates)
     }
+
+    fn resolve_directories(
+        &self,
+        directory: &Path,
+        budget: usize,
+    ) -> Result<Vec<PathBuf>, SnapshotTooLarge> {
+        let mut directories = vec![PathBuf::new()];
+        let mut remaining_entries = MAX_PARENT_SCAN_ENTRIES;
+        for component in directory.components() {
+            let Component::Normal(name) = component else {
+                for path in &mut directories {
+                    path.push(component.as_os_str());
+                }
+                continue;
+            };
+            let Some(name) = name.to_str() else {
+                return Ok(Vec::new());
+            };
+            let folded: Vec<_> = fold(name).collect();
+            let mut matches = Vec::new();
+            let mut remaining_bytes = budget;
+            for path in directories {
+                let Ok(entries) = std::fs::read_dir(self.cwd.join(&path)) else {
+                    continue;
+                };
+                for entry in entries {
+                    remaining_entries = remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
+                    let Ok(entry) = entry else { continue };
+                    let name = entry.file_name();
+                    if name
+                        .to_str()
+                        .is_some_and(|text| fold(text).eq(folded.iter().copied()))
+                        && entry.file_type().is_ok_and(|kind| {
+                            kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())
+                        })
+                    {
+                        let next = path.join(name);
+                        remaining_bytes = remaining_bytes
+                            .checked_sub(size_of::<PathBuf>() + next.capacity())
+                            .ok_or(SnapshotTooLarge)?;
+                        matches.push(next);
+                    }
+                }
+            }
+            if matches.is_empty() {
+                return Ok(matches);
+            }
+            directories = matches;
+        }
+        Ok(directories)
+    }
+}
+
+fn fold(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.case_fold_with(Variant::Simple, Locale::NonTurkic)
 }
 
 // A drive-qualified relative path requires per-drive shell state that this
@@ -137,10 +249,10 @@ mod tests {
             cwd: root.path().into(),
             path_prefix: "ωM".into(),
             insertion_prefix: "ωM".into(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         assert!(query.collect().unwrap().is_empty());
-        query.ignore_case = true;
+        query.options.ignore_case = true;
         let candidates = query.collect().unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].text, "Ωmega");
@@ -151,13 +263,50 @@ mod tests {
     }
 
     #[test]
+    fn folded_parent_lookup_preserves_actual_names_under_the_query_anchor() {
+        let root = tempfile::tempdir().unwrap();
+        let actual = root.path().join("Folder").join("Child");
+        std::fs::create_dir_all(&actual).unwrap();
+        std::fs::write(actual.join("Name"), "").unwrap();
+        std::fs::write(actual.join(".hidden"), "").unwrap();
+        let typed = format!("folder{MAIN_SEPARATOR}CHILD{MAIN_SEPARATOR}");
+        let mut query = FilesystemQuery {
+            cwd: root.path().into(),
+            path_prefix: format!("{typed}na"),
+            insertion_prefix: format!("~/{typed}na"),
+            options: FilesystemOptions {
+                ignore_case: true,
+                ignore_parent_case: true,
+                absolute_insertion: true,
+                ..FilesystemOptions::default()
+            },
+        };
+        let rows = query.collect().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].text,
+            format!("~/Folder{MAIN_SEPARATOR}Child{MAIN_SEPARATOR}Name")
+        );
+        assert_eq!(
+            rows[0].literal_path.as_deref(),
+            Some(actual.join("Name").as_path())
+        );
+
+        query.path_prefix = typed.clone();
+        query.insertion_prefix = format!("~/{typed}");
+        assert_eq!(query.collect().unwrap().len(), 1);
+        query.options.include_hidden = true;
+        assert_eq!(query.collect().unwrap().len(), 2);
+    }
+
+    #[test]
     fn oversized_snapshot_is_rejected_as_a_whole() {
         let root = tempfile::tempdir().unwrap();
         let query = FilesystemQuery {
             cwd: root.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         let budget = size_of::<Candidate>() + 64;
         std::fs::write(root.path().join("first"), "").unwrap();
@@ -224,7 +373,7 @@ mod tests {
                 cwd,
                 path_prefix: lookup_prefix,
                 insertion_prefix: display_prefix,
-                ignore_case: false,
+                options: FilesystemOptions::default(),
             };
             let candidates = query.collect().unwrap();
             let file = candidates.iter().find(|c| c.kind == "file").unwrap();
@@ -251,7 +400,7 @@ mod tests {
             cwd: root.path().to_path_buf(),
             path_prefix: "./".into(),
             insertion_prefix: "./".into(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         assert!(query.collect().unwrap().iter().any(|c| c.text == "./sample"
             && c.literal_path.as_ref().unwrap().as_os_str() == std::ffi::OsStr::new("./sample")));
@@ -268,7 +417,7 @@ mod tests {
             cwd: first.path().into(),
             path_prefix: "sam".into(),
             insertion_prefix: "sam".into(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         assert_eq!(
             query.collect().unwrap()[0].literal_path.as_deref(),
@@ -314,7 +463,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         let rows = query.collect().unwrap();
         let displays: std::collections::HashSet<_> = rows.iter().map(|c| c.text.as_str()).collect();
@@ -351,7 +500,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         assert!(query.collect().unwrap().is_empty());
     }
@@ -369,7 +518,7 @@ mod tests {
             cwd: temp.path().into(),
             path_prefix: String::new(),
             insertion_prefix: String::new(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         let rows = query.collect().unwrap();
         assert_eq!(rows.len(), 5);
@@ -395,7 +544,7 @@ mod tests {
             cwd: first.path().into(),
             path_prefix: "a*".into(),
             insertion_prefix: "a*".into(),
-            ignore_case: false,
+            options: FilesystemOptions::default(),
         };
         assert_eq!(query.collect().unwrap()[0].text, "a*b");
         query.cwd = second.path().into();
