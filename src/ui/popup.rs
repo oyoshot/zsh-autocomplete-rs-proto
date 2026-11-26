@@ -2,7 +2,7 @@ use crate::app::App;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_POPUP_WIDTH: u16 = 60;
-const PADDING: u16 = 3; // Two cells for the selection gutter, one on the right.
+const PADDING: usize = 3; // Two cells for the selection gutter, one on the right.
 
 /// Returns `true` if `s` is safe to embed as a space-delimited header token.
 /// Rejects empty strings, spaces, and ASCII control characters.
@@ -68,33 +68,61 @@ impl Popup {
             .iter()
             .map(|&candidate_idx| {
                 let c = &app.all_candidates[candidate_idx];
-                let text_w = UnicodeWidthStr::width(c.text.as_str()) as u16;
+                let text_w = UnicodeWidthStr::width(c.text.as_str());
                 let desc_w = if c.description.is_empty() {
                     0
                 } else {
-                    UnicodeWidthStr::width(c.description.as_str()) as u16 + 2
+                    UnicodeWidthStr::width(c.description.as_str()).saturating_add(2)
                 };
-                text_w + desc_w
+                text_w.saturating_add(desc_w)
             })
             .max()
             .unwrap_or(0);
 
         let inner_width = max_content_width
             .saturating_add(PADDING)
-            .max(UnicodeWidthStr::width(filter_display.as_str()) as u16)
-            .max(UnicodeWidthStr::width(Self::range_label(app).as_str()) as u16);
-        let width = (inner_width + 2).min(MAX_POPUP_WIDTH).min(term_cols);
+            .max(UnicodeWidthStr::width(filter_display.as_str()))
+            .max(UnicodeWidthStr::width(Self::range_label(app).as_str()));
 
-        let num_visible = visible.len() as u16;
-        let height = num_visible + 2;
+        Self::place(
+            app.cursor_row,
+            app.cursor_col,
+            term_cols,
+            term_rows,
+            inner_width,
+            visible.len(),
+        )
+    }
 
-        let col = app.cursor_col.min(term_cols.saturating_sub(width));
+    /// Places a popup with `inner_width` content cells and `num_visible` rows.
+    ///
+    /// Total for every input: oversized content saturates instead of wrapping,
+    /// so the popup never extends past the right edge of the terminal.
+    fn place(
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        inner_width: usize,
+        num_visible: usize,
+    ) -> Self {
+        let width = u16::try_from(inner_width)
+            .unwrap_or(u16::MAX)
+            .saturating_add(2)
+            .min(MAX_POPUP_WIDTH)
+            .min(term_cols);
+        let height = u16::try_from(num_visible)
+            .unwrap_or(u16::MAX)
+            .saturating_add(2);
 
-        let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+        let col = cursor_col.min(term_cols.saturating_sub(width));
+
+        let row_below = cursor_row.saturating_add(1);
+        let space_below = term_rows.saturating_sub(row_below);
         let row = if space_below >= height {
-            app.cursor_row + 1
+            row_below
         } else {
-            app.cursor_row.saturating_sub(height)
+            cursor_row.saturating_sub(height)
         };
 
         Popup {
@@ -281,5 +309,53 @@ mod tests {
                 "control char {ctrl:?} should suppress common_prefix in: {meta}"
             );
         }
+    }
+
+    /// Runs as a randomized test under `cargo test` and as a proof over every
+    /// input under `cargo kani --tests`.
+    #[test]
+    #[cfg_attr(kani, kani::proof)]
+    fn place_stays_on_screen_for_any_geometry() {
+        bolero::check!()
+            .with_type::<(u16, u16, u16, u16, usize, usize)>()
+            .cloned()
+            .for_each(
+                |(cursor_row, cursor_col, term_cols, term_rows, inner_width, num_visible)| {
+                    let popup = Popup::place(
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        inner_width,
+                        num_visible,
+                    );
+                    let bottom = u32::from(popup.row) + u32::from(popup.height);
+
+                    assert!(popup.width <= MAX_POPUP_WIDTH);
+                    assert!(popup.col <= cursor_col);
+                    assert!(u32::from(popup.col) + u32::from(popup.width) <= u32::from(term_cols));
+
+                    if popup.row > cursor_row {
+                        assert_eq!(u32::from(popup.row), u32::from(cursor_row) + 1);
+                        assert!(bottom <= u32::from(term_rows));
+                    } else if cursor_row >= popup.height {
+                        assert_eq!(bottom, u32::from(cursor_row));
+                    } else {
+                        assert_eq!(popup.row, 0);
+                    }
+                    if cursor_row < term_rows && popup.height <= term_rows {
+                        assert!(bottom <= u32::from(term_rows));
+                    }
+                },
+            );
+    }
+
+    #[test]
+    fn popup_width_saturates_for_oversized_candidates() {
+        let wide = "a".repeat(usize::from(u16::MAX));
+        let mut app = make_app(&[&wide], "", 5, 0, 80, 24);
+        app.all_candidates[0].description = wide.clone();
+        let popup = Popup::compute(&app);
+        assert_eq!(popup.width, MAX_POPUP_WIDTH);
     }
 }
