@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794745437482,
+  "lastUpdate": 1795712533060,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -22283,6 +22283,282 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 622,
             "range": "± 4",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "933b78b4d854617527e7793a8e4f9915d7928c12",
+          "message": "fix: harden hex decoding and popup rendering with Kani proofs (#177)\n\n* test: add bolero for tests that double as Kani proofs\n\nHarnesses written with bolero::check!() run against random inputs under cargo test and against every input under cargo kani --tests. Register cfg(kani) so the proof attributes pass the unexpected_cfgs lint, and document how to run Kani with a memory cap, since the solver can exhaust memory.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* fix(protocol): reject malformed hex without panicking\n\ndecode_hex_bytes sliced the input string two bytes at a time, so an even-length token whose pair boundary fell inside a multi-byte character panicked. It also accepted a sign, decoding \"+f\" as 0x0f. Decode on bytes and accept only hex digits.\n\nKani proves, for every input of up to 6 bytes, that decoding succeeds exactly for non-empty even-length hex digits, and that digit values match char::to_digit for all 256 bytes. The round trip through encode_hex_bytes stays a randomized test because the solver runs out of memory on it.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* fix(ui): saturate popup geometry instead of overflowing\n\nPopup::compute added u16 values without checks and truncated display widths with as u16. Oversized candidates or a cursor row of u16::MAX panicked in debug builds and wrapped in release builds. Compute widths in usize and saturate when narrowing.\n\nExtract the placement arithmetic into Popup::place. Kani proves for every input that it does not panic, that the popup stays within the right edge and the maximum width, and that it stays above the bottom edge when the cursor is on screen and the popup height fits the terminal.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* ci: run Kani proof harnesses on Linux\n\ncargo test only runs the harnesses against random inputs, so a regression that reintroduces unchecked arithmetic can pass CI. Run cargo kani --tests in its own job. Pin the Kani version because each release is tied to one nightly toolchain, and cap the solver's address space so a harness that blows up fails instead of exhausting the runner.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* ci: use the latest Kani release\n\nNothing bumps a pinned Kani version automatically, and the proofs are small enough that a release that breaks them is cheap to follow up on. A new release can therefore change this job's result on an unrelated change.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* test: tighten proof harnesses to check exact results\n\nReview found both proofs weaker than their names. The hex harness checked only acceptance and length, so swapping the nibbles passed; it now checks every decoded byte. The placement harness checked only an upper bound on width, so narrowing with a wrapping cast passed; it now checks width and height against their definitions.\n\nLead the docs with the memory-capped Kani command, and correct the claim that kani::unwind bounds the input: it bounds loop iterations.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* fix(ui): keep render coordinates within what MoveTo can encode\n\nTwo render paths still added u16 coordinates without checks. A filter text 65535 columns wide overflowed the cursor column right after popup placement succeeded, and a clear request near row 65535 overflowed the row. Both panicked in debug builds and wrapped in release builds. crossterm's MoveTo also adds one to each coordinate, so u16::MAX itself is not encodable.\n\nSaturate the filter cursor column, and clear only rows up to the last addressable one.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Fable 5.2 <noreply@anthropic.com>",
+          "timestamp": "2026-11-27T01:52:48+09:00",
+          "tree_id": "8ade79d9e6078b6c2d2c93e6d0a518b6a11ab85b",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/933b78b4d854617527e7793a8e4f9915d7928c12"
+        },
+        "date": 1795712532137,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 7186,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 67628,
+            "range": "± 427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 792737,
+            "range": "± 5365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 154860,
+            "range": "± 2002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 91265,
+            "range": "± 429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 68445,
+            "range": "± 410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 26503,
+            "range": "± 252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 23433,
+            "range": "± 238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 21573,
+            "range": "± 167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 186518,
+            "range": "± 1849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 187778,
+            "range": "± 1433",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 192253,
+            "range": "± 3030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 178999,
+            "range": "± 991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 17836,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 187539,
+            "range": "± 779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 2007416,
+            "range": "± 11187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 164310,
+            "range": "± 4223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 128866,
+            "range": "± 408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 663751,
+            "range": "± 4461",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 244098,
+            "range": "± 1060",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 270788,
+            "range": "± 1361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 58335,
+            "range": "± 234126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 114327,
+            "range": "± 55690",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 553898,
+            "range": "± 7737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 358062,
+            "range": "± 3746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 587,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 23,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 78,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 25,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 62,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 17,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 37,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 275890,
+            "range": "± 1670",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 185982,
+            "range": "± 984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 106,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 734,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 6531,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 623,
+            "range": "± 6",
             "unit": "ns/iter"
           }
         ]
