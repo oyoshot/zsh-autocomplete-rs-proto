@@ -107,7 +107,8 @@ CARGO_TARGET_DIR=target cargo kani --tests
 grep -rn 'kani::proof' src
 ```
 
-CI does not run Kani. Run it after changing a function that has a harness.
+CI runs every harness on Linux with the Kani version pinned in
+`.github/workflows/ci.yml`.
 
 The solver can exhaust memory and stall the machine. Cap it when trying a new
 harness; a harness that hits the cap fails with an out-of-memory message:

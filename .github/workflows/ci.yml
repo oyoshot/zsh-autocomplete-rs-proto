@@ -74,6 +74,26 @@ jobs:
         run: cargo generate-lockfile
       - run: cargo check --lib --bins
 
+  kani:
+    name: Kani Proofs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Each Kani release is tied to one nightly toolchain, so pin it.
+      KANI_VERSION: 0.68.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Kani
+        run: |
+          cargo install --locked --version "$KANI_VERSION" kani-verifier
+          cargo kani setup
+      - name: Run proof harnesses
+        # Cap the solver's address space so a blow-up fails fast.
+        run: |
+          ulimit -v 4000000
+          cargo kani --tests
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
