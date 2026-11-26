@@ -83,10 +83,17 @@ _test_run() {
     elif (( _test_index == 16 )); then
         BUFFER=gs; CURSOR=2
         local before="$BUFFER" saved_request="$functions[_zacrs_abbreviation_request]" code=0
-        _zacrs_abbreviation_request() { _zacrs_abbreviation_header='DONE 0 changed'; _zacrs_abbreviation_apply='APPLY chain=0 execute=0 text_hex=GG restore_hex='; }
-        _zacrs_expand_command_abbreviation || code=$?
+        local _zacrs_edit_transport_state=1 header apply expected_state
+        _zacrs_abbreviation_request() { _zacrs_abbreviation_header="$header"; _zacrs_abbreviation_apply="$apply"; }
+        for header apply expected_state in \
+            'DONE 1' 'APPLY chain=0 execute=0 restore_hex=' 1 \
+            'DONE 0 changed' 'APPLY chain=0 execute=0 text_hex=GG restore_hex=' -1 \
+            'DONE 0 changed' 'APPLY chain=0 execute=0 path_hex=61 suffix_hex= restore_hex=' -1; do
+            _zacrs_edit_transport_state=1; code=0
+            _zacrs_expand_command_abbreviation || code=$?
+            [[ $code == 1 && $_zacrs_edit_transport_state == "$expected_state" && "$BUFFER" == "$before" ]] || { print -r -- malformed-abbreviation > "$_test_root/state"; return; }
+        done
         functions[_zacrs_abbreviation_request]="$saved_request"
-        [[ $code == 1 && "$BUFFER" == "$before" ]] || { print -r -- malformed-abbreviation > "$_test_root/state"; return; }
     elif (( _test_index == 17 )); then
         BUFFER='probe space'; CURSOR=${#BUFFER}
         _zacrs_filesystem_requested=1
