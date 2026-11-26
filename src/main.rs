@@ -218,7 +218,7 @@ fn run_render(
     let mut tty = tty::open_tty_write()?;
     ui::render::ensure_space(&mut tty, &mut app)?;
 
-    if app.max_visible == 0 {
+    if app.max_visible() == 0 {
         return Ok(1);
     }
 

@@ -1248,7 +1248,7 @@ impl DaemonServer {
 
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
-        if app.max_visible == 0 {
+        if app.max_visible() == 0 {
             debug!("render request had zero visible rows");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
@@ -1371,7 +1371,7 @@ impl DaemonServer {
 
         let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
 
-        if app.max_visible == 0 {
+        if app.max_visible() == 0 {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
@@ -1825,15 +1825,13 @@ fn resize_requires_full_popup_clear(
 /// bytes needed to make room for the popup below the cursor.
 fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
     let max_popup_height = term_rows.saturating_sub(1);
-    if app.max_visible as u16 + 2 > max_popup_height {
-        app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-    }
+    app.cap_max_visible(usize::from(max_popup_height.saturating_sub(2)));
 
-    if app.max_visible == 0 {
+    if app.max_visible() == 0 {
         return Vec::new();
     }
 
-    let popup_height = app.max_visible as u16 + 2;
+    let popup_height = app.max_visible() as u16 + 2;
     let space_below = term_rows.saturating_sub(app.cursor_row + 1);
     let mut scroll_bytes = Vec::new();
     if space_below < popup_height {

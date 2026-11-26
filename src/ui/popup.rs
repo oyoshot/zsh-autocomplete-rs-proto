@@ -26,8 +26,8 @@ impl Popup {
         } else {
             format!(
                 " {}–{} / {} ",
-                app.scroll_offset + 1,
-                app.scroll_offset + visible,
+                app.scroll_offset() + 1,
+                app.scroll_offset() + visible,
                 total
             )
         }

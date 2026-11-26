@@ -48,7 +48,7 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
     let term_rows = app.term_rows;
     app.sync_max_visible();
 
-    let popup_height = app.max_visible as u16 + 2;
+    let popup_height = app.max_visible() as u16 + 2;
     let space_below = term_rows.saturating_sub(app.cursor_row + 1);
 
     if space_below < popup_height {
@@ -608,7 +608,7 @@ mod tests {
                 })
                 .collect();
             let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
-            app.max_visible = 8;
+            app.cap_max_visible(8);
             for (selected, label) in [(0, " 1–8 / 42 "), (41, " 35–42 / 42 ")] {
                 app.set_selected(selected);
                 let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
