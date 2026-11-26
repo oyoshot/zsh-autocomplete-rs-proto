@@ -926,14 +926,30 @@ pub fn write_text_ok(writer: &mut impl Write, metadata: &str, tty_len: usize) ->
 }
 
 pub fn decode_hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    decode_hex(hex.as_bytes())
+}
+
+/// Decodes on bytes so multi-byte UTF-8 input is rejected instead of being
+/// sliced inside a character.
+fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
     if hex.is_empty() || !hex.len().is_multiple_of(2) {
         return None;
     }
 
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+    let (pairs, _) = hex.as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|&[high, low]| Some((hex_digit(high)? << 4) | hex_digit(low)?))
         .collect()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub fn socket_path() -> std::path::PathBuf {
@@ -1281,6 +1297,67 @@ mod tests {
             Some(b"\x1b[27;2;9~".to_vec())
         );
         assert_eq!(decode_hex_bytes("1b5"), None);
+    }
+
+    #[test]
+    fn decode_hex_bytes_rejects_non_hex_input_without_panicking() {
+        // An even byte length whose pair boundary falls inside a character.
+        assert_eq!(decode_hex_bytes("a\u{e9}1"), None);
+        assert_eq!(decode_hex_bytes("+f"), None);
+        assert_eq!(decode_hex_bytes("1B5b"), Some(b"\x1b[".to_vec()));
+    }
+
+    const HEX_PROOF_MAX_LEN: usize = 6;
+
+    /// Runs as a randomized test under `cargo test` and as a proof over every
+    /// input of up to `HEX_PROOF_MAX_LEN` bytes under `cargo kani --tests`.
+    #[test]
+    #[cfg_attr(kani, kani::proof, kani::unwind(8))]
+    fn decode_hex_accepts_exactly_nonempty_even_hex_digits() {
+        bolero::check!()
+            .with_type::<([u8; HEX_PROOF_MAX_LEN], u8)>()
+            .cloned()
+            .for_each(|(bytes, len)| {
+                let input = &bytes[..usize::from(len) % (HEX_PROOF_MAX_LEN + 1)];
+                let well_formed = !input.is_empty()
+                    && input.len().is_multiple_of(2)
+                    && input.iter().all(u8::is_ascii_hexdigit);
+
+                match decode_hex(input) {
+                    Some(decoded) => {
+                        assert!(well_formed);
+                        assert_eq!(decoded.len(), input.len() / 2);
+                    }
+                    None => assert!(!well_formed),
+                }
+            });
+    }
+
+    #[test]
+    #[cfg_attr(kani, kani::proof)]
+    fn hex_digit_matches_char_to_digit() {
+        bolero::check!()
+            .with_type::<u8>()
+            .cloned()
+            .for_each(|byte| {
+                let expected = char::from(byte)
+                    .to_digit(16)
+                    .and_then(|d| u8::try_from(d).ok());
+                assert_eq!(hex_digit(byte), expected);
+            });
+    }
+
+    /// Randomized only: Kani runs out of memory on the `String` round trip.
+    #[test]
+    fn decode_hex_inverts_encode_hex_bytes() {
+        bolero::check!().with_type::<Vec<u8>>().for_each(|input| {
+            let decoded = decode_hex_bytes(&encode_hex_bytes(input));
+            if input.is_empty() {
+                assert_eq!(decoded, None);
+            } else {
+                assert_eq!(decoded.as_deref(), Some(input.as_slice()));
+            }
+        });
     }
 
     #[test]
