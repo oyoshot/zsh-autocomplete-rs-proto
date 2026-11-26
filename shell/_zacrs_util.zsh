@@ -44,7 +44,7 @@ _zacrs_get_cursor_pos() {
 
 # Write the glob and literal-word policy into the caller's _zacrs_file_option_key.
 _zacrs_file_options() {
-    _zacrs_file_option_key="${options[caseglob]}:${options[casepaths]:-off}:${options[extendedglob]}:${options[magicequalsubst]}:${options[multibyte]}:${options[globdots]}"
+    _zacrs_file_option_key="${options[caseglob]}:${options[casepaths]:-off}:${options[extendedglob]}:${options[magicequalsubst]}:${options[multibyte]}:${options[interactivecomments]}:${options[globdots]}"
 }
 
 _zacrs_file_context_matches() {
@@ -64,6 +64,8 @@ _zacrs_pwd_matches_cwd() {
 _zacrs_current_context_key() {
     REPLY=""
     _zacrs_filesystem_editor || return 0
+    # Skip context-keyed caching for large buffers before encoding fields.
+    (( ${#LBUFFER} + ${#${RBUFFER:-}} + ${#PWD} + ${#${HOME:-}} <= 1024 )) || return 0
     local lbase=""
     if [[ "$LBUFFER" == *" "* ]]; then
         lbase="${LBUFFER% *} "

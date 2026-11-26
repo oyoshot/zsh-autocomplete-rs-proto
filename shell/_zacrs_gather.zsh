@@ -85,6 +85,9 @@ _zacrs_filesystem_context() {
     [[ "$literal_head" == '~/'* ]] && literal_head="${literal_head[3,-1]}"
     [[ -n "$head" && "$head" != *=* && ( -z "$literal_head" || "${(q)literal_head}" == "$literal_head" ) ]] || return
     (( ${reswords[(Ie)$head]} == 0 )) || return
+    # The native word array can include a precommand modifier before the
+    # command being completed. Leave those lines to native completion.
+    [[ "$head" != (-|builtin|command|exec|nocorrect|noglob) ]] || return
     [[ -z "$literal" || "${LBUFFER[-${#literal},-1]}" == "$literal" ]] || return
     local check="$literal"
     [[ "$check" == '~/'* ]] && check="${check[3,-1]}"

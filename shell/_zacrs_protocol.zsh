@@ -49,6 +49,10 @@ _zacrs_parse_apply_line() {
     elif [[ "$metadata" == *" restore="* ]]; then
         restore_text="${metadata#* restore=}"
         metadata="${metadata%% restore=*}"
+    else
+        # Command substitution removes the newline. The final field marks
+        # the end of a complete record, even when its value is empty.
+        return 1
     fi
 
     local token

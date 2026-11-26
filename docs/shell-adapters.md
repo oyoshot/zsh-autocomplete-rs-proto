@@ -127,7 +127,8 @@ literal path prefix, its insertion/display spelling and the current working
 directory. It offers this capability only at an unquoted literal word end of
 a simple command, including an empty argument. The full raw word must match
 the captured prefix, Zsh's lexical words must cover the input, and the command
-head must be literal and non-reserved. Quoted or escaped words, substitutions,
+head must be literal and non-reserved. Lines starting with a Zsh precommand
+modifier such as `exec` or `command` use native completion. Quoted or escaped words, substitutions,
 patterns, cursors inside a word, and continuation or recursive editors do not
 request filesystem fallback. When the adapter cannot verify the context, it
 leaves filesystem edits disabled.
@@ -155,9 +156,11 @@ The daemon retains structured filesystem snapshots with candidate and active
 popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
 scopes reuse to session, generation, cwd, HOME, cursor, right-side input and
-the glob and syntax settings used to verify literal words. The existing
-exact-prefix rule still applies. Popup snapshots also require the complete
-buffer to match. For a cached
+the glob and syntax settings used to verify literal words, including
+`INTERACTIVE_COMMENTS`. The existing exact-prefix rule still applies. If the
+buffer, cwd and HOME together exceed 1,024 characters, the adapter skips
+context-keyed caching and collects fresh candidates. Popup snapshots require
+the complete buffer to match. For a cached
 filesystem selection, the client must advertise `literal_paths=1` so the
 daemon can return the path and suffix without risking their loss in transit.
 Without that capability the daemon returns a no-edit result. If the daemon
@@ -174,7 +177,9 @@ boundary; the existing non-UTF-8 limitation remains explicit.
 Control characters and literal backslashes have distinct display escapes, while
 exact UTF-8 filename bytes, including tabs and newlines, survive collection and
 selection. A complete APPLY line carries the literal path and suffix as paired
-hex metadata. Truncated lines and invalid hex preserve the input. Zsh quotes the path
+hex metadata. The terminal restore field lets Zsh check record completeness
+after command substitution removes the newline. Truncated records and invalid
+hex preserve the input. Zsh quotes the path
 with its native quoting facility before applying the suffix, including quoting
 tokens that match an ordinary, global or suffix alias. Unambiguous-prefix
 extension is disabled for this source so cancellation cannot apply unquoted
@@ -183,9 +188,9 @@ Non-UTF-8 names are skipped, never converted lossily. Directory symlinks are
 classified as directories. Each query budgets 1 MiB for candidate rows and
 owned path/display data. Case-insensitive traversal also limits parent
 directories to 1 MiB of path data at each level. The scan budget of 65,536
-entries covers parents and leaves together, including nonmatches. Exceeding a limit
-drops the entire set so a partial set cannot be
-selected automatically.
+entries covers parents and leaves together, including nonmatches. Exceeding a
+limit or encountering a directory iteration error drops the entire set so a
+partial set cannot be selected automatically.
 
 Filesystem collection currently runs synchronously in the shared daemon when a
 fresh request is handled. A slow filesystem can therefore delay other requests;

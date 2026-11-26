@@ -2,6 +2,7 @@
 //! Shell syntax and display spelling remain adapter-supplied facts.
 use crate::candidate::{Candidate, LiteralPath};
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf, is_separator};
+use std::{fs, io};
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,19 +27,31 @@ pub struct FilesystemOptions {
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
 const MAX_SCANNED_ENTRIES: usize = 65_536;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct SnapshotTooLarge;
+#[derive(Debug)]
+pub enum CollectionError {
+    LimitExceeded,
+    ReadDirectory(io::Error),
+}
 
 impl FilesystemQuery {
-    pub fn collect(&self) -> Result<Vec<Candidate>, SnapshotTooLarge> {
+    pub fn collect(&self) -> Result<Vec<Candidate>, CollectionError> {
         self.collect_with_budget(MAX_SNAPSHOT_BYTES, MAX_SCANNED_ENTRIES)
     }
 
     fn collect_with_budget(
         &self,
         budget: usize,
+        remaining_entries: usize,
+    ) -> Result<Vec<Candidate>, CollectionError> {
+        self.collect_from(budget, remaining_entries, &|path| fs::read_dir(path))
+    }
+
+    fn collect_from<I: Iterator<Item = io::Result<fs::DirEntry>>>(
+        &self,
+        budget: usize,
         mut remaining_entries: usize,
-    ) -> Result<Vec<Candidate>, SnapshotTooLarge> {
+        read_directory: &impl Fn(&Path) -> io::Result<I>,
+    ) -> Result<Vec<Candidate>, CollectionError> {
         if !self.cwd.is_absolute()
             || self.path_prefix.contains('\0')
             || self.insertion_prefix.contains('\0')
@@ -61,7 +74,12 @@ impl FilesystemQuery {
         let (exact_directory, resolved_directories) = if self.options.ignore_parent_case {
             (
                 None,
-                self.resolve_directories(directory, budget, &mut remaining_entries)?,
+                self.resolve_directories(
+                    directory,
+                    budget,
+                    &mut remaining_entries,
+                    read_directory,
+                )?,
             )
         } else {
             (Some(directory), Vec::new())
@@ -96,12 +114,14 @@ impl FilesystemQuery {
             } else {
                 insertion_directory
             };
-            let Ok(entries) = std::fs::read_dir(self.cwd.join(directory)) else {
+            let Some(entries) = open_directory(read_directory, &self.cwd.join(directory))? else {
                 continue;
             };
             for entry in entries {
-                remaining_entries = remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
-                let Ok(entry) = entry else { continue };
+                remaining_entries = remaining_entries
+                    .checked_sub(1)
+                    .ok_or(CollectionError::LimitExceeded)?;
+                let entry = entry.map_err(CollectionError::ReadDirectory)?;
                 // The engine uses UTF-8. Never replace invalid bytes with a different filename.
                 let name = entry.file_name();
                 let Some(name_text) = name.to_str() else {
@@ -165,7 +185,7 @@ impl FilesystemQuery {
                     + candidate.kind.capacity()
                     + path_bytes;
                 if retained_bytes > budget {
-                    return Err(SnapshotTooLarge);
+                    return Err(CollectionError::LimitExceeded);
                 }
                 candidates.push(candidate);
             }
@@ -174,12 +194,13 @@ impl FilesystemQuery {
         Ok(candidates)
     }
 
-    fn resolve_directories(
+    fn resolve_directories<I: Iterator<Item = io::Result<fs::DirEntry>>>(
         &self,
         directory: &Path,
         budget: usize,
         remaining_entries: &mut usize,
-    ) -> Result<Vec<PathBuf>, SnapshotTooLarge> {
+        read_directory: &impl Fn(&Path) -> io::Result<I>,
+    ) -> Result<Vec<PathBuf>, CollectionError> {
         let mut directories = vec![PathBuf::new()];
         for component in directory.components() {
             let Component::Normal(name) = component else {
@@ -195,13 +216,14 @@ impl FilesystemQuery {
             let mut matches = Vec::new();
             let mut remaining_bytes = budget;
             for path in directories {
-                let Ok(entries) = std::fs::read_dir(self.cwd.join(&path)) else {
+                let Some(entries) = open_directory(read_directory, &self.cwd.join(&path))? else {
                     continue;
                 };
                 for entry in entries {
-                    *remaining_entries =
-                        remaining_entries.checked_sub(1).ok_or(SnapshotTooLarge)?;
-                    let Ok(entry) = entry else { continue };
+                    *remaining_entries = remaining_entries
+                        .checked_sub(1)
+                        .ok_or(CollectionError::LimitExceeded)?;
+                    let entry = entry.map_err(CollectionError::ReadDirectory)?;
                     let name = entry.file_name();
                     if name
                         .to_str()
@@ -213,7 +235,7 @@ impl FilesystemQuery {
                         let next = path.join(name);
                         remaining_bytes = remaining_bytes
                             .checked_sub(size_of::<PathBuf>() + next.capacity())
-                            .ok_or(SnapshotTooLarge)?;
+                            .ok_or(CollectionError::LimitExceeded)?;
                         matches.push(next);
                     }
                 }
@@ -224,6 +246,24 @@ impl FilesystemQuery {
             directories = matches;
         }
         Ok(directories)
+    }
+}
+
+fn open_directory<I>(
+    read_directory: &impl Fn(&Path) -> io::Result<I>,
+    path: &Path,
+) -> Result<Option<I>, CollectionError> {
+    match read_directory(path) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(CollectionError::ReadDirectory(error)),
     }
 }
 
@@ -354,7 +394,7 @@ mod tests {
         std::fs::write(root.path().join("other"), "").unwrap();
         assert!(matches!(
             query.collect_with_budget(budget, MAX_SCANNED_ENTRIES),
-            Err(SnapshotTooLarge)
+            Err(CollectionError::LimitExceeded)
         ));
     }
 
@@ -389,6 +429,40 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_directory_iteration_error_discards_the_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("Folder");
+        fs::create_dir(&parent).unwrap();
+        fs::write(parent.join("match"), "").unwrap();
+        let typed_path = format!("folder{MAIN_SEPARATOR}mat");
+        for (cwd, prefix, ignore_parent_case, failing_directory) in [
+            (parent.as_path(), "mat", false, parent.as_path()),
+            (root.path(), typed_path.as_str(), true, root.path()),
+            (root.path(), typed_path.as_str(), true, parent.as_path()),
+        ] {
+            let query = FilesystemQuery {
+                cwd: cwd.into(),
+                path_prefix: prefix.into(),
+                insertion_prefix: prefix.into(),
+                options: FilesystemOptions {
+                    ignore_parent_case,
+                    ..FilesystemOptions::default()
+                },
+            };
+            assert_eq!(query.collect().unwrap().len(), 1);
+            let read_directory = |path: &Path| {
+                let error = (path == failing_directory)
+                    .then(|| Err(io::Error::from(io::ErrorKind::ConnectionReset)));
+                Ok(fs::read_dir(path)?.chain(error))
+            };
+            assert!(matches!(
+                query.collect_from(MAX_SNAPSHOT_BYTES, MAX_SCANNED_ENTRIES, &read_directory),
+                Err(CollectionError::ReadDirectory(error)) if error.kind() == io::ErrorKind::ConnectionReset
+            ));
+        }
     }
 
     #[test]

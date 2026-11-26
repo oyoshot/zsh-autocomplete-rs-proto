@@ -18,6 +18,7 @@ mkdir -p "$HOME/files/Folder" "$HOME/files/dots"
 : > "$HOME/files/Folder/Name"
 : > "$HOME/files/dots/.hidden"
 : > "$HOME/files/a~bee"
+: > "$HOME/files/abcdef"
 mkdir -p "$HOME/files/Repeat" "$HOME/cwd-original" "$HOME/cwd-retargeted"
 : > "$HOME/files/Repeat/fuzzy.rs"
 : > "$HOME/files/Repeat/future.rs"
@@ -520,6 +521,46 @@ _test_run() {
         fi
         [[ "$BUFFER" == 'probe Repeat/fuzzy.rs ' && $CURSOR == ${#BUFFER} ]] || { print -r -- "corrected-path-narrowing:$BUFFER" > "$_test_root/state"; return; }
     elif (( _test_index == 42 )); then
+        local saved_bin="$ZACRS_BIN" code=0
+        _test_truncated_bin() {
+            print -r -- 'DONE 0 space name'
+            print -rn -- 'APPLY chain=1 execute=1'
+        }
+        ZACRS_BIN=_test_truncated_bin
+        BUFFER='probe space'; CURSOR=${#BUFFER}
+        _zacrs_invoke space 5 '' 2 1 1 || code=$?
+        [[ $code == 5 && "$BUFFER" == 'probe space' && $CURSOR == 11 ]] || { print -r -- truncated-subprocess-applied > "$_test_root/state"; return; }
+        code=0
+        _zacrs_invoke_daemon space 5 '' 2 1 0 truncated-reply 1 1 || code=$?
+        ZACRS_BIN="$saved_bin"
+        [[ $code == 5 && "$BUFFER" == 'probe space' && $CURSOR == 11 ]] || { print -r -- truncated-daemon-applied > "$_test_root/state"; return; }
+    elif (( _test_index == 43 )); then
+        setopt localoptions no_interactive_comments
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        BUFFER='probe #com abc'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- literal-comment-preview-missing > "$_test_root/state"; return; }
+        _zacrs_current_context_key; local original_key="$REPLY"
+        setopt interactive_comments
+        _zacrs_current_context_key
+        [[ "$REPLY" != "$original_key" ]] || { print -r -- comment-cache-key-reused > "$_test_root/state"; return; }
+        _zacrs_complete_popup
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        [[ "$BUFFER" == 'probe #com abc' && $_zacrs_filesystem_requested == 0 ]] || { print -r -- comment-tab-reused > "$_test_root/state"; return; }
+    elif (( _test_index == 44 )); then
+        local prefix='' prefix_len=0 candidates_str='' line
+        for line in 'exec loc' 'command loc' 'command -p loc' 'noglob loc' 'builtin loc' 'nocorrect loc' '- loc'; do
+            BUFFER="$line"; CURSOR=${#BUFFER}
+            _zacrs_collect_candidates
+            [[ $_zacrs_filesystem_requested == 0 && "$BUFFER" == "$line" && $CURSOR == ${#line} ]] || {
+                print -r -- "precommand-file-query:$line" > "$_test_root/state"; return
+            }
+        done
+        BUFFER='probe loc'; CURSOR=${#BUFFER}
+        _zacrs_collect_candidates
+        [[ $_zacrs_filesystem_requested == 1 ]] || { print -r -- expected-file-argument > "$_test_root/state"; return; }
+    elif (( _test_index == 45 )); then
         # Restore the fields of a primary preview to exercise the reuse gate
         # independently of normal prompt-transition cleanup.
         [[ "$CONTEXT" != start || -n "$PREBUFFER" ]] || { print -r -- expected-continuation-editor > "$_test_root/state"; return; }
@@ -607,8 +648,8 @@ for attempt in {1..300}; do
     sleep .01
 done
 [[ "$output" == *'READY> '* ]] || { print -u2 -r -- "not ready: ${(qqq)output}"; exit 1; }
-for case_index in {1..42}; do
-    if (( case_index == 42 )); then
+for case_index in {1..45}; do
+    if (( case_index == 45 )); then
         zpty -w -n files $'\x07'
         for attempt in {1..300}; do
             zpty -r -t files chunk 2>/dev/null && output+="$chunk"

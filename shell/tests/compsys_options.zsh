@@ -129,6 +129,13 @@ encoded_pwd="${encoded_pwd// /%20}"
 typeset -gi _zacrs_candidate_cache_generation=42
 _zacrs_file_options
 assert_context_key '' 'git' 'command position has no candidate cache key'
+(
+    LBUFFER='git checkout feat'
+    RBUFFER=" ${(l:50000::x:):-}"
+    _zacrs_current_context_key
+    [[ -z "$REPLY" ]] || { print -u2 -r -- 'not ok: oversized command context was cached'; exit 1; }
+    print -r -- 'ok: oversized command context bypasses candidate caching'
+)
 assert_context_key \
     "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20:19::/test/home:$_zacrs_file_option_key" \
     'git add:foo%bar baz' \
