@@ -256,7 +256,7 @@ fn queue_filter_line(buf: &mut impl Write, app: &App) -> std::io::Result<()> {
         crossterm::queue!(buf, Print(" ".repeat(clear_count as usize)))?;
     }
 
-    let cursor_end_col = prefix_start_col + filter_w;
+    let cursor_end_col = prefix_start_col.saturating_add(filter_w).min(MAX_COORD);
     crossterm::queue!(
         buf,
         cursor::MoveTo(cursor_end_col, app.cursor_row),
@@ -302,6 +302,25 @@ pub fn draw_popup_only(tty: &mut std::fs::File, app: &App, theme: &Theme) -> std
     Ok(())
 }
 
+/// Largest zero-based coordinate `cursor::MoveTo` can encode: it adds one to
+/// form the one-based ANSI position.
+const MAX_COORD: u16 = u16::MAX - 1;
+
+fn queue_clear_rows(
+    buf: &mut impl Write,
+    popup_row: u16,
+    popup_height: u16,
+) -> std::io::Result<()> {
+    for row in (popup_row..=MAX_COORD).take(usize::from(popup_height)) {
+        crossterm::queue!(
+            buf,
+            cursor::MoveTo(0, row),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+        )?;
+    }
+    Ok(())
+}
+
 pub fn clear_rect(
     tty: &mut std::fs::File,
     popup_row: u16,
@@ -310,13 +329,7 @@ pub fn clear_rect(
 ) -> std::io::Result<()> {
     let mut buf = std::io::BufWriter::new(&mut *tty);
     crossterm::queue!(&mut buf, cursor::SavePosition)?;
-    for i in 0..popup_height {
-        crossterm::queue!(
-            &mut buf,
-            cursor::MoveTo(0, popup_row + i),
-            terminal::Clear(terminal::ClearType::CurrentLine),
-        )?;
-    }
+    queue_clear_rows(&mut buf, popup_row, popup_height)?;
 
     crossterm::queue!(&mut buf, cursor::RestorePosition)?;
     buf.flush()?;
@@ -380,13 +393,7 @@ pub fn clear_rect_to_bytes(
 ) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(256);
     crossterm::queue!(&mut buf, cursor::SavePosition)?;
-    for i in 0..popup_height {
-        crossterm::queue!(
-            &mut buf,
-            cursor::MoveTo(0, popup_row + i),
-            terminal::Clear(terminal::ClearType::CurrentLine),
-        )?;
-    }
+    queue_clear_rows(&mut buf, popup_row, popup_height)?;
     crossterm::queue!(&mut buf, cursor::RestorePosition)?;
     Ok(buf)
 }
@@ -843,5 +850,33 @@ mod tests {
         let ansi = String::from_utf8_lossy(&bytes);
         assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
         assert!(ansi.contains("\u{1b}8") || ansi.contains("\u{1b}[u"));
+    }
+
+    #[test]
+    fn clear_rect_to_bytes_stops_at_the_last_addressable_row() {
+        let rows = |bytes: Vec<u8>| String::from_utf8(bytes).unwrap().matches("[2K").count();
+
+        assert_eq!(rows(clear_rect_to_bytes(6, 4, 5).unwrap()), 4);
+        assert_eq!(rows(clear_rect_to_bytes(u16::MAX - 2, 4, 0).unwrap()), 2);
+        assert_eq!(rows(clear_rect_to_bytes(u16::MAX, 2, 0).unwrap()), 0);
+    }
+
+    #[test]
+    fn render_popup_to_bytes_handles_filter_text_wider_than_u16() {
+        let candidates = vec![Candidate {
+            text: "a".repeat(usize::from(u16::MAX)),
+            description: String::new(),
+            kind: String::new(),
+            insert_text: None,
+            cursor_offset: None,
+            literal_path: None,
+        }];
+        let app = App::new_with_term_size(candidates, String::new(), 5, 10, 80, 24);
+        assert_eq!(app.filter_text.len(), usize::from(u16::MAX));
+
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+
+        assert!(!bytes.is_empty());
+        assert!(popup.col + popup.width <= 80);
     }
 }
