@@ -1,7 +1,6 @@
 //! Explicit daemon startup and shutdown. Shell startup only checks capabilities.
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -34,12 +33,11 @@ fn lock(path: &Path) -> io::Result<File> {
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
         // The descriptor remains open for the entire replacement transaction.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(file);
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock {
-            return Err(error);
+        // On Unix, std implements this with flock(LOCK_EX | LOCK_NB).
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(error)) => return Err(error),
         }
         if Instant::now() >= deadline {
             return Err(timed_out());
