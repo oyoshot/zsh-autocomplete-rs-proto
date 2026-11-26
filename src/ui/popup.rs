@@ -20,7 +20,7 @@ pub struct Popup {
 impl Popup {
     pub(crate) fn range_label(app: &App) -> String {
         let visible = app.visible_candidate_indices().len();
-        let total = app.filtered_indices.len();
+        let total = app.filtered_indices().len();
         if visible == 0 || visible == total {
             String::new()
         } else {

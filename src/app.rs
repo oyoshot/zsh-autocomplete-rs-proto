@@ -12,8 +12,8 @@ struct CachedFilter {
 /// Selection and scroll position over a list of `len` rows, of which at most
 /// `max_visible` are shown.
 ///
-/// Every operation keeps [`Viewport::is_valid`] true when `max_visible` is at
-/// least one. Changing `len` or `max_visible` requires `reset` or `clamp`.
+/// Every operation keeps `is_valid` true. Changing `len` requires `reset`
+/// and changing `max_visible` requires `clamp`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Viewport {
     selected: Option<usize>,
@@ -21,12 +21,13 @@ struct Viewport {
 }
 
 impl Viewport {
-    /// The window never scrolls past the last full page. A selected row
-    /// exists and lies inside the window; without one the window is at the
-    /// top.
+    /// The window shows at least one row and never scrolls past the last
+    /// full page. A selected row exists and lies inside the window; without
+    /// one the window is at the top.
     #[cfg(test)]
     fn is_valid(self, len: usize, max_visible: usize) -> bool {
-        self.scroll_offset <= len.saturating_sub(max_visible)
+        max_visible >= 1
+            && self.scroll_offset <= len.saturating_sub(max_visible)
             && match self.selected {
                 None => self.scroll_offset == 0,
                 Some(sel) => {
@@ -146,7 +147,7 @@ impl Viewport {
 
 pub struct App {
     pub all_candidates: Vec<Candidate>,
-    pub filtered_indices: Vec<usize>,
+    filtered_indices: Vec<usize>,
     // Unbounded; typical session produces few unique queries so no eviction needed
     cached_filters: HashMap<String, CachedFilter>,
     match_mode: MatchMode,
@@ -323,6 +324,11 @@ impl App {
         self.viewport.selected
     }
 
+    /// Indices into `all_candidates` that match the filter, best first.
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.filtered_indices
+    }
+
     pub fn scroll_offset(&self) -> usize {
         self.viewport.scroll_offset
     }
@@ -396,7 +402,8 @@ impl App {
 
     /// Lowers `max_visible` to at most `limit` rows, never below one, and
     /// keeps the selection visible.
-    pub fn cap_max_visible(&mut self, limit: usize) {
+    #[cfg(test)]
+    pub(crate) fn cap_max_visible(&mut self, limit: usize) {
         self.max_visible = self.max_visible.min(limit.max(1));
         self.clamp_viewport();
     }
@@ -1075,14 +1082,14 @@ mod tests {
         assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
     }
 
-    // Kani checks every `usize`; the randomized run draws small values so
-    // that valid states and short lists are common.
+    // Kani checks every `usize`. The randomized run draws small values so
+    // that short lists and windows near the list length come up.
     #[cfg(kani)]
     type Dim = usize;
     #[cfg(not(kani))]
     type Dim = u8;
 
-    const VIEWPORT_OPS: u8 = 7;
+    const VIEWPORT_OPS: u8 = 8;
 
     fn apply_viewport_op(
         viewport: &mut Viewport,
@@ -1098,7 +1105,8 @@ mod tests {
             3 => viewport.page_up(len, max_visible),
             4 => viewport.select_first(len),
             5 => viewport.select(idx, len, max_visible),
-            _ => viewport.clamp(len, max_visible),
+            6 => viewport.clamp(len, max_visible),
+            _ => viewport.reset(),
         }
     }
 
@@ -1117,7 +1125,17 @@ mod tests {
                     selected: selected.map(usize::from),
                     scroll_offset: usize::from(scroll_offset),
                 };
-                if max_visible == 0 || !viewport.is_valid(len, max_visible) {
+                // Few random draws are valid states, so the randomized run
+                // repairs its draw first. Kani keeps the raw draw: there the
+                // check below alone decides which states are covered.
+                #[cfg(not(kani))]
+                {
+                    if viewport.selected.is_none() {
+                        viewport.scroll_offset = 0;
+                    }
+                    viewport.clamp(len, max_visible.max(1));
+                }
+                if !viewport.is_valid(len, max_visible) {
                     return;
                 }
 
@@ -1130,8 +1148,10 @@ mod tests {
             });
     }
 
-    /// `clamp` repairs a state for any new list length and window size, and
-    /// leaves an already valid state untouched. The state may be arbitrary
+    /// `clamp` repairs a state for any new list length and window size,
+    /// keeps the selection on the same row or the last row if that row is
+    /// gone, and leaves an already valid state untouched. The window must
+    /// show at least one row. The state may be arbitrary
     /// except that an unselected window is at the top, which `clamp` keeps
     /// but does not establish.
     #[test]
@@ -1154,6 +1174,8 @@ mod tests {
                 after.clamp(len, max_visible);
 
                 assert!(after.is_valid(len, max_visible));
+                let kept = before.selected.filter(|_| len > 0);
+                assert_eq!(after.selected, kept.map(|sel| sel.min(len - 1)));
                 if before.is_valid(len, max_visible) {
                     assert_eq!(after, before);
                 }

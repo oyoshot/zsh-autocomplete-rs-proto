@@ -207,7 +207,7 @@ fn run_render(
     let mut app = App::new_with_matcher(
         candidates, prefix, cursor_row, cursor_col, cols, rows, fuzzy,
     );
-    if app.filtered_indices.is_empty() {
+    if app.filtered_indices().is_empty() {
         return Ok(1);
     }
 
@@ -236,7 +236,7 @@ fn run_render(
     let meta = popup.format_metadata(
         app.cursor_row,
         reuse_token,
-        app.filtered_indices.len(),
+        app.filtered_indices().len(),
         app.selected_original_idx(),
         None,
     );
