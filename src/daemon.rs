@@ -1236,7 +1236,7 @@ impl DaemonServer {
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
 
-        if app.filtered_indices.is_empty() {
+        if app.filtered_indices().is_empty() {
             debug!("render request had no matching candidates after filter");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
@@ -1246,9 +1246,9 @@ impl DaemonServer {
             app.reset_filter_to_prefix();
         }
 
-        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+        let scroll_bytes = scroll_for_popup(&mut app, term_rows);
 
-        if app.max_visible == 0 {
+        if app.max_visible() == 0 {
             debug!("render request had zero visible rows");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
@@ -1260,7 +1260,7 @@ impl DaemonServer {
 
         // Read cursor_row before render to avoid borrowing app after render
         let cursor_row_final = app.cursor_row;
-        let filtered_count = app.filtered_indices.len();
+        let filtered_count = app.filtered_indices().len();
         let selected_original_idx = app.selected_original_idx();
         let result = ui::render::render_popup_to_bytes(&app, &self.theme);
 
@@ -1358,7 +1358,7 @@ impl DaemonServer {
             app.reset_filter_to_prefix();
         }
 
-        if app.filtered_indices.is_empty() {
+        if app.filtered_indices().is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
             let result = if native_candidates_present {
                 ApplyResult::cancel(String::new())
@@ -1369,9 +1369,9 @@ impl DaemonServer {
             return None;
         }
 
-        let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+        let scroll_bytes = scroll_for_popup(&mut app, term_rows);
 
-        if app.max_visible == 0 {
+        if app.max_visible() == 0 {
             self.fuzzy = Some(app.take_fuzzy());
             let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
             return None;
@@ -1424,7 +1424,7 @@ impl DaemonServer {
             .then(|| app.unambiguous_prefix().map(str::to_string))
             .flatten();
 
-        if accept_single && app.filtered_indices.len() == 1 {
+        if accept_single && app.filtered_indices().len() == 1 {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
@@ -1518,7 +1518,7 @@ impl DaemonServer {
                         Action::TypeChar(c) => {
                             let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                             app.type_char(c);
-                            if app.filtered_indices.is_empty() {
+                            if app.filtered_indices().is_empty() {
                                 let _ = write_apply_result(
                                     writer,
                                     &ApplyResult::cancel(app.filter_text.clone()),
@@ -1539,7 +1539,7 @@ impl DaemonServer {
                                     write_apply_result(writer, &ApplyResult::cancel(String::new()));
                                 break;
                             }
-                            if app.filtered_indices.is_empty()
+                            if app.filtered_indices().is_empty()
                                 || app.filter_text.len() < app.prefix.len()
                             {
                                 let _ = write_apply_result(
@@ -1648,7 +1648,7 @@ impl DaemonServer {
                 }) => {
                     let previous_popup = crate::ui::popup::Popup::compute(&app);
                     app.set_terminal_state(cursor_row, cursor_col, term_cols, term_rows);
-                    let scroll_bytes = cap_viewport_and_scroll(&mut app, term_rows);
+                    let scroll_bytes = scroll_for_popup(&mut app, term_rows);
                     let new_popup = crate::ui::popup::Popup::compute(&app);
                     let (extra_prefix, prev_popup) =
                         if resize_requires_full_popup_clear(&previous_popup, &new_popup) {
@@ -1821,19 +1821,14 @@ fn resize_requires_full_popup_clear(
     previous_popup.col != new_popup.col || previous_popup.width != new_popup.width
 }
 
-/// Cap `app.max_visible` to fit within `term_rows`, then compute scroll-up
-/// bytes needed to make room for the popup below the cursor.
-fn cap_viewport_and_scroll(app: &mut App, term_rows: u16) -> Vec<u8> {
-    let max_popup_height = term_rows.saturating_sub(1);
-    if app.max_visible as u16 + 2 > max_popup_height {
-        app.max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
-    }
-
-    if app.max_visible == 0 {
+/// Compute scroll-up bytes needed to make room for the popup below the
+/// cursor. `App` already sizes its viewport to `term_rows`.
+fn scroll_for_popup(app: &mut App, term_rows: u16) -> Vec<u8> {
+    if app.max_visible() == 0 {
         return Vec::new();
     }
 
-    let popup_height = app.max_visible as u16 + 2;
+    let popup_height = app.max_visible() as u16 + 2;
     let space_below = term_rows.saturating_sub(app.cursor_row + 1);
     let mut scroll_bytes = Vec::new();
     if space_below < popup_height {

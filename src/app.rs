@@ -9,16 +9,151 @@ struct CachedFilter {
     mode: MatchMode,
 }
 
+/// Selection and scroll position over a list of `len` rows, of which at most
+/// `max_visible` are shown.
+///
+/// Every operation keeps `is_valid` true. Changing `len` requires `reset`
+/// and changing `max_visible` requires `clamp`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Viewport {
+    selected: Option<usize>,
+    scroll_offset: usize,
+}
+
+impl Viewport {
+    /// The window shows at least one row and never scrolls past the last
+    /// full page. A selected row exists and lies inside the window; without
+    /// one the window is at the top.
+    #[cfg(test)]
+    fn is_valid(self, len: usize, max_visible: usize) -> bool {
+        max_visible >= 1
+            && self.scroll_offset <= len.saturating_sub(max_visible)
+            && match self.selected {
+                None => self.scroll_offset == 0,
+                Some(sel) => {
+                    sel < len && sel >= self.scroll_offset && sel - self.scroll_offset < max_visible
+                }
+            }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn move_down(&mut self, len: usize, max_visible: usize) {
+        if len == 0 {
+            return;
+        }
+        let sel = match self.selected {
+            None => 0,
+            Some(s) if s + 1 < len => s + 1,
+            Some(_) => {
+                self.scroll_offset = 0;
+                0
+            }
+        };
+        self.selected = Some(sel);
+        if sel >= self.scroll_offset + max_visible {
+            self.scroll_offset = sel + 1 - max_visible;
+        }
+    }
+
+    fn move_up(&mut self, len: usize, max_visible: usize) {
+        if len == 0 {
+            return;
+        }
+        let sel = match self.selected {
+            None | Some(0) => {
+                let last = len - 1;
+                self.scroll_offset = last.saturating_sub(max_visible.saturating_sub(1));
+                last
+            }
+            Some(s) => s - 1,
+        };
+        self.selected = Some(sel);
+        if sel < self.scroll_offset {
+            self.scroll_offset = sel;
+        }
+    }
+
+    fn page_down(&mut self, len: usize, max_visible: usize) {
+        if len == 0 {
+            return;
+        }
+        let cur = self.selected.unwrap_or(0);
+        let sel = cur.saturating_add(max_visible).min(len - 1);
+        self.selected = Some(sel);
+        if sel >= self.scroll_offset + max_visible {
+            self.scroll_offset = sel + 1 - max_visible;
+        }
+    }
+
+    fn page_up(&mut self, len: usize, max_visible: usize) {
+        if len == 0 {
+            return;
+        }
+        let cur = self.selected.unwrap_or(0);
+        let sel = cur.saturating_sub(max_visible);
+        self.selected = Some(sel);
+        if sel < self.scroll_offset {
+            self.scroll_offset = sel;
+        }
+    }
+
+    fn select_first(&mut self, len: usize) {
+        self.selected = (len > 0).then_some(0);
+        self.scroll_offset = 0;
+    }
+
+    fn select(&mut self, idx: usize, len: usize, max_visible: usize) {
+        if idx >= len {
+            return;
+        }
+        self.selected = Some(idx);
+        if idx < self.scroll_offset {
+            self.scroll_offset = idx;
+        } else if idx >= self.scroll_offset + max_visible {
+            self.scroll_offset = idx + 1 - max_visible;
+        }
+    }
+
+    /// Restores validity after `len` or `max_visible` changed.
+    fn clamp(&mut self, len: usize, max_visible: usize) {
+        if len == 0 {
+            self.reset();
+            return;
+        }
+
+        self.scroll_offset = self.scroll_offset.min(len.saturating_sub(max_visible));
+
+        if let Some(sel) = self.selected {
+            let sel = sel.min(len - 1);
+            self.selected = Some(sel);
+
+            if sel < self.scroll_offset {
+                self.scroll_offset = sel;
+            }
+
+            if sel >= self.scroll_offset + max_visible {
+                self.scroll_offset = sel + 1 - max_visible;
+            }
+        }
+    }
+
+    fn visible_range(self, len: usize, max_visible: usize) -> std::ops::Range<usize> {
+        self.scroll_offset..(self.scroll_offset + max_visible).min(len)
+    }
+}
+
 pub struct App {
     pub all_candidates: Vec<Candidate>,
-    pub filtered_indices: Vec<usize>,
+    filtered_indices: Vec<usize>,
     // Unbounded; typical session produces few unique queries so no eviction needed
     cached_filters: HashMap<String, CachedFilter>,
     match_mode: MatchMode,
     pub filter_text: String,
-    selected: Option<usize>,
-    pub scroll_offset: usize,
-    pub max_visible: usize,
+    viewport: Viewport,
+    max_visible: usize,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub term_cols: u16,
@@ -84,8 +219,7 @@ impl App {
             cached_filters: HashMap::new(),
             match_mode: MatchMode::default(),
             filter_text: lcp,
-            selected: None,
-            scroll_offset: 0,
+            viewport: Viewport::default(),
             max_visible: DEFAULT_MAX_VISIBLE,
             cursor_row,
             cursor_col,
@@ -113,8 +247,7 @@ impl App {
             .map(|s| s.candidate_idx)
             .collect();
         self.match_mode = result.mode;
-        self.selected = None;
-        self.scroll_offset = 0;
+        self.viewport.reset();
         self.cache_current_filter();
     }
 
@@ -134,8 +267,7 @@ impl App {
         };
         self.filtered_indices = cached.indices.clone();
         self.match_mode = cached.mode;
-        self.selected = None;
-        self.scroll_offset = 0;
+        self.viewport.reset();
         true
     }
 
@@ -144,63 +276,23 @@ impl App {
     }
 
     pub fn move_down(&mut self) {
-        if self.filtered_indices.is_empty() {
-            return;
-        }
-        let sel = match self.selected {
-            None => 0,
-            Some(s) if s + 1 < self.filtered_indices.len() => s + 1,
-            Some(_) => {
-                self.scroll_offset = 0;
-                0
-            }
-        };
-        self.selected = Some(sel);
-        if sel >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = sel + 1 - self.max_visible;
-        }
+        self.viewport
+            .move_down(self.filtered_indices.len(), self.max_visible);
     }
 
     pub fn move_up(&mut self) {
-        if self.filtered_indices.is_empty() {
-            return;
-        }
-        let sel = match self.selected {
-            None | Some(0) => {
-                let last = self.filtered_indices.len() - 1;
-                self.scroll_offset = last.saturating_sub(self.max_visible.saturating_sub(1));
-                last
-            }
-            Some(s) => s - 1,
-        };
-        self.selected = Some(sel);
-        if sel < self.scroll_offset {
-            self.scroll_offset = sel;
-        }
+        self.viewport
+            .move_up(self.filtered_indices.len(), self.max_visible);
     }
 
     pub fn page_down(&mut self) {
-        if self.filtered_indices.is_empty() {
-            return;
-        }
-        let cur = self.selected.unwrap_or(0);
-        let sel = (cur + self.max_visible).min(self.filtered_indices.len() - 1);
-        self.selected = Some(sel);
-        if sel >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = sel + 1 - self.max_visible;
-        }
+        self.viewport
+            .page_down(self.filtered_indices.len(), self.max_visible);
     }
 
     pub fn page_up(&mut self) {
-        if self.filtered_indices.is_empty() {
-            return;
-        }
-        let cur = self.selected.unwrap_or(0);
-        let sel = cur.saturating_sub(self.max_visible);
-        self.selected = Some(sel);
-        if sel < self.scroll_offset {
-            self.scroll_offset = sel;
-        }
+        self.viewport
+            .page_up(self.filtered_indices.len(), self.max_visible);
     }
 
     pub fn type_char(&mut self, c: char) {
@@ -225,53 +317,54 @@ impl App {
     }
 
     pub fn select_first(&mut self) {
-        if self.filtered_indices.is_empty() {
-            self.selected = None;
-            self.scroll_offset = 0;
-            return;
-        }
-        self.selected = Some(0);
-        self.scroll_offset = 0;
+        self.viewport.select_first(self.filtered_indices.len());
     }
 
     pub fn selected(&self) -> Option<usize> {
-        self.selected
+        self.viewport.selected
+    }
+
+    /// Indices into `all_candidates` that match the filter, best first.
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.filtered_indices
+    }
+
+    pub fn scroll_offset(&self) -> usize {
+        self.viewport.scroll_offset
+    }
+
+    pub fn max_visible(&self) -> usize {
+        self.max_visible
     }
 
     pub fn set_selected(&mut self, idx: usize) {
-        if idx >= self.filtered_indices.len() {
-            return;
-        }
-        self.selected = Some(idx);
-        // Adjust viewport to keep selected visible
-        if idx < self.scroll_offset {
-            self.scroll_offset = idx;
-        } else if idx >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = idx + 1 - self.max_visible;
-        }
+        self.viewport
+            .select(idx, self.filtered_indices.len(), self.max_visible);
     }
 
     /// Returns the index into `all_candidates` for the currently selected item.
     pub fn selected_original_idx(&self) -> Option<usize> {
-        let sel = self.selected?;
+        let sel = self.viewport.selected?;
         self.filtered_indices.get(sel).copied()
     }
 
     pub fn selected_candidate(&self) -> Option<&Candidate> {
-        let sel = self.selected?;
+        let sel = self.viewport.selected?;
         self.filtered_indices
             .get(sel)
             .and_then(|&candidate_idx| self.all_candidates.get(candidate_idx))
     }
 
     pub fn visible_candidate_indices(&self) -> &[usize] {
-        let end = (self.scroll_offset + self.max_visible).min(self.filtered_indices.len());
-        &self.filtered_indices[self.scroll_offset..end]
+        let range = self
+            .viewport
+            .visible_range(self.filtered_indices.len(), self.max_visible);
+        &self.filtered_indices[range]
     }
 
     pub fn visible_selected_index(&self) -> Option<usize> {
-        let sel = self.selected?;
-        Some(sel - self.scroll_offset)
+        let sel = self.viewport.selected?;
+        Some(sel - self.viewport.scroll_offset)
     }
 
     pub fn take_fuzzy(self) -> FuzzyMatcher {
@@ -307,28 +400,17 @@ impl App {
         self.clamp_viewport();
     }
 
+    /// Lowers `max_visible` to at most `limit` rows, never below one, and
+    /// keeps the selection visible.
+    #[cfg(test)]
+    pub(crate) fn cap_max_visible(&mut self, limit: usize) {
+        self.max_visible = self.max_visible.min(limit.max(1));
+        self.clamp_viewport();
+    }
+
     fn clamp_viewport(&mut self) {
-        if self.filtered_indices.is_empty() {
-            self.selected = None;
-            self.scroll_offset = 0;
-            return;
-        }
-
-        let max_scroll = self.filtered_indices.len().saturating_sub(self.max_visible);
-        self.scroll_offset = self.scroll_offset.min(max_scroll);
-
-        if let Some(sel) = self.selected {
-            let sel = sel.min(self.filtered_indices.len() - 1);
-            self.selected = Some(sel);
-
-            if sel < self.scroll_offset {
-                self.scroll_offset = sel;
-            }
-
-            if sel >= self.scroll_offset + self.max_visible {
-                self.scroll_offset = sel + 1 - self.max_visible;
-            }
-        }
+        self.viewport
+            .clamp(self.filtered_indices.len(), self.max_visible);
     }
 
     /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
@@ -655,7 +737,7 @@ mod tests {
         assert!(app.cached_filters.contains_key("a"));
 
         app.set_selected(1);
-        app.scroll_offset = 1;
+        app.viewport.scroll_offset = 1;
         assert!(app.backspace());
 
         let restored: Vec<String> = filtered_texts(&app)
@@ -664,7 +746,7 @@ mod tests {
             .collect();
         assert_eq!(restored, a_results);
         assert_eq!(app.selected(), None);
-        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_offset(), 0);
     }
 
     #[test]
@@ -697,7 +779,7 @@ mod tests {
 
         app.type_char('a');
         app.set_selected(1);
-        app.scroll_offset = 1;
+        app.viewport.scroll_offset = 1;
         assert!(app.backspace());
 
         assert_eq!(app.filter_text, "");
@@ -707,7 +789,7 @@ mod tests {
             .collect();
         assert_eq!(restored, initial);
         assert_eq!(app.selected(), None);
-        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_offset(), 0);
     }
 
     #[test]
@@ -736,7 +818,7 @@ mod tests {
         assert!(app.selected().is_some());
         app.type_char('a');
         assert_eq!(app.selected(), None);
-        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_offset(), 0);
     }
 
     #[test]
@@ -773,7 +855,7 @@ mod tests {
     #[test]
     fn visible_candidates_respects_scroll() {
         let mut app = App::new(make_candidates(FIFTEEN_ITEMS), "".to_string(), 5, 10);
-        app.scroll_offset = 5;
+        app.viewport.scroll_offset = 5;
         let visible: Vec<&str> = app
             .visible_candidate_indices()
             .iter()
@@ -788,7 +870,7 @@ mod tests {
         let candidates = make_candidates(&["alpha", "beta", "gamma"]);
         let mut app = App::new(candidates, "".to_string(), 5, 10);
         app.set_selected(2);
-        app.scroll_offset = 1;
+        app.viewport.scroll_offset = 1;
         assert_eq!(app.visible_selected_index(), Some(1));
     }
 
@@ -854,14 +936,14 @@ mod tests {
             24,
         );
         app.set_selected(9);
-        app.scroll_offset = 0;
+        app.viewport.scroll_offset = 0;
 
         app.set_term_size(80, 6);
 
         assert_eq!(app.max_visible, 3);
         let sel = app.selected().unwrap();
-        assert!(sel >= app.scroll_offset);
-        assert!(sel < app.scroll_offset + app.max_visible);
+        assert!(sel >= app.scroll_offset());
+        assert!(sel < app.scroll_offset() + app.max_visible);
     }
 
     #[test]
@@ -913,8 +995,8 @@ mod tests {
         app.max_visible = 3;
         app.set_selected(5);
         assert_eq!(app.selected(), Some(5));
-        assert!(app.scroll_offset <= 5);
-        assert!(5 < app.scroll_offset + app.max_visible);
+        assert!(app.scroll_offset() <= 5);
+        assert!(5 < app.scroll_offset() + app.max_visible);
     }
 
     #[test]
@@ -998,5 +1080,136 @@ mod tests {
         app.reset_filter_to_prefix();
         assert_eq!(app.filter_text, "g");
         assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
+    }
+
+    // Kani checks every `usize`. The randomized run draws small values so
+    // that short lists and windows near the list length come up.
+    #[cfg(kani)]
+    type Dim = usize;
+    #[cfg(not(kani))]
+    type Dim = u8;
+
+    const VIEWPORT_OPS: u8 = 8;
+
+    fn apply_viewport_op(
+        viewport: &mut Viewport,
+        op: u8,
+        idx: usize,
+        len: usize,
+        max_visible: usize,
+    ) {
+        match op % VIEWPORT_OPS {
+            0 => viewport.move_down(len, max_visible),
+            1 => viewport.move_up(len, max_visible),
+            2 => viewport.page_down(len, max_visible),
+            3 => viewport.page_up(len, max_visible),
+            4 => viewport.select_first(len),
+            5 => viewport.select(idx, len, max_visible),
+            6 => viewport.clamp(len, max_visible),
+            _ => viewport.reset(),
+        }
+    }
+
+    /// Inductive step: from any valid state, every operation yields a valid
+    /// state. Runs as a randomized test under `cargo test` and as a proof
+    /// over every `usize` under `cargo kani --tests`.
+    #[test]
+    #[cfg_attr(kani, kani::proof)]
+    fn viewport_operations_preserve_validity() {
+        bolero::check!()
+            .with_type::<(Option<Dim>, Dim, Dim, Dim, u8, Dim)>()
+            .cloned()
+            .for_each(|(selected, scroll_offset, len, max_visible, op, idx)| {
+                let (len, max_visible) = (usize::from(len), usize::from(max_visible));
+                let mut viewport = Viewport {
+                    selected: selected.map(usize::from),
+                    scroll_offset: usize::from(scroll_offset),
+                };
+                // Few random draws are valid states, so the randomized run
+                // repairs its draw first. Kani keeps the raw draw: there the
+                // check below alone decides which states are covered.
+                #[cfg(not(kani))]
+                {
+                    if viewport.selected.is_none() {
+                        viewport.scroll_offset = 0;
+                    }
+                    viewport.clamp(len, max_visible.max(1));
+                }
+                if !viewport.is_valid(len, max_visible) {
+                    return;
+                }
+
+                apply_viewport_op(&mut viewport, op, usize::from(idx), len, max_visible);
+
+                assert!(viewport.is_valid(len, max_visible));
+                let visible = viewport.visible_range(len, max_visible);
+                assert_eq!(visible.len(), len.min(max_visible));
+                assert!(visible.end <= len);
+            });
+    }
+
+    /// `clamp` repairs a state for any new list length and window size,
+    /// keeps the selection on the same row or the last row if that row is
+    /// gone, and leaves an already valid state untouched. The window must
+    /// show at least one row. The state may be arbitrary
+    /// except that an unselected window is at the top, which `clamp` keeps
+    /// but does not establish.
+    #[test]
+    #[cfg_attr(kani, kani::proof)]
+    fn viewport_clamp_restores_validity_after_any_resize() {
+        bolero::check!()
+            .with_type::<(Option<Dim>, Dim, Dim, Dim)>()
+            .cloned()
+            .for_each(|(selected, scroll_offset, len, max_visible)| {
+                let (len, max_visible) = (usize::from(len), usize::from(max_visible));
+                let before = Viewport {
+                    selected: selected.map(usize::from),
+                    scroll_offset: usize::from(scroll_offset),
+                };
+                if max_visible == 0 || (before.selected.is_none() && before.scroll_offset != 0) {
+                    return;
+                }
+
+                let mut after = before;
+                after.clamp(len, max_visible);
+
+                assert!(after.is_valid(len, max_visible));
+                let kept = before.selected.filter(|_| len > 0);
+                assert_eq!(after.selected, kept.map(|sel| sel.min(len - 1)));
+                if before.is_valid(len, max_visible) {
+                    assert_eq!(after, before);
+                }
+            });
+    }
+
+    /// Randomized only: drives one viewport through a sequence of
+    /// operations, list changes and resizes, as `App` does.
+    #[test]
+    fn viewport_stays_valid_across_operation_sequences() {
+        bolero::check!()
+            .with_type::<(u8, u8, Vec<(u8, u8)>)>()
+            .for_each(|(len, max_visible, steps)| {
+                let mut len = usize::from(*len);
+                let mut max_visible = usize::from(*max_visible).max(1);
+                let mut viewport = Viewport::default();
+
+                for &(op, arg) in steps {
+                    let arg = usize::from(arg);
+                    match op % (VIEWPORT_OPS + 2) {
+                        op if op < VIEWPORT_OPS => {
+                            apply_viewport_op(&mut viewport, op, arg, len, max_visible);
+                        }
+                        VIEWPORT_OPS => {
+                            len = arg;
+                            viewport.reset();
+                        }
+                        _ => {
+                            max_visible = arg.max(1);
+                            viewport.clamp(len, max_visible);
+                        }
+                    }
+                    assert!(viewport.is_valid(len, max_visible));
+                }
+            });
     }
 }

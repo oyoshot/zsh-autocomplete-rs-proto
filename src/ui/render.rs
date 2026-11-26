@@ -48,7 +48,7 @@ pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<(
     let term_rows = app.term_rows;
     app.sync_max_visible();
 
-    let popup_height = app.max_visible as u16 + 2;
+    let popup_height = app.max_visible() as u16 + 2;
     let space_below = term_rows.saturating_sub(app.cursor_row + 1);
 
     if space_below < popup_height {
@@ -527,16 +527,16 @@ mod tests {
         );
         // Keep byte-score filtering, including its byte-only match, while
         // refusing to emphasize unrelated characters in either candidate.
-        assert_eq!(app.filtered_indices.len(), 2);
+        assert_eq!(app.filtered_indices().len(), 2);
         assert_eq!(emphasized_text(&app), "日.t");
     }
 
     #[test]
     fn narrowing_and_cached_results_keep_strict_highlighting_after_rescue() {
         let mut app = rescue_abbreviation_app("gti");
-        assert_eq!(app.filtered_indices.len(), 2);
+        assert_eq!(app.filtered_indices().len(), 2);
         app.type_char('-');
-        assert_eq!(app.filtered_indices, vec![0]);
+        assert_eq!(app.filtered_indices(), vec![0]);
         app.type_char('Σ');
         assert_eq!(emphasized_text(&app), "gti-Σ");
 
@@ -551,7 +551,7 @@ mod tests {
 
         // Backspace also restores the mode of a cached strict result.
         app.type_char('x');
-        assert!(app.filtered_indices.is_empty());
+        assert!(app.filtered_indices().is_empty());
         assert!(app.backspace());
         assert_eq!(emphasized_text(&app), "gti-Σ");
     }
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn full_rescan_keeps_rescue_highlighting_without_a_rescued_result() {
         let mut app = rescue_abbreviation_app("gti-Σ");
-        assert_eq!(app.filtered_indices, vec![0]);
+        assert_eq!(app.filtered_indices(), vec![0]);
         assert_eq!(emphasized_text(&app), "gti-σ");
         app.type_char('x');
         assert!(app.backspace());
@@ -608,7 +608,7 @@ mod tests {
                 })
                 .collect();
             let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
-            app.max_visible = 8;
+            app.cap_max_visible(8);
             for (selected, label) in [(0, " 1–8 / 42 "), (41, " 35–42 / 42 ")] {
                 app.set_selected(selected);
                 let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
