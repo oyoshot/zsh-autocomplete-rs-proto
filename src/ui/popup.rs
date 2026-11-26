@@ -331,7 +331,13 @@ mod tests {
                     );
                     let bottom = u32::from(popup.row) + u32::from(popup.height);
 
-                    assert!(popup.width <= MAX_POPUP_WIDTH);
+                    let framed =
+                        |cells: usize| u16::try_from(cells.saturating_add(2)).unwrap_or(u16::MAX);
+                    assert_eq!(
+                        popup.width,
+                        framed(inner_width).min(MAX_POPUP_WIDTH).min(term_cols)
+                    );
+                    assert_eq!(popup.height, framed(num_visible));
                     assert!(popup.col <= cursor_col);
                     assert!(u32::from(popup.col) + u32::from(popup.width) <= u32::from(term_cols));
 

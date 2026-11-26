@@ -1311,9 +1311,10 @@ mod tests {
 
     /// Runs as a randomized test under `cargo test` and as a proof over every
     /// input of up to `HEX_PROOF_MAX_LEN` bytes under `cargo kani --tests`.
+    /// The unwind bound must stay above `HEX_PROOF_MAX_LEN`.
     #[test]
     #[cfg_attr(kani, kani::proof, kani::unwind(8))]
-    fn decode_hex_accepts_exactly_nonempty_even_hex_digits() {
+    fn decode_hex_decodes_exactly_nonempty_even_hex_digits() {
         bolero::check!()
             .with_type::<([u8; HEX_PROOF_MAX_LEN], u8)>()
             .cloned()
@@ -1327,6 +1328,11 @@ mod tests {
                     Some(decoded) => {
                         assert!(well_formed);
                         assert_eq!(decoded.len(), input.len() / 2);
+                        let digit = |byte: u8| char::from(byte).to_digit(16).unwrap();
+                        for (i, &value) in decoded.iter().enumerate() {
+                            let expected = digit(input[2 * i]) * 16 + digit(input[2 * i + 1]);
+                            assert_eq!(u32::from(value), expected);
+                        }
                     }
                     None => assert!(!well_formed),
                 }

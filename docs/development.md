@@ -103,22 +103,20 @@ against every input, including panics and arithmetic overflow:
 
 ```sh
 cargo install --locked kani-verifier && cargo kani setup
-CARGO_TARGET_DIR=target cargo kani --tests
+(ulimit -v 4000000; CARGO_TARGET_DIR=target cargo kani --tests)
 grep -rn 'kani::proof' src
 ```
 
+Keep the `ulimit`: without it the solver can exhaust memory and stall the
+machine. A harness that hits the cap fails with an out-of-memory message. Add
+`--harness` with a test name to run one harness.
+
 CI runs every harness on Linux with the latest Kani release.
 
-The solver can exhaust memory and stall the machine. Cap it when trying a new
-harness; a harness that hits the cap fails with an out-of-memory message:
-
-```sh
-(ulimit -v 4000000; CARGO_TARGET_DIR=target cargo kani --tests --harness <name>)
-```
-
-A proof covers only what its harness generates. Harnesses with
-`kani::unwind` bound the input length, and the bound is named in the test.
-Prefer inputs wider than the callers can produce over assumptions that
+A proof covers only what its harness generates. A harness that limits its
+input, for example with a fixed-size array, names the limit in the test.
+`kani::unwind` bounds loop iterations, not input, and has to grow with the
+input. Prefer inputs wider than the callers can produce over assumptions that
 exclude real ones. Keep harnesses on small pure functions; code that reaches
 formatting, Unicode tables or the matcher is usually too large to check.
 
