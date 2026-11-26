@@ -38,6 +38,7 @@ portable-pty = "0.9"
 filedescriptor = "0.8"
 signal-hook = "0.3"
 bolero = "0.13"
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

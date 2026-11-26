@@ -2387,6 +2387,7 @@ dependencies = [
  "globset",
  "libc",
  "portable-pty",
+ "rustix",
  "serde",
  "signal-hook",
  "tempfile",
