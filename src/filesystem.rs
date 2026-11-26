@@ -421,6 +421,49 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_budget_admits_exactly_the_bytes_the_candidates_retain() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("file"), "").unwrap();
+        std::fs::write(root.path().join("longer-file-name"), "").unwrap();
+        std::fs::create_dir(root.path().join("directory")).unwrap();
+        for absolute_insertion in [false, true] {
+            let query = FilesystemQuery {
+                cwd: root.path().into(),
+                path_prefix: String::new(),
+                insertion_prefix: String::new(),
+                options: FilesystemOptions {
+                    absolute_insertion,
+                    ..FilesystemOptions::default()
+                },
+            };
+            let retained: usize = query
+                .collect()
+                .unwrap()
+                .iter()
+                .map(|candidate| {
+                    size_of::<Candidate>()
+                        + candidate.text.capacity()
+                        + candidate.description.capacity()
+                        + candidate.kind.capacity()
+                        + candidate.literal_path.as_ref().unwrap().path.capacity()
+                })
+                .sum();
+
+            assert_eq!(
+                query
+                    .collect_with_budget(retained, MAX_SCANNED_ENTRIES)
+                    .unwrap()
+                    .len(),
+                3
+            );
+            assert!(matches!(
+                query.collect_with_budget(retained - 1, MAX_SCANNED_ENTRIES),
+                Err(CollectionError::LimitExceeded)
+            ));
+        }
+    }
+
+    #[test]
     fn scan_limit_counts_nonmatching_entries_across_parent_and_leaf() {
         let root = tempfile::tempdir().unwrap();
         let parent = root.path().join("Folder");
@@ -670,6 +713,76 @@ mod tests {
         );
         assert!(rows.iter().any(|c| c.text == "tab\\\\tname"
             && c.literal_path.as_deref() == Some(Path::new("tab\\tname"))));
+    }
+
+    /// Reverses `push_display` on hosts where a backslash is not a separator.
+    #[cfg(unix)]
+    fn parse_display(display: &str) -> Option<String> {
+        let mut raw = String::new();
+        let mut chars = display.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                raw.push(c);
+                continue;
+            }
+            raw.push(match chars.next()? {
+                '\\' => '\\',
+                't' => '\t',
+                'n' => '\n',
+                'r' => '\r',
+                'u' => {
+                    let rest = chars.as_str().strip_prefix('{')?;
+                    let (digits, rest) = rest.split_once('}')?;
+                    chars = rest.chars();
+                    char::from_u32(u32::from_str_radix(digits, 16).ok()?)?
+                }
+                _ => return None,
+            });
+        }
+        Some(raw)
+    }
+
+    /// Randomized only. Distinct names never share a display, because every
+    /// display parses back to the one name that produced it.
+    #[cfg(unix)]
+    #[test]
+    fn display_is_control_free_and_reversible_for_any_name() {
+        bolero::check!().with_type::<String>().for_each(|raw| {
+            let mut display = String::new();
+            push_display(&mut display, raw);
+            assert!(!display.chars().any(char::is_control));
+            assert_eq!(parse_display(&display).as_ref(), Some(raw));
+        });
+    }
+
+    /// Randomized only.
+    #[test]
+    fn split_prefix_cuts_after_the_last_separator_for_any_prefix() {
+        bolero::check!().with_type::<String>().for_each(|prefix| {
+            let (directory, basename) = split_prefix(prefix);
+            assert_eq!(format!("{directory}{basename}"), *prefix);
+            assert!(!basename.contains(is_separator));
+            assert!(directory.is_empty() || directory.ends_with(is_separator));
+        });
+    }
+
+    /// Randomized only. A spelling that already names the resolved directories
+    /// comes back unchanged, including its dots and repeated separators.
+    #[cfg(unix)]
+    #[test]
+    fn corrected_spelling_keeps_any_typed_path_that_already_matches() {
+        const PARTS: [&str; 6] = ["", ".", "..", "name", "Name", "\u{e9}t\u{e9}"];
+        bolero::check!().with_type::<Vec<u8>>().for_each(|choices| {
+            let typed = choices
+                .iter()
+                .map(|&choice| PARTS[usize::from(choice) % PARTS.len()])
+                .collect::<Vec<_>>()
+                .join("/");
+            assert_eq!(
+                corrected_directory_spelling(&typed, Path::new(&typed)),
+                Some(typed)
+            );
+        });
     }
 
     #[cfg(unix)]
