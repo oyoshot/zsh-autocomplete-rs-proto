@@ -45,20 +45,13 @@ pub fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout 
 /// Scroll the terminal to ensure enough blank space below the cursor for the popup.
 /// Updates `app.cursor_row` and `app.max_visible` to reflect the new state.
 pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<()> {
-    let term_rows = app.term_rows;
     app.sync_max_visible();
 
-    let popup_height = app.max_visible() as u16 + 2;
-    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
-
-    if space_below < popup_height {
-        let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-
-        if scroll_amount > 0 {
-            // Scroll terminal content up without moving cursor position
-            crossterm::execute!(tty, terminal::ScrollUp(scroll_amount))?;
-            app.cursor_row -= scroll_amount;
-        }
+    let scroll_amount = Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
+    if scroll_amount > 0 {
+        // Scroll terminal content up without moving cursor position
+        crossterm::execute!(tty, terminal::ScrollUp(scroll_amount))?;
+        app.cursor_row -= scroll_amount;
     }
 
     Ok(())

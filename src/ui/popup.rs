@@ -3,6 +3,10 @@ use unicode_width::UnicodeWidthStr;
 
 const MAX_POPUP_WIDTH: u16 = 60;
 const PADDING: usize = 3; // Two cells for the selection gutter, one on the right.
+/// Rows a popup needs: the cursor line, the frame and one candidate.
+const MIN_TERM_ROWS: u16 = 4;
+/// Columns a popup needs: the frame and one content cell.
+const MIN_TERM_COLS: u16 = 3;
 
 /// Returns `true` if `s` is safe to embed as a space-delimited header token.
 /// Rejects empty strings, spaces, and ASCII control characters.
@@ -18,6 +22,28 @@ pub struct Popup {
 }
 
 impl Popup {
+    /// Whether a terminal of this size can show a popup below the cursor
+    /// line without drawing outside the terminal.
+    pub fn fits_terminal(term_cols: u16, term_rows: u16) -> bool {
+        term_cols >= MIN_TERM_COLS && term_rows >= MIN_TERM_ROWS
+    }
+
+    /// Candidate rows that fit below the cursor line and inside the frame.
+    pub fn rows_available(term_rows: u16) -> usize {
+        usize::from(term_rows.saturating_sub(MIN_TERM_ROWS - 1))
+    }
+
+    /// Lines to scroll the terminal up so that a popup with `max_visible`
+    /// candidate rows fits below the cursor. The cursor moves up by the same
+    /// amount, so the result never exceeds `cursor_row`.
+    pub fn scroll_to_fit(cursor_row: u16, term_rows: u16, max_visible: usize) -> u16 {
+        let popup_height = u16::try_from(max_visible)
+            .unwrap_or(u16::MAX)
+            .saturating_add(2);
+        let space_below = term_rows.saturating_sub(cursor_row.saturating_add(1));
+        popup_height.saturating_sub(space_below).min(cursor_row)
+    }
+
     pub(crate) fn range_label(app: &App) -> String {
         let visible = app.visible_candidate_indices().len();
         let total = app.filtered_indices().len();
@@ -363,5 +389,80 @@ mod tests {
         app.all_candidates[0].description = wide.clone();
         let popup = Popup::compute(&app);
         assert_eq!(popup.width, MAX_POPUP_WIDTH);
+    }
+
+    #[test]
+    fn fits_terminal_needs_room_for_the_frame_and_one_row() {
+        assert!(Popup::fits_terminal(3, 4));
+        assert!(!Popup::fits_terminal(2, 4));
+        assert!(!Popup::fits_terminal(3, 3));
+        assert_eq!(Popup::rows_available(4), 1);
+        assert_eq!(Popup::rows_available(3), 0);
+        assert_eq!(Popup::rows_available(0), 0);
+    }
+
+    /// In any terminal a popup fits, scrolling by `scroll_to_fit` leaves room
+    /// to place the popup directly below the cursor and inside the terminal,
+    /// so it never covers the cursor line. Runs as a randomized test under
+    /// `cargo test` and as a proof over every input under `cargo kani --tests`.
+    #[test]
+    #[cfg_attr(kani, kani::proof)]
+    fn popup_fits_below_the_cursor_after_scrolling() {
+        bolero::check!()
+            .with_type::<(u16, u16, u16, u16, usize, usize, usize)>()
+            .cloned()
+            .for_each(
+                |(
+                    cursor_row,
+                    cursor_col,
+                    term_cols,
+                    term_rows,
+                    inner_width,
+                    max_visible,
+                    num_visible,
+                )| {
+                    if !Popup::fits_terminal(term_cols, term_rows) {
+                        return;
+                    }
+                    // Few random draws satisfy the conditions below, so the
+                    // randomized run repairs its draw first. Kani keeps the
+                    // raw draw: there the conditions alone decide coverage.
+                    #[cfg(not(kani))]
+                    let (cursor_row, max_visible, num_visible) = {
+                        let max_visible = 1 + max_visible % Popup::rows_available(term_rows);
+                        (
+                            cursor_row % term_rows,
+                            max_visible,
+                            num_visible % (max_visible + 1),
+                        )
+                    };
+                    if cursor_row >= term_rows
+                        || max_visible == 0
+                        || max_visible > Popup::rows_available(term_rows)
+                        || num_visible > max_visible
+                    {
+                        return;
+                    }
+
+                    let scroll = Popup::scroll_to_fit(cursor_row, term_rows, max_visible);
+                    assert!(scroll <= cursor_row);
+                    let cursor_row = cursor_row - scroll;
+                    let popup = Popup::place(
+                        cursor_row,
+                        cursor_col,
+                        term_cols,
+                        term_rows,
+                        inner_width,
+                        num_visible,
+                    );
+
+                    assert_eq!(popup.row, cursor_row + 1);
+                    assert!(u32::from(popup.row) + u32::from(popup.height) <= u32::from(term_rows));
+                    assert!(u32::from(popup.col) + u32::from(popup.width) <= u32::from(term_cols));
+                    if inner_width >= 1 {
+                        assert!(popup.width >= MIN_TERM_COLS);
+                    }
+                },
+            );
     }
 }

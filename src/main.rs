@@ -215,12 +215,12 @@ fn run_render(
         app.reset_filter_to_prefix();
     }
 
-    let mut tty = tty::open_tty_write()?;
-    ui::render::ensure_space(&mut tty, &mut app)?;
-
-    if app.max_visible() == 0 {
+    if !app.popup_fits() {
         return Ok(1);
     }
+
+    let mut tty = tty::open_tty_write()?;
+    ui::render::ensure_space(&mut tty, &mut app)?;
 
     if let Some(idx) = selected {
         app.set_selected(idx);
