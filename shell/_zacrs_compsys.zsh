@@ -98,6 +98,23 @@ _zacrs_compsys_func() {
         _zacrs_abbreviation_context_func
         return 0
     fi
+    # Save native facts before compset can change them. The lexer check only
+    # runs if the native providers leave us without candidates.
+    local -i _zacrs_file_current=0
+    local -a _zacrs_file_words
+    local _zacrs_file_literal _zacrs_file_buffer _zacrs_file_cursor
+    _zacrs_filesystem_valid=0
+    if [[ ${compstate[context]} == command && -z "$SUFFIX$QIPREFIX$QISUFFIX" ]] && _zacrs_filesystem_editor; then
+        _zacrs_file_current=$CURRENT
+        _zacrs_file_words=( "${words[@]}" )
+        _zacrs_file_literal="$IPREFIX$PREFIX"
+        _zacrs_file_buffer="$BUFFER"
+        _zacrs_file_cursor=$CURSOR
+        typeset -g _zacrs_filesystem_home="${HOME:-}" _zacrs_filesystem_cwd="$PWD"
+        local _zacrs_file_option_key
+        _zacrs_file_options
+        typeset -g _zacrs_filesystem_file_options="$_zacrs_file_option_key"
+    fi
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
     typeset -gi _zacrs_ctx_valid=0
@@ -258,6 +275,10 @@ _zacrs_compsys_func() {
     _zacrs_dbg "result: compadd_calls=$_zacrs_compadd_calls captured=${#_zacrs_captured}"
 
     unfunction compadd 2>/dev/null
+    if (( _zacrs_file_current && ! ${#_zacrs_captured} )) &&
+        [[ "$BUFFER" == "$_zacrs_file_buffer" && "$CURSOR" == "$_zacrs_file_cursor" ]]; then
+        _zacrs_filesystem_context "$_zacrs_file_current" "$_zacrs_file_literal" "${_zacrs_file_words[@]}" || :
+    fi
 
     # Suppress actual insertion and menu display
     compstate[insert]=

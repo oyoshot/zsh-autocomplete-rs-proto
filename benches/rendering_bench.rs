@@ -130,6 +130,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "cargo-build".to_string(),
             description: "compile the current package".to_string(),
             kind: "command".to_string(),
@@ -147,6 +148,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "cargo-build".to_string(),
             description: String::new(),
             kind: "command".to_string(),
@@ -164,6 +166,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "ファイル一覧表示".to_string(),
             description: "ディレクトリの内容を表示するコマンド".to_string(),
             kind: "command".to_string(),
@@ -181,6 +184,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "ファイル一覧表示".to_string(),
             description: String::new(),
             kind: "command".to_string(),
@@ -198,6 +202,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "git-ブランチ一覧".to_string(),
             description: "list all branches ブランチ表示".to_string(),
             kind: "command".to_string(),
@@ -215,6 +220,7 @@ fn bench_layout_candidate(c: &mut Criterion) {
 
     {
         let candidate = Candidate {
+            literal_path: None,
             text: "cargo-build".to_string(),
             description: "compile the current package with all dependencies resolved \
                           and optimizations applied across the entire workspace"
