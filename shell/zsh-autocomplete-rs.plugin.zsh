@@ -362,15 +362,17 @@ _zacrs_daemon_send_render() {
     render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
     if (( _cands_present && _zacrs_filesystem_requested )); then
+        local flag
+        local -a reply
+        _zacrs_filesystem_flags
         render_cmd="render-files ${render_cmd#render }"
-        [[ "$_zacrs_filesystem_file_options" == off:* ]] && render_cmd+=" filesystem_ignore_case=1"
-        [[ "$_zacrs_filesystem_file_options" == off:off:* ]] && render_cmd+=" filesystem_ignore_parent_case=1"
-        [[ "$_zacrs_filesystem_file_options" == *:on ]] && render_cmd+=" filesystem_include_hidden=1"
-        [[ "$_zacrs_filesystem_prefix" == '~/'* ]] && render_cmd+=" filesystem_absolute_insertion=1"
-    fi
-    print -r -u $fd -- "$render_cmd"
-    if (( _cands_present && _zacrs_filesystem_requested )); then
-        _zacrs_write_filesystem_query $fd
+        for flag in "${reply[@]}"; do
+            render_cmd+=" filesystem_$flag=1"
+        done
+        print -r -u $fd -- "$render_cmd"
+        _zacrs_write_framed_fields $fd "$_zacrs_filesystem_base" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"
+    else
+        print -r -u $fd -- "$render_cmd"
     fi
     printf '%s\n' "$_pfx" >&$fd
     if [[ -n "$_cands" ]]; then
@@ -546,6 +548,16 @@ _zacrs_clear_popup() {
 
 # === Apply completion result to LBUFFER ===
 
+# Decode a DONE/APPLY pair into the caller's result variables. A non-zero
+# status means the reply must not be applied.
+_zacrs_parse_selection_reply() {
+    if ! _zacrs_parse_done_line "$1" || ! _zacrs_parse_apply_line "$2"; then
+        _zacrs_clear_popup
+        return 5
+    fi
+    (( result_code != 5 ))
+}
+
 _zacrs_finish_popup_session() {
     _zacrs_popup_visible=0
     _zacrs_popup_row=0
@@ -556,19 +568,24 @@ _zacrs_finish_popup_session() {
     _zacrs_reset_popup_snapshot
 }
 
+# Record the lookup context that the next redraw compares against.
+_zacrs_record_prev_editor_state() {
+    local _zacrs_file_option_key
+    _zacrs_file_options
+    _zacrs_prev_buffer="$1"
+    _zacrs_prev_cursor=$2
+    _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
+    _zacrs_prev_file_options="$_zacrs_file_option_key"
+}
+
 _zacrs_line_init() {
     # Terminal interrupts bypass send-break (and line-finish). Zsh has already
     # displayed the next prompt, so forget old coordinates without erasing them.
     _zacrs_finish_popup_session
     _zacrs_end_popup_session
     _zacrs_prev_lbuffer=""
-    _zacrs_prev_buffer=""
-    _zacrs_prev_cursor=0
-    _zacrs_prev_home="${HOME:-}"
-    _zacrs_prev_cwd="$PWD"
-    local _zacrs_file_option_key
-    _zacrs_file_options
-    _zacrs_prev_file_options="$_zacrs_file_option_key"
+    _zacrs_record_prev_editor_state "" 0
     _zacrs_suppressed=0
     _zacrs_reset_cache
 }
@@ -643,13 +660,7 @@ _zacrs_apply() {
     esac
 
     BUFFER="${new_lbuffer}${RBUFFER}"
-    _zacrs_prev_buffer="$BUFFER"
-    _zacrs_prev_cursor=${#new_lbuffer}
-    _zacrs_prev_home="${HOME:-}"
-    _zacrs_prev_cwd="$PWD"
-    local _zacrs_file_option_key
-    _zacrs_file_options
-    _zacrs_prev_file_options="$_zacrs_file_option_key"
+    _zacrs_record_prev_editor_state "$BUFFER" ${#new_lbuffer}
     if (( _zacrs_edit_transport_state > 0 )) && [[ "$result_code" == (0|2) && -n "$result_text" ]]; then
         _zacrs_record_enter_selection ${#base} "$selection_applied"
     fi
@@ -752,9 +763,7 @@ _zacrs_invoke_daemon() {
 
     local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
-    _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
-    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
-    (( result_code == 5 )) && return 5
+    _zacrs_parse_selection_reply "${lines[1]:-}" "${lines[2]:-}" || return 5
     (( result_code == 4 )) && return 4
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
@@ -825,9 +834,7 @@ _zacrs_invoke() {
 
     local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
-    _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
-    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
-    (( result_code == 5 )) && return 5
+    _zacrs_parse_selection_reply "${lines[1]:-}" "${lines[2]:-}" || return 5
     (( result_code == 4 )) && return 1
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
@@ -841,6 +848,23 @@ _zacrs_encode_hex_input() {
 }
 
 # === Shared completion helpers ===
+
+# Choose the fallback source once native completion has produced nothing.
+# Writes the caller's prefix, prefix_len and candidates_str, and expects the
+# caller to have reset _zacrs_filesystem_requested. Returns 0 when the shell
+# command tables supplied the candidates.
+_zacrs_fallback_candidates() {
+    if _zacrs_filesystem_query_current; then
+        _zacrs_filesystem_requested=1
+        prefix="$_zacrs_filesystem_prefix"
+        prefix_len=${#_zacrs_filesystem_prefix}
+        return 1
+    fi
+    candidates_str="$(_zacrs_gather "$LBUFFER")"
+    [[ -n "$candidates_str" ]] || return 1
+    prefix="${LBUFFER##* }"
+    prefix_len=${#prefix}
+}
 
 # Collect candidates: compsys → gather.
 # Caller must declare: local prefix prefix_len candidates_str
@@ -866,19 +890,7 @@ _zacrs_collect_candidates() {
     if (( ${#_zacrs_captured} > 0 )); then
         candidates_str="${(pj:\n:)_zacrs_captured}"
     fi
-    if [[ -z "$candidates_str" ]]; then
-        if _zacrs_filesystem_query_current; then
-            _zacrs_filesystem_requested=1
-            prefix="$_zacrs_filesystem_prefix"
-            prefix_len=${#_zacrs_filesystem_prefix}
-        else
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-        fi
-        if [[ -n "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
-            prefix="${LBUFFER##* }"
-            prefix_len=${#prefix}
-        fi
-    fi
+    [[ -n "$candidates_str" ]] || _zacrs_fallback_candidates || :
     if [[ -z "$candidates_str" && ${#prefix} -ge 3 && "$prefix" != */* ]] \
         && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
         candidates_str="$(_zacrs_gather_command_rescue "$prefix")"
@@ -1120,19 +1132,8 @@ _zacrs_line_pre_redraw() {
         fi
     fi
     _zacrs_chain_retry=0
-    if [[ -z "$candidates_str" ]]; then
-        if _zacrs_filesystem_query_current; then
-            _zacrs_filesystem_requested=1
-            prefix="$_zacrs_filesystem_prefix"
-            prefix_len=${#_zacrs_filesystem_prefix}
-        else
-            candidates_str="$(_zacrs_gather "$LBUFFER")"
-        fi
-        if [[ -n "$candidates_str" ]] && (( ! _zacrs_filesystem_requested )); then
-            prefix="$naive_prefix"
-            prefix_len=${#naive_prefix}
-            from_gather=1
-        fi
+    if [[ -z "$candidates_str" ]] && _zacrs_fallback_candidates; then
+        from_gather=1
     fi
     if [[ -z "$candidates_str" && ${#prefix} -ge 3 && "$prefix" != */* ]] \
         && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
@@ -1193,13 +1194,7 @@ _zacrs_accept_line() {
         fi
     fi
     _zacrs_prev_lbuffer="$LBUFFER"
-    _zacrs_prev_buffer="$BUFFER"
-    _zacrs_prev_cursor=$CURSOR
-    _zacrs_prev_home="${HOME:-}"
-    _zacrs_prev_cwd="$PWD"
-    local _zacrs_file_option_key
-    _zacrs_file_options
-    _zacrs_prev_file_options="$_zacrs_file_option_key"
+    _zacrs_record_prev_editor_state "$BUFFER" $CURSOR
     _zacrs_chain_retry=0
     _zacrs_reset_cache
     zle reset-prompt

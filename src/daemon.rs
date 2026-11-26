@@ -426,11 +426,17 @@ impl DaemonServer {
     /// Store `tsv` in the candidate cache under `context_key`.
     /// Evicts the oldest entry when `CANDIDATE_CACHE_MAX_ENTRIES` is exceeded.
     /// Re-inserting an existing key moves it to the most-recent position.
-    fn store_cached_tsv(&mut self, context_key: &str, source_prefix: String, tsv: String) {
+    fn store_cached_tsv(
+        &mut self,
+        context_key: &str,
+        source_prefix: String,
+        tsv: String,
+        filesystem: Arc<[Candidate]>,
+    ) {
         let entry = CandidateCacheEntry {
             source_prefix,
             tsv,
-            filesystem: Arc::default(),
+            filesystem,
         };
         if self.candidate_cache.contains_key(context_key) {
             self.candidate_cache.insert(context_key.to_string(), entry);
@@ -453,11 +459,17 @@ impl DaemonServer {
         Some(entry)
     }
 
-    fn store_active_popup(&mut self, popup_key: &str, prefix: String, tsv: String) {
+    fn store_active_popup(
+        &mut self,
+        popup_key: &str,
+        prefix: String,
+        tsv: String,
+        filesystem: Arc<[Candidate]>,
+    ) {
         let entry = ActivePopupEntry {
             prefix,
             tsv,
-            filesystem: Arc::default(),
+            filesystem,
         };
         if self.active_popups.contains_key(popup_key) {
             self.active_popups.insert(popup_key.to_string(), entry);
@@ -767,8 +779,8 @@ impl DaemonServer {
                     };
 
                 let mut file_candidates: Arc<[Candidate]> =
-                    match filesystem_query.map(|query| query.collect()).transpose() {
-                        Ok(files) => Arc::from(files.unwrap_or_default()),
+                    match crate::filesystem::FilesystemQuery::collect_optional(filesystem_query) {
+                        Ok(files) => Arc::from(files),
                         Err(_) => {
                             self.invalidate_snapshots(context_key.as_deref(), popup_key.as_deref());
                             let _ = writeln!(writer, "EMPTY");
@@ -802,9 +814,12 @@ impl DaemonServer {
                             metadata,
                         } => {
                             if let Some(ref key) = popup_key {
-                                self.store_active_popup(key, prefix, String::new());
-                                self.active_popups.get_mut(key).unwrap().filesystem =
-                                    file_candidates.clone();
+                                self.store_active_popup(
+                                    key,
+                                    prefix,
+                                    String::new(),
+                                    file_candidates.clone(),
+                                );
                             }
                             let meta = metadata.unwrap_or_default();
                             let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
@@ -867,9 +882,12 @@ impl DaemonServer {
                                 metadata,
                             } => {
                                 if let Some(ref key) = popup_key {
-                                    self.store_active_popup(key, prefix, cached_tsv.clone());
-                                    self.active_popups.get_mut(key).unwrap().filesystem =
-                                        file_candidates.clone();
+                                    self.store_active_popup(
+                                        key,
+                                        prefix,
+                                        cached_tsv.clone(),
+                                        file_candidates.clone(),
+                                    );
                                 }
                                 let meta = metadata.unwrap_or_default();
                                 let _ =
@@ -920,9 +938,12 @@ impl DaemonServer {
                                     metadata,
                                 } => {
                                     if let Some(ref key) = popup_key {
-                                        self.store_active_popup(key, prefix, cached_tsv.clone());
-                                        self.active_popups.get_mut(key).unwrap().filesystem =
-                                            file_candidates.clone();
+                                        self.store_active_popup(
+                                            key,
+                                            prefix,
+                                            cached_tsv.clone(),
+                                            file_candidates.clone(),
+                                        );
                                     }
                                     let meta = metadata.unwrap_or_default();
                                     let _ = protocol::write_text_ok(
@@ -956,8 +977,12 @@ impl DaemonServer {
                 let tsv = tsv_opt.unwrap();
                 // Update cache when context_key is provided with fresh TSV.
                 if let Some(ref key) = context_key {
-                    self.store_cached_tsv(key, prefix.clone(), tsv.clone());
-                    self.candidate_cache.get_mut(key).unwrap().filesystem = file_candidates.clone();
+                    self.store_cached_tsv(
+                        key,
+                        prefix.clone(),
+                        tsv.clone(),
+                        file_candidates.clone(),
+                    );
                 }
 
                 let _span = info_span!(
@@ -994,9 +1019,7 @@ impl DaemonServer {
                         metadata,
                     } => {
                         if let Some(ref key) = popup_key {
-                            self.store_active_popup(key, prefix, tsv);
-                            self.active_popups.get_mut(key).unwrap().filesystem =
-                                file_candidates.clone();
+                            self.store_active_popup(key, prefix, tsv, file_candidates.clone());
                         }
                         let meta = metadata.unwrap_or_default();
                         let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
@@ -1048,8 +1071,8 @@ impl DaemonServer {
                     };
 
                 let mut file_candidates: Arc<[Candidate]> =
-                    match filesystem_query.map(|query| query.collect()).transpose() {
-                        Ok(files) => Arc::from(files.unwrap_or_default()),
+                    match crate::filesystem::FilesystemQuery::collect_optional(filesystem_query) {
+                        Ok(files) => Arc::from(files),
                         Err(_) => {
                             self.invalidate_snapshots(context_key.as_deref(), popup_key.as_deref());
                             let _ = TextCompleteResult::rejected_edit().write_to(&mut writer);
@@ -1116,9 +1139,12 @@ impl DaemonServer {
                     }
                     Some(tsv) => {
                         if let Some(ref key) = context_key {
-                            self.store_cached_tsv(key, prefix.clone(), tsv.clone());
-                            self.candidate_cache.get_mut(key).unwrap().filesystem =
-                                file_candidates.clone();
+                            self.store_cached_tsv(
+                                key,
+                                prefix.clone(),
+                                tsv.clone(),
+                                file_candidates.clone(),
+                            );
                         }
                         tsv
                     }
@@ -2281,15 +2307,15 @@ mod tests {
     #[test]
     fn invalidating_snapshots_leaves_no_old_eviction_positions() {
         let mut server = test_server();
-        server.store_cached_tsv("retry", "f".into(), String::new());
-        server.store_active_popup("retry", "f".into(), String::new());
-        server.store_cached_tsv("other", "f".into(), String::new());
-        server.store_active_popup("other", "f".into(), String::new());
+        server.store_cached_tsv("retry", "f".into(), String::new(), Arc::default());
+        server.store_active_popup("retry", "f".into(), String::new(), Arc::default());
+        server.store_cached_tsv("other", "f".into(), String::new(), Arc::default());
+        server.store_active_popup("other", "f".into(), String::new(), Arc::default());
         server.invalidate_snapshots(Some("retry"), Some("retry"));
         assert!(!server.candidate_cache.contains_key("retry"));
         assert!(!server.active_popups.contains_key("retry"));
-        server.store_cached_tsv("retry", "fo".into(), String::new());
-        server.store_active_popup("retry", "fo".into(), String::new());
+        server.store_cached_tsv("retry", "fo".into(), String::new(), Arc::default());
+        server.store_active_popup("retry", "fo".into(), String::new(), Arc::default());
         assert_eq!(server.candidate_cache_order, ["other", "retry"]);
         assert_eq!(server.active_popup_order, ["other", "retry"]);
     }
@@ -2561,7 +2587,12 @@ mod tests {
         let path = dir.path().join("config.toml");
         let mut server = test_server();
         server.config_reloader = Some(ConfigReloader::new(path.clone()));
-        server.store_cached_tsv("ctx", "st".into(), "status\tcommand\tcommand\n".into());
+        server.store_cached_tsv(
+            "ctx",
+            "st".into(),
+            "status\tcommand\tcommand\n".into(),
+            Arc::default(),
+        );
 
         for expansion in ["git status", "git status --short"] {
             fs::write(&path, format!("[abbreviations]\ngstatus = '{expansion}'")).unwrap();
@@ -2610,6 +2641,7 @@ mod tests {
             "ctx",
             "gs".into(),
             "gs\tcommand-label\tcommand\ngs\tfile-label\tfile\n".into(),
+            Arc::default(),
         );
         let mut previous_token = None;
         for (value, expected_index, changes) in [
@@ -3982,6 +4014,7 @@ mod tests {
             "popup-1",
             "g".to_string(),
             "go\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         let output = run_text_request(
@@ -4241,6 +4274,7 @@ mod tests {
             "123:/tmp:git%20",
             "git".to_string(),
             "git\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
         assert_eq!(
             server.get_cached_tsv("123:/tmp:git%20", "git"),
@@ -4256,6 +4290,7 @@ mod tests {
             "popup-1",
             "git".to_string(),
             "git\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         let entry = server.get_active_popup("popup-1").unwrap();
@@ -4271,11 +4306,13 @@ mod tests {
             "ctx-1",
             "st".to_string(),
             "status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
         server.store_active_popup(
             "popup-1",
             "gi".to_string(),
             "git\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         let output = run_text_request(
@@ -4309,11 +4346,13 @@ mod tests {
             "ctx-1",
             "st".to_string(),
             "status\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
         server.store_active_popup(
             "popup-1",
             "gi".to_string(),
             "git\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         let request = TextCompleteRequest {
@@ -4355,6 +4394,7 @@ mod tests {
             "popup-1",
             "ca".to_string(),
             "cargo\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         let request = TextCompleteRequest {
@@ -4398,6 +4438,7 @@ mod tests {
             "123:/tmp:git%20",
             "st".to_string(),
             "status\tcommand\tcommand\nstash\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         assert_eq!(
@@ -4417,7 +4458,7 @@ mod tests {
         // Fill up to the eviction limit.
         for i in 0..super::CANDIDATE_CACHE_MAX_ENTRIES {
             let key = format!("pid{}:git%20", i);
-            server.store_cached_tsv(&key, "".to_string(), tsv.to_string());
+            server.store_cached_tsv(&key, "".to_string(), tsv.to_string(), Arc::default());
         }
         assert_eq!(
             server.candidate_cache.len(),
@@ -4425,7 +4466,12 @@ mod tests {
         );
 
         // Insert one more entry — the oldest (pid0) should be evicted.
-        server.store_cached_tsv("new_key:git%20", "".to_string(), tsv.to_string());
+        server.store_cached_tsv(
+            "new_key:git%20",
+            "".to_string(),
+            tsv.to_string(),
+            Arc::default(),
+        );
         assert_eq!(
             server.candidate_cache.len(),
             super::CANDIDATE_CACHE_MAX_ENTRIES
@@ -4448,6 +4494,7 @@ mod tests {
                 &format!("pid{}:git%20", i),
                 format!("git{}", i),
                 format!("git{}\tcommand\tcommand\n", i),
+                Arc::default(),
             );
         }
 
@@ -4455,11 +4502,13 @@ mod tests {
             "pid0:git%20",
             "git0-new".to_string(),
             "git0-new\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
         server.store_cached_tsv(
             "new_key:git%20",
             "".to_string(),
             "new\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         assert!(
@@ -4484,6 +4533,7 @@ mod tests {
                 &format!("pid{}:git%20", i),
                 format!("git{}", i),
                 format!("git{}\tcommand\tcommand\n", i),
+                Arc::default(),
             );
         }
 
@@ -4495,6 +4545,7 @@ mod tests {
             "new_key:git%20",
             "".to_string(),
             "new\tcommand\tcommand\n".to_string(),
+            Arc::default(),
         );
 
         assert!(

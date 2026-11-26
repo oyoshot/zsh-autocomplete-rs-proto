@@ -160,8 +160,18 @@ _zacrs_abbreviation_transport_failed() {
     return 1
 }
 
+# Write each argument as a byte count line followed by the value.
+_zacrs_write_framed_fields() {
+    local fd=$1 LC_ALL=C item
+    shift
+    for item in "$@"; do
+        print -r -u $fd -- "${#item}"
+        print -r -u $fd -- "$item"
+    done
+}
+
 _zacrs_abbreviation_request() {
-    local operation="$1" fd item
+    local operation="$1" fd
     shift
     (( _zacrs_edit_transport_state > 0 )) || return 1
     (( _zacrs_daemon_available )) || { _zacrs_abbreviation_transport_failed; return 1; }
@@ -173,10 +183,7 @@ _zacrs_abbreviation_request() {
     local LC_ALL=C
     {
         print -r -u $fd -- "abbreviation $$ $operation $#"
-        for item in "$@"; do
-            print -r -u $fd -- "${#item}"
-            print -r -u $fd -- "$item"
-        done
+        _zacrs_write_framed_fields $fd "$@"
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_header || { _zacrs_abbreviation_transport_failed; return 1; }
         [[ "$_zacrs_abbreviation_header" == DONE* ]] || { _zacrs_edit_transport_state=-1; return 1; }
         IFS= read -r -t 1 -u $fd _zacrs_abbreviation_apply || { _zacrs_abbreviation_transport_failed; return 1; }

@@ -34,6 +34,11 @@ pub enum CollectionError {
 }
 
 impl FilesystemQuery {
+    /// Collect an optional query; a request without one has no file candidates.
+    pub fn collect_optional(query: Option<Self>) -> Result<Vec<Candidate>, CollectionError> {
+        query.map_or_else(|| Ok(Vec::new()), |query| query.collect())
+    }
+
     pub fn collect(&self) -> Result<Vec<Candidate>, CollectionError> {
         self.collect_with_budget(MAX_SNAPSHOT_BYTES, MAX_SCANNED_ENTRIES)
     }
@@ -117,6 +122,8 @@ impl FilesystemQuery {
             let Some(entries) = open_directory(read_directory, &self.cwd.join(directory))? else {
                 continue;
             };
+            let mut display_directory = String::with_capacity(insertion_directory.len());
+            push_display(&mut display_directory, insertion_directory);
             for entry in entries {
                 remaining_entries = remaining_entries
                     .checked_sub(1)
@@ -141,29 +148,22 @@ impl FilesystemQuery {
                 {
                     continue;
                 }
-                let is_directory = entry.file_type().is_ok_and(|kind| {
-                    kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())
-                });
+                let is_directory = is_directory(&entry);
                 let path = directory.join(&name);
                 let path = if self.options.absolute_insertion {
                     self.cwd.join(path)
                 } else {
                     path
                 };
-                let mut display_path = format!("{insertion_directory}{name_text}");
+                // Size the text as before so the retained-byte budget is unchanged.
+                let mut text = String::with_capacity(
+                    insertion_directory.len() + name_text.len() + usize::from(is_directory),
+                );
+                text.push_str(&display_directory);
+                push_display(&mut text, name_text);
                 if is_directory {
                     // Presentation keeps its separator separate from the actual path.
-                    display_path.push(MAIN_SEPARATOR);
-                }
-                let mut text = String::with_capacity(display_path.len());
-                for c in display_path.chars() {
-                    if c == '\\' && !is_separator(c) {
-                        text.push_str("\\\\");
-                    } else if c.is_control() {
-                        text.extend(c.escape_default());
-                    } else {
-                        text.push(c);
-                    }
+                    text.push(MAIN_SEPARATOR);
                 }
                 let path_bytes = path.capacity();
                 let candidate = Candidate {
@@ -232,9 +232,7 @@ impl FilesystemQuery {
                     if name
                         .to_str()
                         .is_some_and(|text| fold(text).eq(folded.iter().copied()))
-                        && entry.file_type().is_ok_and(|kind| {
-                            kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())
-                        })
+                        && is_directory(&entry)
                     {
                         let next = path.join(name);
                         remaining_bytes = remaining_bytes
@@ -250,6 +248,26 @@ impl FilesystemQuery {
             directories = matches;
         }
         Ok(directories)
+    }
+}
+
+/// A directory, or a symlink that resolves to one.
+fn is_directory(entry: &fs::DirEntry) -> bool {
+    entry
+        .file_type()
+        .is_ok_and(|kind| kind.is_dir() || (kind.is_symlink() && entry.path().is_dir()))
+}
+
+/// Append display text: controls and literal backslashes get distinct escapes.
+fn push_display(text: &mut String, raw: &str) {
+    for c in raw.chars() {
+        if c == '\\' && !is_separator(c) {
+            text.push_str("\\\\");
+        } else if c.is_control() {
+            text.extend(c.escape_default());
+        } else {
+            text.push(c);
+        }
     }
 }
 

@@ -100,8 +100,9 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
 
     let stdout = io::stdout();
     let mut stdout_writer = BufWriter::new(stdout.lock());
-    let files = match filesystem.map(|query| query.collect()).transpose() {
-        Ok(files) => files.unwrap_or_default(),
+    let files = match zsh_autocomplete_rs::filesystem::FilesystemQuery::collect_optional(filesystem)
+    {
+        Ok(files) => files,
         Err(_) => {
             return write_done_result(&mut stdout_writer, &TextCompleteResult::rejected_edit());
         }
@@ -206,8 +207,9 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     // Fallback: direct execution
     let mut candidates =
         Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
-    let files = match filesystem.map(|query| query.collect()).transpose() {
-        Ok(files) => files.unwrap_or_default(),
+    let files = match zsh_autocomplete_rs::filesystem::FilesystemQuery::collect_optional(filesystem)
+    {
+        Ok(files) => files,
         Err(_) => return Ok(1),
     };
     let literal_files_present = !files.is_empty();

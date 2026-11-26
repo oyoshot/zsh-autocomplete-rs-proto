@@ -116,24 +116,27 @@ _zacrs_filesystem_query_current() {
         _zacrs_pwd_matches_cwd
 }
 
+# Name the lookup flags of the captured query in reply. This is the only
+# reader of the option key's field layout; each transport formats the names.
+_zacrs_filesystem_flags() {
+    reply=()
+    [[ "$_zacrs_filesystem_file_options" == off:* ]] && reply+=(ignore_case)
+    [[ "$_zacrs_filesystem_file_options" == off:off:* ]] && reply+=(ignore_parent_case)
+    [[ "$_zacrs_filesystem_file_options" == *:on ]] && reply+=(include_hidden)
+    [[ "$_zacrs_filesystem_prefix" == '~/'* ]] && reply+=(absolute_insertion)
+    return 0
+}
+
 # Add the same structured query to daemon and subprocess requests.
 _zacrs_filesystem_args() {
     reply=()
     (( ${_zacrs_filesystem_requested:-0} )) || return 0
-    reply=(--filesystem-cwd "$_zacrs_filesystem_base" --filesystem-prefix "$_zacrs_filesystem_lookup"
+    local flag
+    local -a args=(--filesystem-cwd "$_zacrs_filesystem_base" --filesystem-prefix "$_zacrs_filesystem_lookup"
         --filesystem-insertion-prefix "$_zacrs_filesystem_prefix")
-    [[ "$_zacrs_filesystem_file_options" == off:* ]] && reply+=(--filesystem-ignore-case)
-    [[ "$_zacrs_filesystem_file_options" == off:off:* ]] && reply+=(--filesystem-ignore-parent-case)
-    [[ "$_zacrs_filesystem_file_options" == *:on ]] && reply+=(--filesystem-include-hidden)
-    [[ "$_zacrs_filesystem_prefix" == '~/'* ]] && reply+=(--filesystem-absolute-insertion)
-    return 0
-}
-
-# Byte counts are local to this transport function; no subprocess is needed.
-_zacrs_write_filesystem_query() {
-    local fd=$1 LC_ALL=C item
-    for item in "$_zacrs_filesystem_base" "$_zacrs_filesystem_lookup" "$_zacrs_filesystem_prefix"; do
-        print -r -u $fd -- "${#item}"
-        print -r -u $fd -- "$item"
+    _zacrs_filesystem_flags
+    for flag in "${reply[@]}"; do
+        args+=("--filesystem-${flag//_/-}")
     done
+    reply=("${args[@]}")
 }

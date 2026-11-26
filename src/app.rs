@@ -396,15 +396,6 @@ impl App {
             None
         }
     }
-
-    /// Resets `filter_text` to the original typed prefix and re-runs filtering.
-    /// No-op if `filter_text` already equals `prefix`.
-    pub fn reset_filter_to_prefix(&mut self) {
-        if self.filter_text != self.prefix {
-            self.filter_text = self.prefix.clone();
-            self.update_filter();
-        }
-    }
 }
 
 pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
@@ -1029,31 +1020,5 @@ mod tests {
     fn unambiguous_prefix_returns_some_for_single_candidate_longer_than_prefix() {
         let app = make_test_app("gi", &["git-log"]);
         assert_eq!(app.unambiguous_prefix(), Some("git-log"));
-    }
-
-    // --- reset_filter_to_prefix ---
-
-    #[test]
-    fn reset_filter_to_prefix_noop_when_already_equal() {
-        let mut app = make_test_app("abc", &["abcx", "abcy"]);
-        // filter_text == prefix ("abc"), so reset is a no-op
-        let before = app.filtered_indices.clone();
-        app.reset_filter_to_prefix();
-        assert_eq!(app.filter_text, "abc");
-        assert_eq!(app.filtered_indices, before);
-    }
-
-    #[test]
-    fn reset_filter_to_prefix_restores_and_refilters() {
-        // prefix "g"; "grep" prevents common prefix from extending past "g".
-        // type_char('i') narrows to 2 matches ("git-log", "gist").
-        // reset_filter_to_prefix() must restore filter_text to "g" and re-expand to 3 matches.
-        let mut app = make_test_app("g", &["git-log", "gist", "grep"]);
-        app.type_char('i');
-        assert_eq!(app.filter_text, "gi");
-        assert_eq!(app.filtered_indices.len(), 2); // git-log, gist
-        app.reset_filter_to_prefix();
-        assert_eq!(app.filter_text, "g");
-        assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
     }
 }
