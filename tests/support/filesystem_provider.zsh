@@ -18,6 +18,7 @@ mkdir -p "$HOME/files/Folder" "$HOME/files/dots"
 : > "$HOME/files/Folder/Name"
 : > "$HOME/files/dots/.hidden"
 : > "$HOME/files/a~bee"
+: > "$HOME/files/a!bee"
 : > "$HOME/files/abcdef"
 mkdir -p "$HOME/files/Repeat" "$HOME/cwd-original" "$HOME/cwd-retargeted"
 : > "$HOME/files/Repeat/fuzzy.rs"
@@ -315,10 +316,18 @@ _test_run() {
             [[ "$typed" == 'probe_alias NA' ]] && setopt complete_aliases
             BUFFER="$typed"; CURSOR=${#BUFFER}
             _zacrs_collect_candidates
-            [[ $_zacrs_filesystem_requested == 1 ]] || { print -r -- "alias-no-query:$typed" > "$_test_root/state"; return; }
-            if (( ZACRS_TEST_DAEMON )); then
+            if [[ "$typed" == 'probe_alias NA' ]]; then
+                [[ $_zacrs_filesystem_requested == 0 ]] || { print -r -- aliased-head-query > "$_test_root/state"; return; }
+                # Exercise insertion quoting independently of the guarded provider.
+                () {
+                    local literal_path_known=1 literal_path=NAME literal_suffix=' ' _zacrs_picker_cwd="$PWD"
+                    _zacrs_apply 2 0 NAME
+                }
+            elif (( ZACRS_TEST_DAEMON )); then
+                [[ $_zacrs_filesystem_requested == 1 ]] || { print -r -- "alias-no-query:$typed" > "$_test_root/state"; return; }
                 _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" 2 1 0 ordinary-alias-path 1 1
             else
+                [[ $_zacrs_filesystem_requested == 1 ]] || { print -r -- "alias-no-query:$typed" > "$_test_root/state"; return; }
                 _zacrs_invoke "$prefix" "$prefix_len" "$candidates_str" 2 1 1
             fi
             if [[ "$typed" == ./loc ]]; then
@@ -561,6 +570,67 @@ _test_run() {
         _zacrs_collect_candidates
         [[ $_zacrs_filesystem_requested == 1 ]] || { print -r -- expected-file-argument > "$_test_root/state"; return; }
     elif (( _test_index == 45 )); then
+        setopt localoptions no_bang_hist no_complete_aliases
+        alias runner=exec
+        local prefix='' prefix_len=0 candidates_str=''
+        BUFFER='runner loc'; CURSOR=${#BUFFER}
+        _zacrs_current_context_key; local no_alias_option_key="$REPLY"
+        setopt complete_aliases
+        _zacrs_current_context_key
+        [[ "$no_alias_option_key" != "$REPLY" ]] || { print -r -- complete-aliases-key > "$_test_root/state"; return; }
+        _zacrs_collect_candidates
+        unalias runner
+        [[ $_zacrs_filesystem_requested == 0 && "$BUFFER" == 'runner loc' ]] || { print -r -- aliased-modifier-query > "$_test_root/state"; return; }
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        BUFFER='probe a!b'; CURSOR=${#BUFFER}
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- literal-bang-preview-missing > "$_test_root/state"; return; }
+        setopt bang_hist
+        _zacrs_complete_popup
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        [[ $_zacrs_filesystem_requested == 0 && "$BUFFER" == 'probe a!b' ]] || { print -r -- bang-history-tab-reused > "$_test_root/state"; return; }
+    elif (( _test_index == 46 )); then
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]" saved_finish="$functions[_zacrs_finish_popup_session]" old_cwd="$PWD"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        BUFFER='probe space'; CURSOR=${#BUFFER}
+        _zacrs_invalidate_candidate_cache
+        _test_actual_redraw
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- cwd-handoff-preview-missing > "$_test_root/state"; return; }
+        functions[_test_finish_popup]="$saved_finish"
+        _zacrs_finish_popup_session() { _test_finish_popup; cd -- "$_test_root/new-cwd"; }
+        _zacrs_complete_popup
+        functions[_zacrs_finish_popup_session]="$saved_finish"
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        [[ "$PWD" == "$_test_root/new-cwd" && "$BUFFER" == 'probe space' && $CURSOR == 11 ]] || {
+            print -r -- "cwd-handoff-applied:$BUFFER" > "$_test_root/state"; return
+        }
+        cd -- "$old_cwd"
+    elif (( _test_index == 47 )); then
+        local saved_bin="$ZACRS_BIN" code=0
+        _test_truncated_no_candidates() { print -r -- 'DONE 4 '; print -rn -- 'APPLY chain=0 execute=0'; }
+        ZACRS_BIN=_test_truncated_no_candidates
+        _zacrs_filesystem_requested=0
+        BUFFER='probe space'; CURSOR=${#BUFFER}
+        _zacrs_invoke space 5 '' 2 1 1 || code=$?
+        ZACRS_BIN="$saved_bin"
+        [[ $code == 5 && "$BUFFER" == 'probe space' && $CURSOR == 11 ]] || { print -r -- truncated-no-candidates > "$_test_root/state"; return; }
+    elif (( _test_index == 48 )); then
+        local _zacrs_daemon_available=0
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]" saved_retry="$functions[_zacrs_maybe_retry_daemon]" saved_key="$functions[_zacrs_current_context_key]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        _zacrs_maybe_retry_daemon() { return 1; }
+        _test_key_calls=0
+        _zacrs_current_context_key() { (( ++_test_key_calls )); REPLY=''; }
+        BUFFER='probe space'; CURSOR=${#BUFFER}
+        _zacrs_prev_buffer=''
+        _test_actual_redraw
+        _zacrs_complete_popup
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"
+        functions[_zacrs_maybe_retry_daemon]="$saved_retry"
+        functions[_zacrs_current_context_key]="$saved_key"
+        [[ $_test_key_calls == 0 && "$BUFFER" == 'probe space\ name ' ]] || { print -r -- subprocess-key-encoded > "$_test_root/state"; return; }
+    elif (( _test_index == 49 )); then
         # Restore the fields of a primary preview to exercise the reuse gate
         # independently of normal prompt-transition cleanup.
         [[ "$CONTEXT" != start || -n "$PREBUFFER" ]] || { print -r -- expected-continuation-editor > "$_test_root/state"; return; }
@@ -648,8 +718,8 @@ for attempt in {1..300}; do
     sleep .01
 done
 [[ "$output" == *'READY> '* ]] || { print -u2 -r -- "not ready: ${(qqq)output}"; exit 1; }
-for case_index in {1..45}; do
-    if (( case_index == 45 )); then
+for case_index in {1..49}; do
+    if (( case_index == 49 )); then
         zpty -w -n files $'\x07'
         for attempt in {1..300}; do
             zpty -r -t files chunk 2>/dev/null && output+="$chunk"

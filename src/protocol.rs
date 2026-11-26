@@ -967,7 +967,10 @@ impl TextCompleteResult {
             } else if let Some((prefix, value)) = apply_fields.split_once(" restore=") {
                 (prefix, value.to_string())
             } else {
-                (apply_fields, String::new())
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "missing terminal restore field",
+                ));
             };
 
         let mut literal_path = None;

@@ -127,8 +127,9 @@ literal path prefix, its insertion/display spelling and the current working
 directory. It offers this capability only at an unquoted literal word end of
 a simple command, including an empty argument. The full raw word must match
 the captured prefix, Zsh's lexical words must cover the input, and the command
-head must be literal and non-reserved. Lines starting with a Zsh precommand
-modifier such as `exec` or `command` use native completion. Quoted or escaped words, substitutions,
+head must be literal and non-reserved. Zsh leaves argument completion after
+an aliased head or a precommand modifier such as `exec` to native completion.
+Quoted or escaped words, substitutions,
 patterns, cursors inside a word, and continuation or recursive editors do not
 request filesystem fallback. When the adapter cannot verify the context, it
 leaves filesystem edits disabled.
@@ -140,12 +141,17 @@ that display spelling but insert a safely quoted expanded path.
 Each request carries an absolute lookup base. Zsh supplies cwd for an ordinary
 relative path and HOME for a home-relative path. The adapter verifies that
 `$PWD` still names the shell's actual working directory before requesting or
-reusing fallback candidates. A retargeted symlink can invalidate that check.
+reusing fallback candidates. Before opening the picker, it records the
+physical lookup directory for relative selections. A change of directory
+while the picker is open prevents the relative edit.
 `render-files` and `complete-files` carry three length-framed UTF-8 fields before
 the existing prefix/candidate payload. The adapter requires `filesystem=2` in
 the daemon handshake for these requests. With an older daemon, it uses the
 subprocess for filesystem preview and selection while keeping native
 completion and abbreviation requests on the daemon.
+The daemon's filter uses a single line. A filter containing a line break is
+rejected before a completion request is sent. Direct subprocess completion can
+receive such a filter through its arguments.
 When `CASE_GLOB` is off, the adapter requests case-insensitive basename matching
 and carries that policy into the popup filter. With `CASE_PATHS` also off, Rust
 resolves typed parent components case-insensitively using Unicode simple case
@@ -157,9 +163,10 @@ popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
 scopes reuse to session, generation, cwd, HOME, cursor, right-side input and
 the glob and syntax settings used to verify literal words, including
-`INTERACTIVE_COMMENTS`. The existing exact-prefix rule still applies. If the
-buffer, cwd and HOME together exceed 1,024 characters, the adapter skips
-context-keyed caching and collects fresh candidates. Popup snapshots require
+`INTERACTIVE_COMMENTS`, `BANG_HIST` and `COMPLETE_ALIASES`. The existing
+exact-prefix rule still applies. The adapter generates context keys only when
+a daemon is available and the buffer, cwd and HOME fit within 1,024 characters.
+Popup snapshots require
 the complete buffer to match. For a cached
 filesystem selection, the client must advertise `literal_paths=1` so the
 daemon can return the path and suffix without risking their loss in transit.

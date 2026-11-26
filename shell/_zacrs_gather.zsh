@@ -88,6 +88,10 @@ _zacrs_filesystem_context() {
     # The native word array can include a precommand modifier before the
     # command being completed. Leave those lines to native completion.
     [[ "$head" != (-|builtin|command|exec|nocorrect|noglob) ]] || return
+    # COMPLETE_ALIASES can leave an aliased command head in both word arrays.
+    if (( current > 1 )) && [[ -o aliases ]] && _zacrs_literal_alias_token "$head"; then
+        return 1
+    fi
     [[ -z "$literal" || "${LBUFFER[-${#literal},-1]}" == "$literal" ]] || return
     local check="$literal"
     [[ "$check" == '~/'* ]] && check="${check[3,-1]}"

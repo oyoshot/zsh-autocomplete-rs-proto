@@ -344,9 +344,10 @@ _zacrs_parse_render_header() {
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
 # On EMPTY     (return 1): fd already closed.
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
-# On ERROR/connect failure (return 2): fd already closed, daemon marked unavailable.
+# On transport failure or an unsupported filter (return 2): caller can use the subprocess.
 _zacrs_daemon_send_render() {
     local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}" _command_context="${9:-}"
+    [[ "$_pfx" != *[$'\r\n']* ]] || return 2
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
@@ -580,12 +581,24 @@ _zacrs_literal_alias_token() {
     [[ "$token" == ?*.* && -n "$suffix" ]] && (( ${+saliases[$suffix]} ))
 }
 
+# Pin the lookup directory in the invoking widget's scope before it blocks.
+_zacrs_pin_picker_cwd() {
+    local lookup_cwd="$1"
+    [[ "$lookup_cwd" == /* && . -ef "$lookup_cwd" ]] || return 0
+    local physical_cwd="${lookup_cwd:P}"
+    [[ . -ef "$physical_cwd" ]] && _zacrs_picker_cwd="$physical_cwd"
+    return 0
+}
+
 _zacrs_apply() {
     local prefix_len="$1" result_code="$2" result_text="$3" chain="${4:-0}" execute="${5:-0}" restore_text="${6:-}"
     local selection_applied="${7:-0}"
     if [[ "${literal_path_known:-0}" == 1 && "$result_code" == (0|2) ]]; then
         # The logical pathname may have changed while the picker was open.
-        [[ "$literal_path" == /* ]] || _zacrs_pwd_matches_cwd || return 0
+        if [[ "$literal_path" != /* ]]; then
+            [[ -n "${_zacrs_picker_cwd:-}" && . -ef "$_zacrs_picker_cwd" ]] || return 0
+            _zacrs_pwd_matches_cwd || return 0
+        fi
         result_text="${(q)literal_path}${literal_suffix}"
         if (( ${#galiases} || ${#aliases} || ${#saliases} )); then
             # A directory suffix can be part of the alias token.
@@ -706,6 +719,14 @@ _zacrs_invoke_daemon() {
     reply=()
     (( candidates_present )) && _zacrs_filesystem_args
     complete_args+=("${reply[@]}")
+    local _zacrs_picker_cwd=""
+    if (( reuse_visible )); then
+        _zacrs_pin_picker_cwd "${_zacrs_popup_snapshot_cwd:-}"
+    elif (( candidates_present && _zacrs_filesystem_requested )); then
+        _zacrs_pin_picker_cwd "$_zacrs_filesystem_cwd"
+    elif (( ! candidates_present )); then
+        _zacrs_pin_picker_cwd "$PWD"
+    fi
     local output
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
@@ -782,6 +803,8 @@ _zacrs_invoke() {
     local -a reply
     _zacrs_filesystem_args
     complete_args+=("${reply[@]}")
+    local _zacrs_picker_cwd=""
+    (( _zacrs_filesystem_requested )) && _zacrs_pin_picker_cwd "$_zacrs_filesystem_cwd"
     local output
     _zacrs_popup_session_active=1
     _zacrs_ignore_next_winch=1
@@ -803,9 +826,9 @@ _zacrs_invoke() {
     local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]:-}" || { _zacrs_clear_popup; return 5; }
+    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
     (( result_code == 5 )) && return 5
     (( result_code == 4 )) && return 1
-    _zacrs_parse_apply_line "${lines[2]:-}" || { _zacrs_clear_popup; return 5; }
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
@@ -867,18 +890,14 @@ _zacrs_collect_candidates() {
 _zacrs_complete_popup() {
     local prefix="" prefix_len=0 candidates_str=""
     local cursor_row="" cursor_col=""
-    local reuse_visible=0 _zacrs_file_option_key
+    local reuse_visible=0 context_key=""
     local naive_prefix="${LBUFFER##* }"
-    _zacrs_current_context_key
-    local context_key="$REPLY" context_home="${HOME:-}" context_cwd="$PWD"
-    _zacrs_file_options
-    local context_file_options="$_zacrs_file_option_key"
 
     _zacrs_filesystem_requested=0
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
 
-    if (( _zacrs_popup_visible && _zacrs_popup_snapshot_daemon )) && _zacrs_popup_snapshot_matches_editor \
+    if (( _zacrs_daemon_available && _zacrs_popup_visible && _zacrs_popup_snapshot_daemon )) && _zacrs_popup_snapshot_matches_editor \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
         && (( _zacrs_popup_snapshot_lines == LINES )); then
         reuse_visible=1
@@ -887,23 +906,16 @@ _zacrs_complete_popup() {
         cursor_col=$_zacrs_last_render_cursor_col
     fi
 
-    if (( ! reuse_visible )) || (( ! _zacrs_daemon_available )); then
-        reuse_visible=0
+    if (( ! reuse_visible )); then
         _zacrs_collect_candidates
     fi
 
-    if ! _zacrs_file_context_matches "$context_cwd" "$context_home" "$context_file_options"; then
-        _zacrs_current_context_key
-        context_key="$REPLY"
-        context_home="${HOME:-}"
-        context_cwd="$PWD"
-        _zacrs_file_options
-        context_file_options="$_zacrs_file_option_key"
-    fi
     _zacrs_suppressed=0
 
     # Use the subprocess for file requests when the daemon serves only older protocols.
     if (( _zacrs_daemon_available && (!_zacrs_filesystem_requested || _zacrs_daemon_filesystem) )); then
+        _zacrs_current_context_key
+        context_key="$REPLY"
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
             "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 "$(( ! reuse_visible ))"
         local daemon_rc=$?
@@ -919,11 +931,9 @@ _zacrs_complete_popup() {
         elif (( daemon_rc == 2 )); then
             reuse_visible=0
             _zacrs_collect_candidates
-            if ! _zacrs_file_context_matches "$context_cwd" "$context_home" "$context_file_options"; then
+            if (( !_zacrs_filesystem_requested || _zacrs_daemon_filesystem )); then
                 _zacrs_current_context_key
                 context_key="$REPLY"
-            fi
-            if (( !_zacrs_filesystem_requested || _zacrs_daemon_filesystem )); then
                 _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
                     "$cursor_row" "$cursor_col" "$reuse_visible" "$context_key" 1 1
                 local retry_rc=$?
@@ -1006,8 +1016,7 @@ _zacrs_line_pre_redraw() {
 
     # context_key は引数位置で設定する。ZLE 編集セッションの世代により
     # コマンド実行後の外部状態変化を古い候補キャッシュへ持ち越さない。
-    _zacrs_current_context_key
-    local context_key="$REPLY" context_home="${HOME:-}" context_cwd="$PWD"
+    local context_key="" context_home="${HOME:-}" context_cwd="$PWD"
     local context_file_options="$_zacrs_file_option_key"
 
     # 候補収集変数
@@ -1023,6 +1032,10 @@ _zacrs_line_pre_redraw() {
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
         _zacrs_maybe_retry_daemon
+    fi
+    if (( _zacrs_daemon_available )); then
+        _zacrs_current_context_key
+        context_key="$REPLY"
     fi
 
     # Cache-first: デーモンにキャッシュのみで render を試みる（引数位置のみ）。
@@ -1150,8 +1163,10 @@ _zacrs_line_pre_redraw() {
     # A native retry can establish a valid query under changed lookup settings.
     # Keep the snapshot under the settings actually used.
     if ! _zacrs_file_context_matches "$context_cwd" "$context_home" "$context_file_options"; then
-        _zacrs_current_context_key
-        context_key="$REPLY"
+        if (( _zacrs_daemon_available )); then
+            _zacrs_current_context_key
+            context_key="$REPLY"
+        fi
         context_home="${HOME:-}"
         context_cwd="$PWD"
         _zacrs_file_options

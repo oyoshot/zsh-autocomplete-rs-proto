@@ -204,8 +204,12 @@ impl FilesystemQuery {
         let mut directories = vec![PathBuf::new()];
         for component in directory.components() {
             let Component::Normal(name) = component else {
+                let mut remaining_bytes = budget;
                 for path in &mut directories {
                     path.push(component.as_os_str());
+                    remaining_bytes = remaining_bytes
+                        .checked_sub(size_of::<PathBuf>() + path.capacity())
+                        .ok_or(CollectionError::LimitExceeded)?;
                 }
                 continue;
             };
@@ -463,6 +467,33 @@ mod tests {
                 Err(CollectionError::ReadDirectory(error)) if error.kind() == io::ErrorKind::ConnectionReset
             ));
         }
+    }
+
+    #[test]
+    fn appending_parents_counts_against_the_directory_budget() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("Folder")).unwrap();
+        let query = FilesystemQuery {
+            cwd: root.path().into(),
+            path_prefix: "folder".into(),
+            insertion_prefix: "folder".into(),
+            options: FilesystemOptions::default(),
+        };
+        let budget = size_of::<PathBuf>() + PathBuf::new().join("Folder").capacity();
+        let mut parents = PathBuf::from("folder");
+        for _ in 0..8 {
+            parents.push("..");
+        }
+        let read_directory = |path: &Path| fs::read_dir(path);
+        assert!(
+            query
+                .resolve_directories(Path::new("folder"), budget, &mut 16, &read_directory)
+                .is_ok()
+        );
+        assert!(matches!(
+            query.resolve_directories(&parents, budget, &mut 16, &read_directory),
+            Err(CollectionError::LimitExceeded)
+        ));
     }
 
     #[test]

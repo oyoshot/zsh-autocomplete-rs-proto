@@ -44,7 +44,7 @@ _zacrs_get_cursor_pos() {
 
 # Write the glob and literal-word policy into the caller's _zacrs_file_option_key.
 _zacrs_file_options() {
-    _zacrs_file_option_key="${options[caseglob]}:${options[casepaths]:-off}:${options[extendedglob]}:${options[magicequalsubst]}:${options[multibyte]}:${options[interactivecomments]}:${options[globdots]}"
+    _zacrs_file_option_key="${options[caseglob]}:${options[casepaths]:-off}:${options[extendedglob]}:${options[magicequalsubst]}:${options[multibyte]}:${options[interactivecomments]}:${options[banghist]}:${options[completealiases]}:${options[aliases]}:${options[globdots]}"
 }
 
 _zacrs_file_context_matches() {

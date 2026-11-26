@@ -101,6 +101,13 @@ pub fn try_daemon_complete(
     popup_key: Option<&str>,
     filesystem: Option<&crate::filesystem::FilesystemQuery>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
+    if prefix.contains(['\r', '\n']) {
+        // The filter is a line in this protocol version. Never leak the rest
+        // into the following candidate payload.
+        return Ok(CompleteSessionOutcome::Done(
+            TextCompleteResult::rejected_edit(),
+        ));
+    }
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let stream = connect_stream()?;
     stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
@@ -907,6 +914,7 @@ mod tests {
         for apply in [
             "APPLY execute=1 path_hex=61 restore_hex=\n",
             "APPLY chain=0 execute=0",
+            "APPLY chain=1 execute=1\n",
             "APPLY chain=0 execute=0 path_hex=61 suffix_hex=a€ restore_hex=\n",
         ] {
             let result = run_text_popup_session(
@@ -921,6 +929,36 @@ mod tests {
             .unwrap();
             assert_eq!(result, TextCompleteResult::rejected_edit(), "{apply}");
         }
+    }
+
+    #[test]
+    fn multiline_filesystem_filter_is_rejected_before_connecting() {
+        let directory = tempfile::tempdir().unwrap();
+        let query = crate::filesystem::FilesystemQuery {
+            cwd: directory.path().into(),
+            path_prefix: "line\nname".into(),
+            insertion_prefix: "line\nname".into(),
+            options: Default::default(),
+        };
+        let result = try_daemon_complete(
+            "line\nname",
+            2,
+            1,
+            "",
+            false,
+            None,
+            true,
+            true,
+            None,
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Some(&query),
+        );
+        assert!(matches!(result, Ok(CompleteSessionOutcome::Done(result))
+            if result == TextCompleteResult::rejected_edit()));
     }
 
     #[test]
