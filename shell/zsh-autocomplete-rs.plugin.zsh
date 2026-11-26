@@ -337,6 +337,13 @@ _zacrs_parse_render_header() {
     done
 }
 
+# The daemon reads the filter as one line. Preview and Tab both send any other
+# filter to the subprocess, which receives it as an argument. Tab uses this
+# check; the render path below tests the same pattern inline.
+_zacrs_daemon_filter() {
+    [[ "$1" != *[$'\r\n']* ]]
+}
+
 # Connect to daemon, send a render request, and parse the response header.
 # Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional) $7=command-position (0|1) $8=candidates-present (0|1) $9=command-context (optional)
 # When candidates are empty, $8 distinguishes an explicit empty candidate set
@@ -909,9 +916,10 @@ _zacrs_complete_popup() {
     prefix="$naive_prefix"
     prefix_len=${#naive_prefix}
 
+    # A reuse request carries the naive prefix as its filter.
     if (( _zacrs_daemon_available && _zacrs_popup_visible && _zacrs_popup_snapshot_daemon )) && _zacrs_popup_snapshot_matches_editor \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )) \
-        && (( _zacrs_popup_snapshot_lines == LINES )); then
+        && (( _zacrs_popup_snapshot_lines == LINES )) && _zacrs_daemon_filter "$naive_prefix"; then
         reuse_visible=1
         prefix_len=$_zacrs_popup_snapshot_prefix_len
         cursor_row=$_zacrs_popup_cursor_row
@@ -924,8 +932,9 @@ _zacrs_complete_popup() {
 
     _zacrs_suppressed=0
 
-    # Use the subprocess for file requests when the daemon serves only older protocols.
-    if (( _zacrs_daemon_available && (!_zacrs_filesystem_requested || _zacrs_daemon_filesystem) )); then
+    # Use the subprocess for file requests when the daemon serves only older
+    # protocols, and for filters the daemon cannot carry.
+    if (( _zacrs_daemon_available && (!_zacrs_filesystem_requested || _zacrs_daemon_filesystem) )) && _zacrs_daemon_filter "$prefix"; then
         _zacrs_current_context_key
         context_key="$REPLY"
         _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \
@@ -943,7 +952,7 @@ _zacrs_complete_popup() {
         elif (( daemon_rc == 2 )); then
             reuse_visible=0
             _zacrs_collect_candidates
-            if (( !_zacrs_filesystem_requested || _zacrs_daemon_filesystem )); then
+            if (( !_zacrs_filesystem_requested || _zacrs_daemon_filesystem )) && _zacrs_daemon_filter "$prefix"; then
                 _zacrs_current_context_key
                 context_key="$REPLY"
                 _zacrs_invoke_daemon "$prefix" "$prefix_len" "$candidates_str" \

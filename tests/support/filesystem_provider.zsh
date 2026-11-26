@@ -631,6 +631,28 @@ _test_run() {
         functions[_zacrs_current_context_key]="$saved_key"
         [[ $_test_key_calls == 0 && "$BUFFER" == 'probe space\ name ' ]] || { print -r -- subprocess-key-encoded > "$_test_root/state"; return; }
     elif (( _test_index == 49 )); then
+        # A filter with a line break cannot use the daemon's line protocol.
+        # Tab must still select through the subprocess, also when the visible
+        # preview was rendered with a clean native prefix.
+        local saved_cursor="$functions[_zacrs_get_cursor_pos]" saved_collect="$functions[_zacrs_collect_candidates]"
+        _zacrs_get_cursor_pos() { cursor_row=2; cursor_col=1; }
+        _zacrs_collect_candidates() { prefix=$'ab\rc'; prefix_len=4; candidates_str=$'ab\rcd\tcommand\tcommand'; }
+        BUFFER=$'probe ab\rc'; CURSOR=${#BUFFER}
+        _zacrs_complete_popup
+        [[ "$BUFFER" == $'probe ab\rcd'* && $CURSOR == ${#BUFFER} ]] || {
+            print -r -- "line-break-filter:${(qqq)BUFFER}" > "$_test_root/state"; return
+        }
+        _zacrs_collect_candidates() { prefix=wrapped; prefix_len=7; candidates_str=$'wrapped-one\tcommand\tcommand'; }
+        BUFFER=$'true\nwrapped'; CURSOR=${#BUFFER}
+        _zacrs_invalidate_candidate_cache
+        _zacrs_render wrapped 7 $'wrapped-one\tcommand\tcommand' 0 '' ''
+        [[ $_zacrs_popup_visible == 1 ]] || { print -r -- line-break-preview-missing > "$_test_root/state"; return; }
+        _zacrs_complete_popup
+        functions[_zacrs_get_cursor_pos]="$saved_cursor"; functions[_zacrs_collect_candidates]="$saved_collect"
+        [[ "$BUFFER" == $'true\nwrapped-one'* && $CURSOR == ${#BUFFER} ]] || {
+            print -r -- "line-break-reuse:${(qqq)BUFFER}" > "$_test_root/state"; return
+        }
+    elif (( _test_index == 50 )); then
         # Restore the fields of a primary preview to exercise the reuse gate
         # independently of normal prompt-transition cleanup.
         [[ "$CONTEXT" != start || -n "$PREBUFFER" ]] || { print -r -- expected-continuation-editor > "$_test_root/state"; return; }
@@ -718,8 +740,8 @@ for attempt in {1..300}; do
     sleep .01
 done
 [[ "$output" == *'READY> '* ]] || { print -u2 -r -- "not ready: ${(qqq)output}"; exit 1; }
-for case_index in {1..49}; do
-    if (( case_index == 49 )); then
+for case_index in {1..50}; do
+    if (( case_index == 50 )); then
         zpty -w -n files $'\x07'
         for attempt in {1..300}; do
             zpty -r -t files chunk 2>/dev/null && output+="$chunk"

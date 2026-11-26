@@ -149,9 +149,11 @@ the existing prefix/candidate payload. The adapter requires `filesystem=2` in
 the daemon handshake for these requests. With an older daemon, it uses the
 subprocess for filesystem preview and selection while keeping native
 completion and abbreviation requests on the daemon.
-The daemon's filter uses a single line. A filter containing a line break is
-rejected before a completion request is sent. Direct subprocess completion can
-receive such a filter through its arguments.
+The daemon's filter uses a single line. The adapter sends a filter containing
+a carriage return or line feed to the subprocess for both preview and Tab,
+where it travels as an argument. A visible preview is not reused for such a
+filter. The Rust client also rejects such a filter without connecting, so
+another caller cannot leak the remainder into the candidate payload.
 When `CASE_GLOB` is off, the adapter requests case-insensitive basename matching
 and carries that policy into the popup filter. With `CASE_PATHS` also off, Rust
 resolves typed parent components case-insensitively using Unicode simple case
@@ -163,8 +165,8 @@ popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
 scopes reuse to session, generation, cwd, HOME, cursor, right-side input and
 the glob and syntax settings used to verify literal words, including
-`INTERACTIVE_COMMENTS`, `BANG_HIST` and `COMPLETE_ALIASES`. The existing
-exact-prefix rule still applies. The adapter generates context keys only when
+`INTERACTIVE_COMMENTS`, `BANG_HIST`, `COMPLETE_ALIASES` and `ALIASES`. The
+existing exact-prefix rule still applies. The adapter generates context keys only when
 a daemon is available and the buffer, cwd and HOME fit within 1,024 characters.
 Popup snapshots require
 the complete buffer to match. For a cached
