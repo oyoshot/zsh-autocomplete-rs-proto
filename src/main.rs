@@ -248,14 +248,14 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
         rows,
         fuzzy,
     );
-    if app.filtered_indices.is_empty() {
+    if app.filtered_indices().is_empty() {
         return Ok(1);
     }
 
     let mut tty = tty::open_tty_write()?;
     ui::render::ensure_space(&mut tty, &mut app)?;
 
-    if app.max_visible == 0 {
+    if app.max_visible() == 0 {
         return Ok(1);
     }
 
@@ -273,7 +273,7 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     let meta = popup.format_metadata(
         app.cursor_row,
         reuse_token,
-        app.filtered_indices.len(),
+        app.filtered_indices().len(),
         app.selected_original_idx(),
         None,
     );
