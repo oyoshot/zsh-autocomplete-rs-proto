@@ -118,6 +118,18 @@ assert_fresh_line() {
     local after_prompt="${pty_output##*└─▶ }"
     [[ "$after_prompt" != *$'\e[2K'* ]] || fail 'erased a row after displaying the new prompt'
 }
+# Zsh can take a terminal interrupt after its last check and before it blocks
+# on the next key. It then starts the new line only once a key arrives. The
+# probe key releases such an interrupt and leaves a fresh line unchanged.
+release_pending_interrupt() {
+    local expected="$1" attempt
+    for attempt in {1..50}; do
+        drain_pty
+        [[ "$(<"$HOME/ready")" == "$expected" ]] && return 0
+        sleep 0.01
+    done
+    zpty -w -n zacrs_lifecycle $'\x19'
+}
 wait_popup() {
     setopt localoptions extendedglob
     local attempt
@@ -159,6 +171,7 @@ for abort_key in $'\x03' $'\x07' $'\x18' $'\x0f'; do
     fi
     zpty -w -n zacrs_lifecycle "$abort_key"
     (( ++next_line ))
+    [[ "$abort_key" != $'\x03' ]] || release_pending_interrupt "$next_line"
     assert_fresh_line "$next_line"
 done
 print -r -- 'ok: new ZLE lines discard stale popup state without erasing the prompt'
