@@ -29,16 +29,16 @@ _zacrs_gather() {
     # Command-position candidates
     if (( is_first_word )); then
         local cmd
-        for cmd in ${(k)commands[(I)${prefix}*]}; do
+        for cmd in ${(ok)commands[(I)${prefix}*]}; do
             printf '%s\tcommand\tcommand\n' "$cmd"
         done
-        for cmd in ${(k)aliases[(I)${prefix}*]}; do
+        for cmd in ${(ok)aliases[(I)${prefix}*]}; do
             printf '%s\talias\talias\n' "$cmd"
         done
-        for cmd in ${(k)builtins[(I)${prefix}*]}; do
+        for cmd in ${(ok)builtins[(I)${prefix}*]}; do
             printf '%s\tbuiltin\tbuiltin\n' "$cmd"
         done
-        for cmd in ${(k)functions[(I)${prefix}*]}; do
+        for cmd in ${(ok)functions[(I)${prefix}*]}; do
             # Skip internal/private functions
             [[ "$cmd" == _* ]] && continue
             printf '%s\tfunction\tfunction\n' "$cmd"

@@ -50,8 +50,11 @@ _zacrs_state_test_completion() {
             compadd -U -d displays -- "alpha" "beta"
             ;;
         slash) compadd -U -- "alpha" "directory/" ;;
+        # Compsys keeps these in the order they were added.
+        unsorted) compadd -U -V group -- "beta" "alpha" ;;
+        nosort) compadd -U -o nosort -- "beta" "alpha" ;;
     esac
-    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash) ]]; then
+    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash|unsorted|nosort) ]]; then
         print -rl -- "${_zacrs_captured[@]}" > "$ZACRS_STATE_MARKER"
         return 0
     fi
@@ -117,11 +120,14 @@ run_case zero 'zero status=1 delta=0 captured=0 first='
 run_case one $'one status=0 delta=1 captured=1 first=xone\t\t'
 run_case many $'many status=0 delta=101 captured=200 first=x001\t\t'
 
-run_case kinds $'~\t\tdirectory\n~/\t\tdirectory\n~/file\t\tfile\n~/space 日本語\t\tdirectory\n~/link\t\tdirectory\n~/missing\t\tfile'
+# Like compsys, captured matches are sorted unless the call asks otherwise.
+run_case kinds $'~\t\tdirectory\n~/\t\tdirectory\n~/file\t\tfile\n~/link\t\tdirectory\n~/missing\t\tfile\n~/space 日本語\t\tdirectory'
 
-run_case plain $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
-run_case plain-debug $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
+run_case plain $'-option\t\t\na*b&c\t\t\nalpha\t\t\nrepo/package\t\t\n日本語 space\t\t'
+run_case plain-debug $'-option\t\t\na*b&c\t\t\nalpha\t\t\nrepo/package\t\t\n日本語 space\t\t'
 run_case affixes $'pre&alpha*end\t\t\npre&beta*end\t\t'
 run_case description $'alpha\tpackage entries\t\nbeta\tpackage entries\t'
 run_case mapped-description $'alpha\tfirst entry\t\nbeta\tsecond entry\t'
 run_case slash $'alpha\t\t\ndirectory/\t\tdirectory'
+run_case unsorted $'beta\t\t\nalpha\t\t'
+run_case nosort $'beta\t\t\nalpha\t\t'
