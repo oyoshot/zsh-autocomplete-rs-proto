@@ -85,3 +85,16 @@ else
     probe 'cat README.mdx'
     print -r -- 'ok: without the daemon a name typed past keeps the typed text'
 fi
+
+# Shell syntax after a cached name is not a name typed past: Tab still hands
+# the word to Zsh's own expansion.
+send_keys $'\x15'
+probe ''
+pty_output=''
+send_keys 'cat README.md'
+wait_output 'the popup for the existing file' ' README.md ' '└'
+send_keys '{,.bak}'
+probe 'cat README.md{,.bak}'
+send_keys $'\t'
+probe 'cat README.md README.md.bak '
+print -r -- 'ok: Tab expands shell syntax after a cached name'

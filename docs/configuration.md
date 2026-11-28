@@ -150,15 +150,20 @@ everywhere.
 When nothing matches, candidates that the query starts with are listed
 instead, longest first and without match emphasis: `README.mdx` lists
 `README.md`, and `claudecode` at command position lists `claude`. Case and
-Latin folding follow ordinary matching. A directory that the query continues
-into, such as `src` for `src/new.rs`, is not listed. Choosing one replaces the
-typed word, so the extra text is removed.
+Latin folding follow ordinary matching. Only a name followed by more name
+characters (letters, digits, `.`, `-`, `_`, `+`) counts as typed past. A
+separator or shell syntax after the name, as in `src/new.rs`, `of=file`,
+`log*` or `file{,.bak}`, lists nothing, so Tab still falls back to Zsh's own
+expansion. Choosing a name replaces the typed word, so the extra text is
+removed.
 
 For paths and other arguments, Zsh returns nothing for a word typed past an
-existing name. The daemon then uses the candidates it gathered for a shorter
-word in the same argument position and directory, keeping only the names the
-current word extends. This needs the daemon and a popup shown while typing that
-word; without them the popup closes and the typed text is kept.
+existing name. The daemon then uses the candidates it gathered earlier for a
+shorter word in the same argument position and directory, usually while that
+word was being typed, and keeps only the names the current word extends. They
+can be stale until the next command line. Without the daemon or such an
+earlier gather, as for a pasted word, the popup closes and the typed text is
+kept.
 
 These candidates are never applied without an explicit choice. Tab opens the
 popup with nothing selected, even for a single candidate; Enter and Space then

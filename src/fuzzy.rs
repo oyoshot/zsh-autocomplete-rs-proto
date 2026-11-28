@@ -224,7 +224,8 @@ impl FuzzyMatcher {
             };
         let matches = self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos);
         if matches.is_empty() {
-            let overshoot = self.filter_overshoot_matches(candidates, query, fuzzy_scope);
+            let overshoot =
+                self.filter_overshoot_matches(candidates, query, fuzzy_scope, max_typos);
             if !overshoot.is_empty() {
                 return FilterResult {
                     matches: overshoot,
@@ -254,8 +255,9 @@ impl FuzzyMatcher {
         candidates: &[Candidate],
         query: &str,
         fuzzy_scope: Option<&[usize]>,
+        max_typos: u16,
     ) -> Vec<ScoredMatch> {
-        let overshoot = OvershootQuery::new(query);
+        let overshoot = OvershootQuery::new(query, max_typos > 0);
         let matched = |candidate_idx: usize| {
             overshoot
                 .score(&candidates[candidate_idx].text)
@@ -390,9 +392,11 @@ pub(crate) struct OvershootQuery<'a> {
 }
 
 impl<'a> OvershootQuery<'a> {
-    pub(crate) fn new(query: &'a str) -> Self {
+    /// `fold_case` matches ordinary matching, which ignores case whenever
+    /// typo rescue is active and otherwise uses smart case.
+    pub(crate) fn new(query: &'a str, typo_rescue: bool) -> Self {
         let normalize = normalize_for_matching(query) == query;
-        let fold_case = !query.chars().any(char::is_uppercase);
+        let fold_case = typo_rescue || !query.chars().any(char::is_uppercase);
         Self {
             query: normalize_case_for_matching(query, fold_case),
             normalize,
@@ -401,8 +405,8 @@ impl<'a> OvershootQuery<'a> {
     }
 
     /// Returns the candidate's length in characters when the query starts with
-    /// it and continues past it within the same path segment, so a longer,
-    /// closer candidate scores higher.
+    /// it and continues past it with name characters only, so a longer, closer
+    /// candidate scores higher.
     pub(crate) fn score(&self, text: &str) -> Option<u32> {
         // Reject most candidates before normalizing all of them. ASCII
         // normalizes to itself, and normalizing the first character alone
@@ -446,13 +450,21 @@ impl<'a> OvershootQuery<'a> {
         } else {
             head == text
         };
-        // A name the query continues inside of, such as `dir/` or `dir` for
-        // `dir/file`, is a parent directory rather than the typed name.
-        if !matches || text.ends_with('/') || self.query[text.len()..].contains('/') {
+        // Only a name extended by more of a name was typed past. A separator
+        // or shell syntax means the user went on to something else: a path
+        // inside a directory (`dir/file`), an option value (`of=file`), or a
+        // glob or brace expansion that Tab must still expand (`log*`).
+        let typed_past = text.chars().next_back().is_some_and(is_name_char)
+            && self.query[text.len()..].chars().all(is_name_char);
+        if !matches || !typed_past {
             return None;
         }
         Some(u32::try_from(text.chars().count()).unwrap_or(u32::MAX))
     }
+}
+
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '+')
 }
 
 fn should_match_candidate(
@@ -864,6 +876,46 @@ mod tests {
             candidates[result.matches[0].candidate_idx].text,
             "src/main.rs"
         );
+    }
+
+    #[test]
+    fn overshoot_skips_names_followed_by_separators_or_shell_syntax() {
+        let candidates = vec![
+            Candidate::parse_line("file.txt\t\tfile"),
+            Candidate::parse_line("log\t\tfile"),
+            Candidate::parse_line("of=\t\t"),
+            Candidate::parse_line("--output=\t\toption"),
+            Candidate::parse_line("host:\t\t"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        for query in [
+            "file.txt{,.bak}",
+            "file.txt.bak*",
+            "log*",
+            "log$HOME",
+            "of=newfile",
+            "--output=out.txt",
+            "host:path",
+        ] {
+            let result = matcher.filter_with_mode(&candidates, query, None);
+            assert!(!result.mode.is_overshoot(), "{query}");
+        }
+        // Name characters after the name are still typed past it.
+        let result = matcher.filter_with_mode(&candidates, "file.txt.bak-2_x+y", None);
+        assert!(result.mode.is_overshoot());
+        assert_eq!(candidates[result.matches[0].candidate_idx].text, "file.txt");
+    }
+
+    #[test]
+    fn overshoot_ignores_case_while_typo_rescue_does() {
+        let candidates = vec![Candidate::parse_line("claude\tcommand\tcommand_rescue")];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "Claudecode", None);
+
+        assert!(result.mode.is_overshoot());
+        assert_eq!(result.matches.len(), 1);
     }
 
     #[test]

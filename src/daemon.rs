@@ -379,7 +379,7 @@ impl DaemonServer {
         {
             return None;
         }
-        let overshoot = OvershootQuery::new(current_prefix);
+        let overshoot = OvershootQuery::new(current_prefix, false);
         let tsv = entry
             .tsv
             .lines()
@@ -3817,6 +3817,26 @@ mod tests {
                 "{reuse_token:?}: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn handle_text_complete_leaves_shell_syntax_after_a_cached_name_to_native_expansion() {
+        let mut server = test_server();
+        server.store_cached_tsv(
+            "ctx",
+            "file.t".to_string(),
+            "file.txt\t\tfile\n".to_string(),
+        );
+
+        let request = overshoot_complete_request(None);
+        let output = run_text_request(
+            &mut server,
+            text_request_input(&request.header_line(), "file.txt{,.bak}", None),
+        );
+
+        // Code 4 hands the word to zle expand-or-complete, as before the rescue.
+        let result = read_text_complete_result(&output);
+        assert_eq!(result.code, 4);
     }
 
     fn overshoot_session_params() -> CompleteParams {
