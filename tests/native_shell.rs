@@ -340,6 +340,16 @@ fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
 }
 
 #[test]
+fn zsh_redraw_hooks_registered_after_the_plugin_run_on_every_redraw() {
+    for daemon in ["1", "0"] {
+        run_popup_script(
+            include_str!("support/popup_hook_chain.zsh"),
+            &[("ZACRS_TEST_DAEMON", daemon)],
+        );
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.

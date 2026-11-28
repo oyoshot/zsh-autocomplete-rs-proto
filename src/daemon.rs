@@ -1231,7 +1231,7 @@ impl DaemonServer {
             .fuzzy
             .take()
             .unwrap_or_default()
-            .with_kind_order(self.config.kind_order);
+            .with_kind_order(self.config.kind_order.at_position(command_position));
         let mut app = App::new_with_matcher(
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
@@ -1347,7 +1347,7 @@ impl DaemonServer {
             .fuzzy
             .take()
             .unwrap_or_default()
-            .with_kind_order(self.config.kind_order);
+            .with_kind_order(self.config.kind_order.at_position(command_position));
         let mut app = App::new_with_matcher(
             candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
         );
@@ -3435,6 +3435,41 @@ mod tests {
 
         let output = String::from_utf8(writer).unwrap();
         assert!(output.starts_with("DONE 0 >/dev/null\n"), "{output}");
+    }
+
+    #[test]
+    fn handle_complete_keeps_native_subcommands_before_argument_abbreviations() {
+        for (command_position, expected) in [(false, "DONE 0 status"), (true, "DONE 0 tsfmt")] {
+            let mut server = test_server();
+            server.config.abbreviations = vec![crate::config::Abbreviation {
+                trigger: "ts".to_string(),
+                expansion: "tsfmt".to_string(),
+                description: String::new(),
+                when: crate::config::AbbreviationWhen::at_position(
+                    crate::config::AbbreviationPosition::Any,
+                ),
+            }];
+
+            let mut output_reader = run_complete_session(
+                &mut server,
+                CompleteParams {
+                    prefix: String::new(),
+                    command_position,
+                    ..complete_params_for_terminal(80, 24, false)
+                },
+                // Native subcommands arrive without a kind. The longer
+                // subcommand must still precede the shorter abbreviation.
+                "status\tshow the working tree status\t\n",
+                &[SessionMessage::Key(b"\r")],
+            );
+            let _ = read_frame(&mut output_reader);
+            let (done, _) = read_done(&mut output_reader);
+            let done = done.strip_suffix('\n').unwrap_or(&done);
+            assert!(
+                done.starts_with(expected),
+                "command_position={command_position}: {done}"
+            );
+        }
     }
 
     #[test]
