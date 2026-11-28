@@ -191,6 +191,27 @@ enter_line() {
     zpty -w -n zacrs_enter "$1"$'\r'
     wait_file "$HOME/ready" "$next_ready"
 }
+# abort_line <key>: abort the current line and wait for the next one.
+# Zsh can take a terminal interrupt after its last check and before it blocks
+# on the next key. It then acts on it only once more input arrives. A second
+# interrupt reaches zsh while it is blocked and makes it act at once, also in
+# a search minibuffer or a recursive edit, where an ordinary key would not.
+# It is sent only after the normal wait has run out, because on a line that
+# has already been aborted it would abort the next one too.
+abort_line() {
+    local next_ready=$(( $(<"$HOME/ready") + 1 )) attempt
+    zpty -w -n zacrs_enter "$1"
+    if [[ "$1" == $'\x03' ]]; then
+        for attempt in {1..500}; do
+            drain_pty
+            [[ "$(<"$HOME/ready")" == "$next_ready" ]] && return 0
+            sleep 0.01
+        done
+        print -u2 -r -- 'note: sent a second interrupt to release a pending one'
+        zpty -w -n zacrs_enter $'\x03'
+    fi
+    wait_file "$HOME/ready" "$next_ready"
+}
 
 if [[ "${ZACRS_TEST_DEFERRED:-0}" == 1 ]]; then
     print -rl -- '[completion]' 'expand_abbreviation_on_enter = true' >> "$XDG_CONFIG_HOME/zacrs/config.toml"
@@ -412,9 +433,7 @@ for abort_key in $'\x03' $'\x07'; do
     : > "$HOME/editor"
     zpty -w -n zacrs_enter $'\x19'
     wait_file "$HOME/editor" 'gs '
-    next_ready=$(( $(<"$HOME/ready") + 1 ))
-    zpty -w -n zacrs_enter "$abort_key"
-    wait_file "$HOME/ready" "$next_ready"
+    abort_line "$abort_key"
     enter_line gs
     wait_file "$HOME/executed" 'git:status'
 done

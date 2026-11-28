@@ -1,5 +1,7 @@
 use crate::candidate::Candidate;
+use crate::config::{Config, KindOrder};
 use crate::fuzzy::{FuzzyMatcher, MatchMode};
+use crate::ui::popup::Popup;
 use std::collections::HashMap;
 
 const DEFAULT_MAX_VISIBLE: usize = 10;
@@ -164,6 +166,77 @@ impl Viewport {
 
     fn visible_range(self, len: usize, max_visible: usize) -> std::ops::Range<usize> {
         self.scroll_offset..(self.scroll_offset + max_visible).min(len)
+    }
+}
+
+/// The candidates for one completion request: native candidates plus the
+/// abbreviations eligible at the cursor, ranked with the kind order for the
+/// same position.
+pub struct CompletionSet {
+    candidates: Vec<Candidate>,
+    kind_order: KindOrder,
+}
+
+impl CompletionSet {
+    pub fn new(
+        config: &Config,
+        native_tsv: &str,
+        command_position: bool,
+        command_context: Option<&str>,
+    ) -> Self {
+        Self::from_native(
+            config,
+            Candidate::parse_lines_dedup(native_tsv),
+            command_position,
+            command_context,
+        )
+    }
+
+    /// Like `new`, for native candidates the caller has already gathered,
+    /// such as the shell's candidates together with collected files.
+    pub fn from_native(
+        config: &Config,
+        mut candidates: Vec<Candidate>,
+        command_position: bool,
+        command_context: Option<&str>,
+    ) -> Self {
+        candidates.extend(
+            config
+                .abbreviations
+                .iter()
+                .filter(|abbr| abbr.is_available_at(command_position, command_context))
+                .map(Candidate::from),
+        );
+        Self {
+            candidates,
+            kind_order: config.kind_order.at_position(command_position),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.candidates.is_empty()
+    }
+
+    /// Builds the popup state. `fuzzy` is reused for its cached matcher; its
+    /// kind order is replaced by this set's position-resolved order.
+    pub fn into_app(
+        self,
+        initial_filter: InitialFilter,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        fuzzy: FuzzyMatcher,
+    ) -> App {
+        App::new_with_initial_filter(
+            self.candidates,
+            initial_filter,
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            fuzzy.with_kind_order(self.kind_order),
+        )
     }
 }
 
@@ -450,10 +523,16 @@ impl App {
     }
 
     pub fn sync_max_visible(&mut self) {
-        let max_popup_height = self.term_rows.saturating_sub(1);
-        let max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+        // Stays at one row even when no popup fits; callers check
+        // `popup_fits` before drawing.
+        let max_visible = Popup::rows_available(self.term_rows).max(1);
         self.max_visible = DEFAULT_MAX_VISIBLE.min(max_visible);
         self.clamp_viewport();
+    }
+
+    /// Whether the terminal is large enough to show the popup at all.
+    pub fn popup_fits(&self) -> bool {
+        Popup::fits_terminal(self.term_cols, self.term_rows)
     }
 
     /// Lowers `max_visible` to at most `limit` rows, never below one, and
@@ -510,6 +589,46 @@ mod tests {
     use super::*;
     use crate::candidate::Candidate;
     use crate::fuzzy::FuzzyMatcher;
+
+    #[test]
+    fn completion_set_adds_eligible_abbreviations_ranked_for_that_position() {
+        use crate::config::{Abbreviation, AbbreviationPosition, AbbreviationWhen};
+        let abbreviation = |trigger: &str, position| Abbreviation {
+            trigger: trigger.to_string(),
+            expansion: format!("{trigger} expanded"),
+            description: String::new(),
+            when: AbbreviationWhen::at_position(position),
+        };
+        let mut config = Config::default();
+        config.abbreviations = vec![
+            abbreviation("cmd", AbbreviationPosition::Command),
+            abbreviation("arg", AbbreviationPosition::Argument),
+            abbreviation("any", AbbreviationPosition::Any),
+        ];
+
+        // Native subcommands arrive without a kind. At argument position they
+        // rank before abbreviations; at command position abbreviations lead.
+        for (command_position, expected) in [
+            (true, ["any", "cmd", "status"]),
+            (false, ["status", "any", "arg"]),
+        ] {
+            let app = CompletionSet::new(&config, "status\t\t\n", command_position, None).into_app(
+                InitialFilter::CommonPrefix(String::new()),
+                5,
+                0,
+                80,
+                24,
+                FuzzyMatcher::new(),
+            );
+            let texts: Vec<&str> = app
+                .filtered_indices()
+                .iter()
+                .map(|&i| app.all_candidates[i].text.as_str())
+                .collect();
+            assert_eq!(texts, expected, "command_position={command_position}");
+        }
+        assert!(CompletionSet::new(&Config::default(), "", false, None).is_empty());
+    }
 
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {
         items

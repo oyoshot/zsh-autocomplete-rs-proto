@@ -1,4 +1,4 @@
-use zsh_autocomplete_rs::app::{App, InitialFilter};
+use zsh_autocomplete_rs::app::{CompletionSet, InitialFilter};
 use zsh_autocomplete_rs::candidate::Candidate;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
@@ -15,8 +15,13 @@ fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
 }
 
-fn write_done_result(writer: impl Write, result: &TextCompleteResult) -> io::Result<()> {
-    result.write_to(writer)
+fn write_done_result(
+    mut writer: impl Write,
+    result: &TextCompleteResult,
+    unread: &[u8],
+) -> io::Result<()> {
+    result.write_to(&mut writer)?;
+    protocol::write_unread_input(writer, unread)
 }
 
 struct CompleteCommand {
@@ -66,7 +71,11 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     let mut reader = io::BufReader::new(stdin.lock());
     // The only failure is a candidate set over the limit; no path selects from one.
     let Ok(tsv) = daemon::read_tsv_payload(&mut reader) else {
-        return write_done_result(io::stdout().lock(), &TextCompleteResult::no_candidates());
+        return write_done_result(
+            io::stdout().lock(),
+            &TextCompleteResult::no_candidates(),
+            &stale_bytes,
+        );
     };
 
     if daemon_mode {
@@ -89,8 +98,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             popup_key.as_deref(),
             filesystem.as_ref(),
         ) {
-            Ok(client::CompleteSessionOutcome::Done(result)) => {
-                write_done_result(&mut writer, &result)?
+            Ok(client::CompleteSessionOutcome::Done(result, unread)) => {
+                write_done_result(&mut writer, &result, &unread)?
             }
             Ok(client::CompleteSessionOutcome::CacheMiss) => {
                 writeln!(writer, "CACHE_MISS")?;
@@ -107,7 +116,11 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     {
         Ok(files) => files,
         Err(_) => {
-            return write_done_result(&mut stdout_writer, &TextCompleteResult::rejected_edit());
+            return write_done_result(
+                &mut stdout_writer,
+                &TextCompleteResult::rejected_edit(),
+                &stale_bytes,
+            );
         }
     };
     let (server_stream, client_stream) = UnixStream::pair()?;
@@ -143,7 +156,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     let mut session_writer = client_stream;
     let mut initial_header = String::new();
     session_reader.read_line(&mut initial_header)?;
-    let result = client::run_text_popup_session(
+    let (result, unread) = client::run_text_popup_session(
         &mut session_reader,
         &mut session_writer,
         trim_line_end(&initial_header),
@@ -153,7 +166,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         cursor_col,
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
-    write_done_result(&mut stdout_writer, &result)?;
+    write_done_result(&mut stdout_writer, &result, &unread)?;
     handle
         .join()
         .map_err(|_| io::Error::other("complete session thread panicked"))?;
@@ -222,50 +235,41 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     };
     let literal_files_present = !files.is_empty();
     candidates.extend(files);
-    candidates.extend(
-        config
-            .abbreviations
-            .iter()
-            .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
-            .map(|abbr| {
-                Candidate::abbreviation(
-                    abbr.trigger.clone(),
-                    abbr.expansion.clone(),
-                    abbr.description.clone(),
-                )
-            }),
+    let set = CompletionSet::from_native(
+        config,
+        candidates,
+        command_position,
+        command_context.as_deref(),
     );
 
-    if candidates.is_empty() {
+    if set.is_empty() {
         return Ok(1);
     }
 
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new().with_kind_order(config.kind_order);
     let initial_filter = InitialFilter::for_completion(
         prefix,
         config.auto_insert_unambiguous,
         literal_files_present,
     );
-    let mut app = App::new_with_initial_filter(
-        candidates,
+    let mut app = set.into_app(
         initial_filter,
         cursor_row,
         cursor_col,
         cols,
         rows,
-        fuzzy,
+        zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new(),
     );
     if app.filtered_indices().is_empty() {
         return Ok(1);
     }
 
-    let mut tty = tty::open_tty_write()?;
-    ui::render::ensure_space(&mut tty, &mut app)?;
-
-    if app.max_visible() == 0 {
+    if !app.popup_fits() {
         return Ok(1);
     }
+
+    let mut tty = tty::open_tty_write()?;
+    ui::render::ensure_space(&mut tty, &mut app)?;
 
     if let Some(idx) = selected {
         app.set_selected(idx);

@@ -80,6 +80,25 @@ drain_pty() {
     done
     return 0
 }
+# interrupt_and_wait <marker>: send a terminal interrupt and wait for a marker.
+# Zsh can take a terminal interrupt after its last check and before it blocks
+# on the next key. It then acts on it only once more input arrives. A second
+# interrupt reaches zsh while it is blocked and makes it act at once, also in
+# a search minibuffer or a recursive edit, where an ordinary key would not.
+# It is sent only after the normal wait has run out, because on a line that
+# has already been aborted it would abort the next one too.
+interrupt_and_wait() {
+    local expected="$1" i
+    zpty -w -n zacrs_recursion $'\x03'
+    for (( i=0; i<200; i++ )); do
+        drain_pty
+        grep -Fqx -- "$expected" "$ZACRS_RECURSION_MARKER" 2>/dev/null && return 0
+        sleep 0.01
+    done
+    print -u2 -r -- 'note: sent a second interrupt to release a pending one'
+    zpty -w -n zacrs_recursion $'\x03'
+    wait_for_marker "$expected"
+}
 wait_for_marker() {
     local expected="$1" i
     for (( i=0; i<200; i++ )); do
@@ -107,7 +126,7 @@ start_shell() {
     ZDOTDIR="$tmp_dir" zpty -b zacrs_recursion zsh -d
 }
 
-typeset mode finish expected_result
+typeset mode finish
 for mode in line-init line-init-native; do
     export ZACRS_RECURSION_MODE="$mode"
     for finish in accept cancel; do
@@ -127,12 +146,10 @@ for mode in line-init line-init-native; do
         wait_for_marker 'init:1'
         if [[ $finish == accept ]]; then
             zpty -w -n zacrs_recursion $'\r'
-            expected_result=0
+            wait_for_marker 'returned:0::0'
         else
-            zpty -w -n zacrs_recursion $'\x03'
-            expected_result=1
+            interrupt_and_wait 'returned:1::0'
         fi
-        wait_for_marker "returned:$expected_result::0"
         # Returning from recursive-edit need not redraw the empty outer buffer
         # (notably on macOS). Synchronize with the outer line-init callback;
         # the following input checks depth-0 redraws and restored editor state.

@@ -123,6 +123,25 @@ drain_pty() {
     return 0
 }
 
+# interrupt_and_wait <marker>: send a terminal interrupt and wait for a marker.
+# Zsh can take a terminal interrupt after its last check and before it blocks
+# on the next key. It then acts on it only once more input arrives. A second
+# interrupt reaches zsh while it is blocked and makes it act at once, also in
+# a search minibuffer or a recursive edit, where an ordinary key would not.
+# It is sent only after the normal wait has run out, because on a line that
+# has already been aborted it would abort the next one too.
+interrupt_and_wait() {
+    local expected="$1" i
+    zpty -w -n zacrs_typeahead $'\x03'
+    for (( i=0; i<200; i++ )); do
+        drain_pty
+        grep -Fqx -- "$expected" "$ZACRS_TYPEAHEAD_MARKER" 2>/dev/null && return 0
+        sleep 0.01
+    done
+    print -u2 -r -- 'note: sent a second interrupt to release a pending one'
+    zpty -w -n zacrs_typeahead $'\x03'
+    wait_for_marker "$expected"
+}
 wait_for_marker() {
     local expected="$1"
     local i
@@ -201,8 +220,7 @@ redraw_order=("${(@f)$(grep -E "^(outer-before|reloaded|outer-after):qr$" "$ZACR
     print -u2 -r -- "order: ${(j:,:)redraw_order}"
     return 1
 }
-zpty -w -n zacrs_typeahead $'\x03'
-wait_for_marker "line-init:reloaded"
+interrupt_and_wait "line-init:reloaded"
 drain_pty
 if [[ "$pty_output" == *"maximum nested function level"* ]]; then
     print -u2 -r -- "not ok: reloading with another self-insert wrapper caused recursion"

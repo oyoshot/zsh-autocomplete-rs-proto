@@ -117,6 +117,25 @@ wait_for_marker() {
     print -u2 -r -- "pty: ${(qqq)pty_output}"
     return 1
 }
+# interrupt_and_wait <marker>: send a terminal interrupt and wait for a marker.
+# Zsh can take a terminal interrupt after its last check and before it blocks
+# on the next key. It then acts on it only once more input arrives. A second
+# interrupt reaches zsh while it is blocked and makes it act at once, also in
+# a search minibuffer or a recursive edit, where an ordinary key would not.
+# It is sent only after the normal wait has run out, because on a line that
+# has already been aborted it would abort the next one too.
+interrupt_and_wait() {
+    local expected="$1" i
+    zpty -w -n zacrs_registration $'\x03'
+    for (( i=0; i<200; i++ )); do
+        drain_pty
+        grep -Fqx -- "$expected" "$ZACRS_REGISTRATION_MARKER" 2>/dev/null && return 0
+        sleep 0.01
+    done
+    print -u2 -r -- 'note: sent a second interrupt to release a pending one'
+    zpty -w -n zacrs_registration $'\x03'
+    wait_for_marker "$expected"
+}
 assert_event() {
     local buffer="$1" expected
     case $ZACRS_REGISTRATION_MODE in
@@ -145,8 +164,7 @@ for mode in wrapped removed replaced prewrapped failure legacy; do
     zpty -w -n zacrs_registration q
     wait_for_marker done:q
     assert_event q
-    zpty -w -n zacrs_registration $'\x03'
-    wait_for_marker ready:2
+    interrupt_and_wait ready:2
     zpty -w -n zacrs_registration r
     wait_for_marker done:r
     assert_event r

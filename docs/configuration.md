@@ -15,6 +15,15 @@ candidates are outside the visible area, the bottom border shows the visible
 range, for example `1–10 / 42`. The marker and range are omitted when the terminal
 is too narrow to fit them.
 
+The popup is drawn below the cursor line and never over it. It needs at least
+4 rows (the cursor line, the frame and one candidate) and 8 columns (the
+narrowest popup in which a shortened candidate still shows a character
+before the ellipsis, even a double-width one). In a smaller
+terminal no popup is shown while typing, and Tab inserts the only
+candidate if there is exactly one, or otherwise runs Zsh's own completion.
+Shrinking the terminal below that size while a popup is open closes it, as
+cancelling does.
+
 ![Popup with cyan matches, selection marker, and visible candidate range](images/popup-ui.png)
 
 Override colors in the `[theme]` table:
@@ -38,23 +47,71 @@ match emphasis.
 
 Setting `NO_COLOR` disables colors while preserving bold match emphasis.
 
+## Popup keys
+
+The popup shown while typing does not take keys. With several candidates, Tab
+opens it for selection with the first candidate selected. With exactly one,
+Tab inserts it directly, and with none, Tab runs Zsh's own completion. While
+the popup is open:
+
+| Key | Action |
+| --- | --- |
+| Tab, Down, Ctrl-N | Select the next candidate |
+| Shift-Tab, Up, Ctrl-P | Select the previous candidate |
+| Page Down, Page Up | Move the selection by one page |
+| Enter | Insert the selected candidate and run the line |
+| Space | Insert the selected candidate and keep editing |
+| Esc, Ctrl-C | Close the popup |
+| Characters, Backspace | Edit the filter |
+
+Moving one candidate past the last or first wraps around; paging stops at the
+ends. Typing a character that leaves no matches, or erasing past the completed
+word, closes the popup and keeps the typed text. Any other key closes the popup
+and is handled by Zsh as usual.
+
+Ctrl-N and Ctrl-P always move the selection while the popup is open, even if
+they are bound to other widgets in Zsh. Those bindings apply again once the
+popup is closed, for example with Esc.
+
+Tab, Shift-Tab, Enter, and Space can be reassigned in `[keybindings]`:
+
+```toml
+[keybindings]
+tab = "move-down"
+shift-tab = "move-up"
+enter = "confirm"
+space = "dismiss"
+```
+
+The available actions are `move-down`, `move-up`, `page-down`, `page-up`,
+`confirm` (the Enter action above), `dismiss` (the Space action above), and
+`cancel`. An unknown action keeps that key's default.
+
 ## Candidate order
 
 With a nonempty query, candidates are ordered by matching score, shorter
 candidate text, kind priority, then text. With an empty query, kind priority
 comes first, followed by shorter text and text order.
 
-Customize kind priority in `[completion]`. This is the default order:
+Customize kind priority in `[completion]`. The default order depends on the
+cursor position. At command position, it is:
 
 ```toml
 [completion]
 kind_order = ["directory", "file", "abbreviation", "command", "alias", "builtin", "function", "other"]
 ```
 
+At argument positions, abbreviations move after every native kind:
+`directory`, `file`, `command`, `alias`, `builtin`, `function`, `other`, then
+`abbreviation`.
+
 Earlier entries have higher priority. Omitted kinds follow the listed ones in
-their default order; `kind_order = []` and omitting the setting both use the
-default. For example, `kind_order = ["command"]` puts commands first for empty
-queries and equal-score/equal-length matches. To prefer commands over
+their default order for the current position; `kind_order = []` and omitting
+the setting both use the default. A list that names `abbreviation` applies as
+written at both positions, so copying the command-position list above also
+keeps abbreviations ahead of native candidates at argument positions. For
+example, `kind_order = ["command"]` puts commands first for empty queries and
+equal-score/equal-length matches. To prefer commands over
 abbreviations while keeping paths first, use
 `kind_order = ["directory", "file", "command"]`.
 
@@ -67,9 +124,12 @@ candidates, while an open interactive popup retains its starting order.
 
 This setting changes only kind priority. It does not override a better matching
 score or shorter text, or change which abbreviations are eligible in the
-current context. The default keeps paths first at empty argument positions such
-as `nvim <Tab>` and `mv <Tab>`; explicitly putting `abbreviation` first also
-prioritizes eligible argument abbreviations there.
+current context. With the default order, subcommands, options, and paths such
+as `git <Tab>`, `nvim <Tab>`, and `mv <Tab>` come before eligible argument
+abbreviations, including those restricted with `when.command`. Typing part of a
+trigger still ranks it by matching score. To list argument abbreviations
+earlier, name `abbreviation` in `kind_order`; putting it first prioritizes them
+everywhere.
 
 ## Abbreviations
 
@@ -77,13 +137,14 @@ Static abbreviations are portable completion candidates. By default they are
 offered only at command position. Expansions are inserted literally without
 running shell evaluation while candidates are being gathered or displayed.
 
-Abbreviations use the same matching score as other candidates. For equal scores
-and text lengths, the default kind order is directories, files, abbreviations, then
-commands and other native candidates. For example, an abbreviation
-`mkdir = "mkdir -p"` appears before the `mkdir` command for both `mkd` and
-`mkdir`. Better matches and shorter candidate text still take precedence.
-With an empty query, the default kind order keeps paths before abbreviations,
-including at argument positions such as `nvim <Tab>` and `mv <Tab>`.
+Abbreviations use the same matching score as other candidates. At command
+position, for equal scores and text lengths, the default kind order is
+directories, files, abbreviations, then commands and other native candidates.
+For example, an abbreviation `mkdir = "mkdir -p"` appears before the `mkdir`
+command for both `mkd` and `mkdir`. Better matches and shorter candidate text still take precedence.
+At argument positions, abbreviations follow native candidates such as
+subcommands, options, and paths, so `git <Tab>` lists subcommands before
+`when.position = "any"` abbreviations.
 
 For simple entries, use the `[abbreviations]` table:
 

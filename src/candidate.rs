@@ -1,4 +1,4 @@
-use crate::config::SuffixConfig;
+use crate::config::{Abbreviation, SuffixConfig};
 use std::collections::HashMap;
 use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf, is_separator};
 
@@ -212,6 +212,16 @@ impl Candidate {
             cursor_offset,
             literal_path: None,
         }
+    }
+}
+
+impl From<&Abbreviation> for Candidate {
+    fn from(abbreviation: &Abbreviation) -> Self {
+        Self::abbreviation(
+            abbreviation.trigger.clone(),
+            abbreviation.expansion.clone(),
+            abbreviation.description.clone(),
+        )
     }
 }
 

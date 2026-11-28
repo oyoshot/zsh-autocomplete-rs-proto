@@ -6,7 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::app::{App, InitialFilter};
+use crate::app::{App, CompletionSet, InitialFilter};
 use crate::candidate::Candidate;
 use crate::config::{Config, ConfigReloader, KeyBindings, SuffixConfig, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
@@ -1382,39 +1382,26 @@ impl DaemonServer {
 
         let mut candidates = filesystem.to_vec();
         candidates.extend(Candidate::parse_lines_dedup(tsv_str));
-
-        candidates.extend(
-            self.config
-                .abbreviations
-                .iter()
-                .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
-                .map(|abbr| {
-                    Candidate::abbreviation(
-                        abbr.trigger.clone(),
-                        abbr.expansion.clone(),
-                        abbr.description.clone(),
-                    )
-                }),
+        let set = CompletionSet::from_native(
+            &self.config,
+            candidates,
+            command_position,
+            command_context.as_deref(),
         );
 
-        if candidates.is_empty() {
+        if set.is_empty() {
             debug!("render request had no candidates");
             return Response::Empty;
         }
 
         // Take fuzzy matcher out to reuse, put it back after
-        let fuzzy = self
-            .fuzzy
-            .take()
-            .unwrap_or_default()
-            .with_kind_order(self.config.kind_order);
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
         let initial_filter = InitialFilter::for_completion(
             prefix,
             self.config.auto_insert_unambiguous,
             !filesystem.is_empty(),
         );
-        let mut app = App::new_with_initial_filter(
-            candidates,
+        let mut app = set.into_app(
             initial_filter,
             cursor_row,
             cursor_col,
@@ -1429,13 +1416,13 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        let scroll_bytes = scroll_for_popup(&mut app, term_rows);
-
-        if app.max_visible() == 0 {
-            debug!("render request had zero visible rows");
+        if !app.popup_fits() {
+            debug!("terminal too small for a popup");
             self.fuzzy = Some(app.take_fuzzy());
             return Response::Empty;
         }
+
+        let scroll_bytes = scroll_for_popup(&mut app);
 
         if let Some(idx) = selected {
             app.set_selected(idx);
@@ -1504,44 +1491,29 @@ impl DaemonServer {
         command_position: bool,
         command_context: Option<&str>,
         filesystem: Arc<[Candidate]>,
-    ) -> Option<(App, Vec<u8>)> {
+    ) -> Option<App> {
         let literal_files_present = !filesystem.is_empty();
         let native_candidates_present =
             !filesystem.is_empty() || tsv.lines().any(|line| !line.is_empty());
         let mut candidates = filesystem.to_vec();
         candidates.extend(Candidate::parse_lines_dedup(tsv));
+        let set =
+            CompletionSet::from_native(&self.config, candidates, command_position, command_context);
 
-        candidates.extend(
-            self.config
-                .abbreviations
-                .iter()
-                .filter(|abbr| abbr.is_available_at(command_position, command_context))
-                .map(|abbr| {
-                    Candidate::abbreviation(
-                        abbr.trigger.clone(),
-                        abbr.expansion.clone(),
-                        abbr.description.clone(),
-                    )
-                }),
-        );
-
-        if candidates.is_empty() {
+        if set.is_empty() {
             let _ = write_apply_result(writer, &ApplyResult::no_candidates());
             return None;
         }
 
-        let fuzzy = self
-            .fuzzy
-            .take()
-            .unwrap_or_default()
-            .with_kind_order(self.config.kind_order);
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        // Without auto_insert_unambiguous the filter stays at the typed prefix,
+        // so cancel and passthrough paths never return an extended value.
         let initial_filter = InitialFilter::for_completion(
             prefix,
             self.config.auto_insert_unambiguous,
             literal_files_present,
         );
-        let mut app = App::new_with_initial_filter(
-            candidates,
+        let mut app = set.into_app(
             initial_filter,
             cursor_row,
             cursor_col,
@@ -1561,16 +1533,8 @@ impl DaemonServer {
             return None;
         }
 
-        let scroll_bytes = scroll_for_popup(&mut app, term_rows);
-
-        if app.max_visible() == 0 {
-            self.fuzzy = Some(app.take_fuzzy());
-            let _ = write_apply_result(writer, &ApplyResult::cancel(String::new()));
-            return None;
-        }
-
         app.select_first();
-        Some((app, scroll_bytes))
+        Some(app)
     }
 
     fn handle_complete<R: BufRead, W: Write>(
@@ -1596,7 +1560,7 @@ impl DaemonServer {
             shift_tab_sequence,
         } = params;
 
-        let (mut app, scroll_bytes) = match self.setup_session(
+        let mut app = match self.setup_session(
             writer,
             prefix,
             cursor_row,
@@ -1638,6 +1602,14 @@ impl DaemonServer {
             return;
         }
 
+        if !app.popup_fits() {
+            // No room to draw: let the shell fall back to native completion.
+            let _ = write_apply_result(writer, &ApplyResult::no_candidates());
+            self.fuzzy = Some(app.take_fuzzy());
+            return;
+        }
+
+        let scroll_bytes = scroll_for_popup(&mut app);
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         let prev_popup = prev_popup_row.zip(prev_popup_height);
         if self
@@ -1805,13 +1777,10 @@ impl DaemonServer {
                             break;
                         }
                         Action::Cancel => {
-                            let text = if app.filter_text != app.prefix {
-                                &app.filter_text
-                            } else {
-                                ""
-                            };
-                            let _ =
-                                write_apply_result(writer, &ApplyResult::cancel(text.to_string()));
+                            let _ = write_apply_result(
+                                writer,
+                                &ApplyResult::cancel(cancel_text(&app).to_string()),
+                            );
                             break;
                         }
                         Action::Resize(_, _) => {
@@ -1845,7 +1814,15 @@ impl DaemonServer {
                 }) => {
                     let previous_popup = crate::ui::popup::Popup::compute(&app);
                     app.set_terminal_state(cursor_row, cursor_col, term_cols, term_rows);
-                    let scroll_bytes = scroll_for_popup(&mut app, term_rows);
+                    if !app.popup_fits() {
+                        // The client clears the popup when the session ends.
+                        let _ = write_apply_result(
+                            writer,
+                            &ApplyResult::cancel(cancel_text(&app).to_string()),
+                        );
+                        break;
+                    }
+                    let scroll_bytes = scroll_for_popup(&mut app);
                     let new_popup = crate::ui::popup::Popup::compute(&app);
                     let (extra_prefix, prev_popup) =
                         if resize_requires_full_popup_clear(&previous_popup, &new_popup) {
@@ -2017,25 +1994,29 @@ fn resize_requires_full_popup_clear(
     previous_popup.col != new_popup.col || previous_popup.width != new_popup.width
 }
 
-/// Compute scroll-up bytes needed to make room for the popup below the
-/// cursor. `App` already sizes its viewport to `term_rows`.
-fn scroll_for_popup(app: &mut App, term_rows: u16) -> Vec<u8> {
-    if app.max_visible() == 0 {
-        return Vec::new();
+/// Text a cancelled session leaves in the buffer: the filter the user
+/// extended, or nothing when it still equals the typed prefix.
+fn cancel_text(app: &App) -> &str {
+    if app.filter_text != app.prefix {
+        &app.filter_text
+    } else {
+        ""
     }
+}
 
-    let popup_height = app.max_visible() as u16 + 2;
-    let space_below = term_rows.saturating_sub(app.cursor_row + 1);
+/// Compute scroll-up bytes needed to make room for the popup below the
+/// cursor, and move `app.cursor_row` up to match. Callers check
+/// `App::popup_fits` first.
+fn scroll_for_popup(app: &mut App) -> Vec<u8> {
     let mut scroll_bytes = Vec::new();
-    if space_below < popup_height {
-        let scroll_amount = (popup_height - space_below).min(app.cursor_row);
-        if scroll_amount > 0 {
-            let _ = crossterm::queue!(
-                &mut scroll_bytes,
-                crossterm::terminal::ScrollUp(scroll_amount)
-            );
-            app.cursor_row -= scroll_amount;
-        }
+    let scroll_amount =
+        ui::popup::Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
+    if scroll_amount > 0 {
+        let _ = crossterm::queue!(
+            &mut scroll_bytes,
+            crossterm::terminal::ScrollUp(scroll_amount)
+        );
+        app.cursor_row -= scroll_amount;
     }
     scroll_bytes
 }
@@ -2723,7 +2704,7 @@ mod tests {
             worker.join().unwrap();
         }
         let mut output = Vec::new();
-        let (app, _) = server
+        let app = server
             .setup_session(
                 &mut output,
                 "gs".into(),
@@ -3237,6 +3218,110 @@ mod tests {
         let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
         assert_eq!(frame.cursor_row, 1);
         assert_eq!(frame.popup_row, 2);
+    }
+
+    fn complete_params_for_terminal(
+        term_cols: u16,
+        term_rows: u16,
+        accept_single: bool,
+    ) -> CompleteParams {
+        CompleteParams {
+            filesystem: Arc::default(),
+            prefix: "g".to_string(),
+            cursor_row: 1,
+            cursor_col: 1,
+            term_cols,
+            term_rows,
+            prev_popup_row: None,
+            prev_popup_height: None,
+            command_position: false,
+            command_context: None,
+            accept_single,
+            reuse_popup: false,
+            shift_tab_sequence: None,
+        }
+    }
+
+    #[test]
+    fn handle_render_returns_empty_when_no_popup_fits() {
+        let mut server = test_server();
+        for (term_cols, term_rows) in [(80, 3), (7, 24)] {
+            let response = server.handle_render(
+                RenderParams {
+                    filesystem: Arc::default(),
+                    prefix: "g".to_string(),
+                    cursor_row: 1,
+                    cursor_col: 1,
+                    term_cols,
+                    term_rows,
+                    selected: None,
+                    command_position: false,
+                    command_context: None,
+                },
+                b"git\tcommand\tcommand\nglow\tcommand\tcommand\n",
+            );
+
+            assert!(
+                matches!(response, crate::protocol::Response::Empty),
+                "{term_cols}x{term_rows}"
+            );
+            assert!(server.fuzzy.is_some());
+        }
+    }
+
+    #[test]
+    fn handle_complete_falls_back_to_native_completion_when_no_popup_fits() {
+        let mut server = test_server();
+        for (term_cols, term_rows) in [(80, 3), (7, 24)] {
+            let mut reader = run_complete_session(
+                &mut server,
+                complete_params_for_terminal(term_cols, term_rows, false),
+                "git\tcommand\tcommand\nglow\tcommand\tcommand\n",
+                &[],
+            );
+
+            let (done, _) = read_done(&mut reader);
+            assert!(
+                done.starts_with("DONE 4"),
+                "{term_cols}x{term_rows}: {done}"
+            );
+            assert!(server.fuzzy.is_some());
+        }
+    }
+
+    #[test]
+    fn handle_complete_accepts_a_single_candidate_when_no_popup_fits() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            complete_params_for_terminal(80, 3, true),
+            "git\tcommand\tcommand\n",
+            &[],
+        );
+
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 0 git"), "{done}");
+    }
+
+    #[test]
+    fn handle_complete_cancels_when_a_resize_leaves_no_room() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            complete_params_for_terminal(80, 24, false),
+            "git\tcommand\tcommand\nglow\tcommand\tcommand\n",
+            &[SessionMessage::Resize {
+                cursor_row: 1,
+                cursor_col: 1,
+                term_cols: 80,
+                term_rows: 3,
+            }],
+        );
+
+        let _ = read_frame(&mut reader);
+        let (done, _) = read_done(&mut reader);
+        assert!(done.starts_with("DONE 1"), "{done}");
+        assert!(server.fuzzy.is_some());
     }
 
     #[test]
@@ -3791,6 +3876,41 @@ mod tests {
 
         let output = String::from_utf8(writer).unwrap();
         assert!(output.starts_with("DONE 0 >/dev/null\n"), "{output}");
+    }
+
+    #[test]
+    fn handle_complete_keeps_native_subcommands_before_argument_abbreviations() {
+        for (command_position, expected) in [(false, "DONE 0 status"), (true, "DONE 0 tsfmt")] {
+            let mut server = test_server();
+            server.config.abbreviations = vec![crate::config::Abbreviation {
+                trigger: "ts".to_string(),
+                expansion: "tsfmt".to_string(),
+                description: String::new(),
+                when: crate::config::AbbreviationWhen::at_position(
+                    crate::config::AbbreviationPosition::Any,
+                ),
+            }];
+
+            let mut output_reader = run_complete_session(
+                &mut server,
+                CompleteParams {
+                    prefix: String::new(),
+                    command_position,
+                    ..complete_params_for_terminal(80, 24, false)
+                },
+                // Native subcommands arrive without a kind. The longer
+                // subcommand must still precede the shorter abbreviation.
+                "status\tshow the working tree status\t\n",
+                &[SessionMessage::Key(b"\r")],
+            );
+            let _ = read_frame(&mut output_reader);
+            let (done, _) = read_done(&mut output_reader);
+            let done = done.strip_suffix('\n').unwrap_or(&done);
+            assert!(
+                done.starts_with(expected),
+                "command_position={command_position}: {done}"
+            );
+        }
     }
 
     #[test]
