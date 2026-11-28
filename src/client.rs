@@ -221,22 +221,22 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 // Terminals that move their content on resize move the cursor
                 // with it, so ask where it is now. While an earlier reply is
                 // still due, the terminal is slow or silent: do not wait again.
-                let reported = loop {
-                    let reported = if late_replies == 0 {
-                        let reported = query_cursor(&mut tty, &mut tty_writer, &mut typed)?;
-                        late_replies += usize::from(reported.is_none());
-                        reported
-                    } else {
-                        None
-                    };
+                // Without a reply, keep the last known position.
+                let (mut row, mut col) = (state.cursor_row, state.cursor_col);
+                loop {
+                    if late_replies == 0
+                        && let Some(reported) =
+                            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies)?
+                    {
+                        (row, col) = reported;
+                    }
                     // Dragging a window resizes it again and again: redraw
                     // only for the size it settles on.
                     if !drain_resize_pipe(&mut sigwinch_pipe.reader)? {
-                        break reported;
+                        break;
                     }
                     (term_cols, term_rows) = terminal_size();
-                };
-                let (row, col) = reported.unwrap_or((state.cursor_row, state.cursor_col));
+                }
                 // As the daemon does, so both move the popup by the same rows.
                 let cursor_row = row.min(term_rows.saturating_sub(1));
                 let cursor_col = col.min(term_cols.saturating_sub(1));
@@ -249,6 +249,9 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
             }
         };
         if let Some(result) = result {
+            // A reply that arrived after the session would reach the shell
+            // as typed input.
+            discard_late_replies(&mut tty, &mut typed, late_replies)?;
             raw_mode.restore();
             state.clear_popup(&mut tty_writer)?;
             return Ok((result, typed.into_iter().flatten().collect()));
@@ -476,29 +479,64 @@ enum SessionEvent {
 const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Asks the terminal for the cursor position. Keys that arrive before the
-/// reply go to `typed`. Returns `None` if the terminal does not reply in time.
+/// reply go to `typed`. Returns `None` if the query cannot be written or the
+/// terminal does not reply in time; a reply still due counts in `late_replies`.
 fn query_cursor(
     tty: &mut File,
     tty_writer: &mut File,
     typed: &mut VecDeque<Vec<u8>>,
+    late_replies: &mut usize,
 ) -> Result<Option<(u16, u16)>, DaemonUnavailable> {
-    tty_writer
+    if tty_writer
         .write_all(b"\x1b[6n")
         .and_then(|_| tty_writer.flush())
-        .map_err(|_| DaemonUnavailable::NotRunning)?;
+        .is_err()
+    {
+        return Ok(None);
+    }
     let deadline = Instant::now() + CURSOR_REPLY_TIMEOUT;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        let mut fds = [readable(tty)];
-        if left.is_zero() || poll_retry(&mut fds, Some(left))? == 0 {
-            return Ok(None);
-        }
-        let key = read_key(tty)?;
+    while let Some(key) = read_key_before(tty, deadline)? {
         if let Some(position) = parse_cursor_report(&key) {
             return Ok(Some(position));
         }
         typed.push_back(key);
     }
+    *late_replies += 1;
+    Ok(None)
+}
+
+/// Waits up to `CURSOR_REPLY_TIMEOUT` for `late_replies` cursor position
+/// replies and drops them. Other keys go to `typed`.
+fn discard_late_replies(
+    tty: &mut File,
+    typed: &mut VecDeque<Vec<u8>>,
+    mut late_replies: usize,
+) -> Result<(), DaemonUnavailable> {
+    let deadline = Instant::now() + CURSOR_REPLY_TIMEOUT;
+    while late_replies > 0 {
+        let Some(key) = read_key_before(tty, deadline)? else {
+            break;
+        };
+        if parse_cursor_report(&key).is_some() {
+            late_replies -= 1;
+        } else {
+            typed.push_back(key);
+        }
+    }
+    Ok(())
+}
+
+/// Reads one key if one arrives before `deadline`.
+fn read_key_before(
+    tty: &mut File,
+    deadline: Instant,
+) -> Result<Option<Vec<u8>>, DaemonUnavailable> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    let mut fds = [readable(tty)];
+    if left.is_zero() || poll_retry(&mut fds, Some(left))? == 0 {
+        return Ok(None);
+    }
+    read_key(tty).map(Some)
 }
 
 /// Parses a cursor position report, `ESC [ row ; col R`, into a 0-based row
@@ -946,10 +984,13 @@ mod tests {
         terminal.write_all(b"a\x1b[B\x1b[12;5R").unwrap();
 
         let mut typed = VecDeque::new();
-        let position = query_cursor(&mut tty, &mut tty_writer, &mut typed).unwrap();
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
 
         assert_eq!(position, Some((11, 4)));
         assert_eq!(typed, [b"a".to_vec(), b"\x1b[B".to_vec()]);
+        assert_eq!(late_replies, 0);
         drop(tty_writer);
         let mut asked = Vec::new();
         queries.read_to_end(&mut asked).unwrap();
@@ -962,10 +1003,40 @@ mod tests {
         let (_queries, mut tty_writer) = file_pipe();
         let mut typed = VecDeque::new();
 
-        let position = query_cursor(&mut tty, &mut tty_writer, &mut typed).unwrap();
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
 
         assert_eq!(position, None);
         assert!(typed.is_empty());
+        assert_eq!(late_replies, 1);
+    }
+
+    #[test]
+    fn query_cursor_expects_no_reply_to_a_query_it_could_not_send() {
+        let (mut tty, _terminal) = file_pipe();
+        let (queries, mut tty_writer) = file_pipe();
+        drop(queries);
+        let mut typed = VecDeque::new();
+
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
+
+        assert_eq!(position, None);
+        assert_eq!(late_replies, 0);
+    }
+
+    #[test]
+    fn discard_late_replies_keeps_the_keys_around_them() {
+        let (mut tty, mut terminal) = file_pipe();
+        terminal.write_all(b"x\x1b[3;4Ry").unwrap();
+        let mut typed = VecDeque::new();
+
+        discard_late_replies(&mut tty, &mut typed, 1).unwrap();
+
+        // Keys after the last reply stay in the terminal for the shell.
+        assert_eq!(typed, [b"x".to_vec()]);
     }
 
     #[test]
