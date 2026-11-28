@@ -827,33 +827,63 @@ mod tests {
     }
 
     /// Replays popup output on a grid with the terminal behavior that matters
-    /// at the right margin: after a character in the last column, the cursor
-    /// stays there with a wrap pending, so erasing to the end of the line
-    /// erases that character (xterm, Windows Terminal; tmux differs).
+    /// at the right margin (xterm, Windows Terminal; tmux differs): after a
+    /// character in the last column, the cursor stays there with a wrap
+    /// pending. Erasing to the end of the line then erases that character,
+    /// and the next character goes to the start of the next row.
     fn replay_on_screen(bytes: &[u8], screen: &mut [Vec<char>]) {
         use termwiz::escape::{
             Action,
             csi::{CSI, Cursor, Edit, EraseInLine},
             parser::Parser,
         };
-        let cols = screen[0].len();
-        let (mut x, mut y) = (0, 0);
-        let put = |c: char, x: &mut usize, y: &mut usize, screen: &mut [Vec<char>]| {
-            screen[*y][*x] = c;
-            *x = (*x + 1).min(cols - 1);
+        struct Cell {
+            x: usize,
+            y: usize,
+            wrap_pending: bool,
+        }
+        let (cols, rows) = (screen[0].len(), screen.len());
+        let mut at = Cell {
+            x: 0,
+            y: 0,
+            wrap_pending: false,
+        };
+        let put = |c: char, at: &mut Cell, screen: &mut [Vec<char>]| {
+            if at.wrap_pending {
+                (at.x, at.y, at.wrap_pending) = (0, (at.y + 1).min(rows - 1), false);
+            }
+            screen[at.y][at.x] = c;
+            if at.x + 1 == cols {
+                at.wrap_pending = true;
+            } else {
+                at.x += 1;
+            }
         };
         Parser::new().parse(bytes, |action| match action {
-            Action::Print(c) => put(c, &mut x, &mut y, screen),
-            Action::PrintString(s) => s.chars().for_each(|c| put(c, &mut x, &mut y, screen)),
+            Action::Print(c) => put(c, &mut at, screen),
+            Action::PrintString(s) => s.chars().for_each(|c| put(c, &mut at, screen)),
             Action::CSI(CSI::Cursor(Cursor::Position { line, col })) => {
-                y = line.as_zero_based() as usize;
-                x = col.as_zero_based() as usize;
+                at = Cell {
+                    x: col.as_zero_based() as usize,
+                    y: line.as_zero_based() as usize,
+                    wrap_pending: false,
+                };
             }
             Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine))) => {
-                screen[y][x..].fill(' ');
+                screen[at.y][at.x..].fill(' ');
             }
             _ => {}
         });
+    }
+
+    #[test]
+    fn screen_replay_wraps_after_the_last_column_and_erases_at_it() {
+        let mut screen = vec![vec![' '; 4]; 2];
+        // "abcd" fills the row; "\x1b[K" erases the "d" under the cursor;
+        // "e" then wraps to the next row.
+        replay_on_screen(b"abcd\x1b[Ke", &mut screen);
+        assert_eq!(screen[0].iter().collect::<String>(), "abc ");
+        assert_eq!(screen[1].iter().collect::<String>(), "e   ");
     }
 
     #[test]
