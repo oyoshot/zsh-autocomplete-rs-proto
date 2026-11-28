@@ -35,7 +35,7 @@ WithoutEngineCompare violated
 WithoutPostGather violated
 WithoutEditCheck violated
 OutsideChanges violated
-WrongEstimate violated
+WrongDeclaration violated
 CONFIGS
 rm -rf "$scratch"
 exit $status

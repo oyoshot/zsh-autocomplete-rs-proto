@@ -33,15 +33,15 @@ could have, the decision belongs in the engine and the adapter sends the inputs.
 | Candidates | yes | Native completion, shell tables | Text, and description and kind where the shell has them |
 | Lookup environment | yes | `PWD`, `HOME`, the options that change completion | Sent as values, not folded into a key the engine cannot read |
 | Command context | no | Native lexer | Command words through the cursor, and whether the cursor is on the command word |
-| How candidates were produced | no | The intercepted `compadd` calls | An observation the engine may use as evidence; see "First use" |
+| Whether a candidate set is independent of the typed prefix | no | Declared by the source of the set; native completers cannot declare it | See "First use" |
 | Terminal cursor position | no | A terminal query | The engine asks the terminal itself when the adapter cannot |
 | Pending input | no | `PENDING` | So the engine's answer can be skipped, not so the adapter decides |
 | A call on every key | no | The `line-pre-redraw` hook | Without it the adapter serves Tab only |
 
 A shell that cannot supply a required fact from its own facilities does not get
 an adapter. When an optional fact is missing the engine takes the cautious
-answer: without "how candidates were produced" it never reuses a set for a
-longer prefix, and without a call on every key there is no automatic popup.
+answer: a set not declared independent of the prefix is never reused for a
+longer one, and without a call on every key there is no automatic popup.
 
 ## What the engine returns
 
@@ -152,7 +152,7 @@ lack candidates.
 | `WithoutPostGather` | As `Rule8`, without 8.2 | Violated: a completer changes the directory and the result is drawn as if it had not |
 | `WithoutEditCheck` | As `Rule8`, without 8.3 | Violated: the directory changes after the picker closes and the edit is still applied |
 | `OutsideChanges` | Also from outside the shell | Violated, as "Not protected" says |
-| `WrongEstimate` | As `Rule8`, and a set may be wrongly taken as independent of the prefix | Violated: a reused set lacks candidates |
+| `WrongDeclaration` | As `Rule8`, and a source may wrongly declare its set independent of the prefix | Violated: a reused set lacks candidates |
 
 Each part of rule 8 is therefore needed, and together they are enough, within
 the model. `sh docs/design/adapter-contract-spec/check.sh` runs all seven and
@@ -168,7 +168,7 @@ What the results rest on:
 - The word position stands for everything else in the edit state: the other
   words, the cursor and the text after it. The model does not look inside it.
 - Whether a set depends on the typed prefix is given to the model, not derived.
-  `WrongEstimate` shows what follows when it is given wrongly.
+  `WrongDeclaration` shows what follows when it is given wrongly.
 - Nothing ties the specification's actions to the Rust or Zsh sources. It checks
   the design, not the code.
 
@@ -219,21 +219,34 @@ The last row is a defect, not a design gap.
 ## First use: reusing a gathered set for longer prefixes
 
 Today the cache serves a stored set only for the identical prefix, so every new
-character runs native completion again. Two separate things change.
+character runs native completion again.
 
 **The mechanism.** The engine may serve a stored set for a longer prefix in an
 otherwise equal snapshot, filtering it itself. This is correct exactly when
 gathering with the longer prefix would return the stored set filtered by that
-prefix.
+prefix. Call such a set independent of the prefix.
 
-**The estimate.** Nothing the adapter can observe proves that. The engine uses
-this evidence: the set was gathered with a non-empty prefix, and in every
-native `compadd` call more words were passed than matched. A completer that
-passes words which do not match the typed prefix is usually listing everything
-and letting `compadd` filter.
+**Who may say so.** Only the source of the set, as a declaration it can stand
+behind:
 
-The estimate can be wrong. A completer may choose its list from the prefix and
-still pass words that do not match:
+- A provider the engine owns knows its own behavior. The file provider lists
+  one directory, and that listing serves every longer prefix inside it.
+- The user can declare a command context in configuration, for example that the
+  arguments of `yay -S` are a fixed list.
+- A native completer is arbitrary code and declares nothing. Its sets are served
+  for the identical snapshot only, as today.
+
+Without a declaration the engine requires an exact match. Nothing is inferred.
+
+### Considered and not adopted: inferring independence
+
+An earlier draft had the engine infer independence from what the adapter can
+observe: the set was gathered with a non-empty prefix, and every native
+`compadd` call was passed more words than matched. It is not adopted, for two
+reasons.
+
+It is not sound. A completer may choose its list from the prefix and still pass
+words that do not match:
 
 ```zsh
 _example() {
@@ -245,24 +258,19 @@ _example() {
 }
 ```
 
-At `a` three words are passed and two match, so the set looks independent of
-the prefix. At `ab` native completion offers `abc` and `abcd`; the stored set
-has neither. The estimate is therefore engine policy with a way to turn it off,
-not a guarantee, and a wrong estimate costs missing candidates until the next
-gather.
+At `a` three words are passed and two match, so the set looks independent. At
+`ab` native completion offers `abc` and `abcd`; the stored set has neither.
 
-Measured on one machine over the 468 installed commands that have a completer
-(about 20,000 inputs, 35,799 pairs of a prefix and a longer one):
+Its benefit is not shown. Measured on one machine over the 468 installed
+commands that have a completer (about 20,000 inputs, 35,799 pairs of a prefix
+and a longer one), the inference would have reused 4,041 pairs, 11%, or 3,703
+of the 16,278 typed-prefix gathers that returned candidates, 23%. No pair missed
+a candidate because of the inference, and the 251 pairs where a longer prefix
+produced new candidates were all refused. But that counts how often it would
+apply, not how much sooner a popup appears. Native completion took 9 to 15 ms
+for `git` and `sudo` and about 400 ms for `yay -S` on that machine; where it is
+already fast, skipping it buys little.
 
-- The estimate would reuse 4,041 pairs, 11% of all pairs. Counted by input,
-  3,703 of the 16,278 typed-prefix gathers that returned candidates qualify,
-  23%. File-name completion is not among them.
-- Three reused pairs missed a candidate, each because the system changed
-  between the two runs (a process appeared; another completer defined a
-  function).
-- The 251 pairs where a longer prefix produced new candidates, including
-  `chmod a` to `chmod ag` and `tar A` to `tar Af`, all fell on the "Gather"
-  side.
-
-No completer of the `_example` kind was among the 468. That is an observation
-about one machine, not a bound.
+Revisit it when profiling of key-to-popup time shows that re-running native
+completion dominates in contexts a declaration cannot cover. That needs the
+latency target listed under "Not yet specified".

@@ -31,7 +31,7 @@ CONSTANTS
     EditCheck,           \* rule 8c: an edit is applied only if the snapshot is unchanged
     InShellChanges,      \* env may change inside the shell with no hook following
     External,            \* the world may change while the shell is busy
-    EstimateMayBeWrong   \* "does not depend on the prefix" may be claimed wrongly
+    DeclarationMayBeWrong  \* a source may wrongly declare its set independent of the prefix
 
 VARIABLES ctx, env, prefix, cache, popup, job, bad
 vars == <<ctx, env, prefix, cache, popup, job, bad>>
@@ -44,7 +44,8 @@ NoPopup == [shown |-> FALSE, known |-> FALSE]
 IsPrefix(s, t) == Len(s) <= Len(t) /\ SubSeq(t, 1, Len(s)) = s
 
 \* The reuse rule: the identical prefix, or an extension of it when the set was
-\* gathered with a typed prefix and is claimed not to depend on it.
+\* gathered with a typed prefix and its source declared it independent of the
+\* prefix.
 Covers(e, p) == e.src = p \/ (e.claimed /\ Len(e.src) > 0 /\ IsPrefix(e.src, p))
 
 Flag(ok, name) == IF ok \/ bad # "none" THEN bad ELSE name
@@ -127,7 +128,7 @@ ChangeDuringJob ==
 GatherDone ==
     /\ job.kind = "gather"
     /\ \E really \in BOOLEAN :
-       \E claimed \in (IF EstimateMayBeWrong THEN BOOLEAN ELSE {really}) :
+       \E claimed \in (IF DeclarationMayBeWrong THEN BOOLEAN ELSE {really}) :
         job' = [kind |-> "gathered", snap |-> job.snap, why |-> job.why, post |-> Snap,
                 genv |-> env, really |-> really, claimed |-> claimed]
     /\ UNCHANGED <<ctx, env, prefix, cache, popup, bad>>
