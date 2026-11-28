@@ -192,7 +192,8 @@ CARGO_TARGET_DIR=target cargo bench --bench zle_bench -- \
 This uses isolated HOME/config/runtime directories, a reused daemon, and plain
 adapters. It records startup and queued-key workload latency with completion
 drawing suppressed, including terminal output and control-key overhead. It does
-not measure request-to-visible-candidate latency or cold daemon startup.
+not measure cold daemon startup; for the time until candidates are visible, see
+the popup workload below.
 The input fixture runs `compinit -i -D`, excluding insecure system completion
 directories without prompting and scanning completion definitions for each shell.
 The harness uses development-only `portable-pty`, `filedescriptor`, and
@@ -202,6 +203,37 @@ and Git. Its default binary is
 another build with `--binary`. Building the harness is outside all timed intervals.
 Omitting the baseline uses the current adapter for both variants as a smoke
 check. Supply a baseline from another revision for a performance comparison.
+
+### Key to popup
+
+The popup workload times the interval a user waits: from the last key written
+to the terminal until the popup frame has been written back in full.
+
+```sh
+CARGO_TARGET_DIR=target cargo build --release
+CARGO_TARGET_DIR=target cargo bench --bench zle_bench -- \
+    /path/to/baseline/shell/zsh-autocomplete-rs.plugin.zsh \
+    --workload popup --samples 200 --warmups 10 --output /tmp/zacrs-popup.toml
+```
+
+Both adapters stay open in their own terminals, share one daemon and take turns,
+going first alternately, so drift in the machine affects them alike. Before each
+timed key the harness waits until the shell has finished with the previous one.
+Each turn measures two keys for a completer that lists 100 words and for one
+that lists 10,000:
+
+- `gather_*_ms`: a key that makes the adapter run native completion and send
+  the result.
+- `cached_*_ms`: a key the daemon answers from its cache, without native
+  completion.
+
+The completers return a fixed list, so the figures are the adapter's and the
+engine's own cost. A real completer adds its running time to the gather case.
+The harness answers the adapter's cursor position queries at once; a real
+terminal takes longer. The subprocess path, a cold daemon, the Tab picker and
+file candidates are not measured. The report gives the median and the 90th
+percentile of each metric, and the 99th from 100 samples up; below that it
+would only repeat the maximum.
 
 ### Shell startup comparisons
 
