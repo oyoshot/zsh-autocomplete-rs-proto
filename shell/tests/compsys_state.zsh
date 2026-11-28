@@ -57,8 +57,22 @@ _zacrs_state_test_completion() {
             compadd -U -V kept -- "beta" "alpha"
             compadd -U -J later -- "eta"
             ;;
+        # Command position after a pipe. Each name takes the kind of what it
+        # runs as; echo is both a builtin and a command.
+        command-names|command-after-nohup)
+            compadd -U -- zacrs-alias zacrs-fn echo ls _zacrs_private CDPATH
+            ;;
+        # Enough names to take the set operations instead of name lookups.
+        command-names-many)
+            compadd -U -- CDPATH x{01..30} _zacrs_private ls echo zacrs-fn zacrs-alias
+            ;;
+        # The format style adds a group description to every call.
+        command-names-described)
+            compadd -U -X "names" -- CDPATH x{01..30} _zacrs_private ls echo zacrs-fn zacrs-alias
+            ;;
+        command-paths) compadd -U -- zacrs-alias ./local echo ;;
     esac
-    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash|groups) ]]; then
+    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash|groups|command-*) ]]; then
         print -rl -- "${_zacrs_captured[@]}" > "$ZACRS_STATE_MARKER"
         return 0
     fi
@@ -69,6 +83,10 @@ _zacrs_state_test_completion() {
 }
 
 compdef _zacrs_state_test_completion zacrs-state-test
+compdef _zacrs_state_test_completion -command-
+alias zacrs-alias=true
+zacrs-fn() { : }
+_zacrs_private() { : }
 bindkey -M emacs "^T" _zacrs_compsys
 bindkey -M viins "^T" _zacrs_compsys
 PROMPT="READY> "
@@ -101,7 +119,7 @@ run_case() {
         return 1
     fi
 
-    zpty -w -n zacrs_compsys_state $'zacrs-state-test x\x14'
+    zpty -w -n zacrs_compsys_state "${ZACRS_STATE_INPUT:-zacrs-state-test x}"$'\x14'
     for (( i = 0; i < 200; i++ )); do
         [[ "$(<"$ZACRS_STATE_MARKER")" == "$expected" ]] && break
         sleep 0.01
@@ -133,3 +151,25 @@ run_case description $'alpha\tpackage entries\t\t1\t\nbeta\tpackage entries\t\t1
 run_case mapped-description $'alpha\tfirst entry\t\t1\t\nbeta\tsecond entry\t\t1\t'
 run_case slash $'alpha\t\t\t1\t\ndirectory/\t\tdirectory\t1\t'
 run_case groups $'zeta\t\t\t1\t\nbeta\t\t\t2\tkeep\nalpha\t\t\t2\tkeep\neta\t\t\t1\t'
+
+# Command names are captured by kind; a path takes the per-name route and
+# keeps the order the names were added.
+export ZACRS_STATE_INPUT='true | '
+run_case command-names $'zacrs-alias\t\talias\t1\t\nzacrs-fn\t\tfunction\t1\t\necho\t\tbuiltin\t1\t\nls\t\tcommand\t1\t\n_zacrs_private\t\t\t1\t\nCDPATH\t\t\t1\t'
+run_case command-paths $'zacrs-alias\t\talias\t1\t\n./local\t\t\t1\t\necho\t\tbuiltin\t1\t'
+# Names after a precommand take no kind from what they are in this shell,
+# even though nohup's completer shifts the words so that the name is the
+# first word in the -command- context again.
+export ZACRS_STATE_INPUT='nohup '
+run_case command-after-nohup $'zacrs-alias\t\t\t1\t\nzacrs-fn\t\t\t1\t\necho\t\t\t1\t\nls\t\t\t1\t\n_zacrs_private\t\t\t1\t\nCDPATH\t\t\t1\t'
+export ZACRS_STATE_INPUT='true | '
+# Names come out by kind, each kind in the order it was added.
+typeset -a many=( $'zacrs-alias\t\talias\t1\t' $'zacrs-fn\t\tfunction\t1\t' $'echo\t\tbuiltin\t1\t' $'ls\t\tcommand\t1\t' )
+typeset -a kindless=( CDPATH x{01..30} _zacrs_private )
+many+=( ${^kindless}$'\t\t\t1\t' )
+run_case command-names-many "${(pj:\n:)many}"
+# The same names with a group description keep the bulk route and take the
+# description, as names looked up one by one do.
+typeset no_description=$'\t\t' described=$'\tnames\t'
+run_case command-names-described "${(pj:\n:)${(@)many/$no_description/$described}}"
+unset ZACRS_STATE_INPUT

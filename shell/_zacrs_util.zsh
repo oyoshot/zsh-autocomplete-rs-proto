@@ -239,6 +239,8 @@ _zacrs_should_render_candidates() {
 
 # Infer the shell command kind for a bare command-position token.
 # Sets REPLY to one of: alias, builtin, function, command.
+# _zacrs_command_kind_lists and _zacrs_capture_command_names apply the same
+# precedence to many names at once; keep them in step.
 _zacrs_command_kind() {
     local name="$1"
     REPLY=""
@@ -257,4 +259,14 @@ _zacrs_command_kind() {
     fi
 
     return 0
+}
+
+# Fill the caller's _zacrs_alias_names, _zacrs_function_names,
+# _zacrs_builtin_names and _zacrs_command_names with the names that
+# _zacrs_command_kind would check for each kind.
+_zacrs_command_kind_lists() {
+    _zacrs_alias_names=( ${(k)aliases} )
+    _zacrs_function_names=( ${(k)functions:#_*} )
+    _zacrs_builtin_names=( ${(k)builtins} )
+    _zacrs_command_names=( ${(k)commands} )
 }

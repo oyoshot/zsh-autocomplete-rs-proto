@@ -164,6 +164,41 @@ _zacrs_compadd_group() {
     return 0
 }
 
+# Append many command names in _zacrs_cap to _zacrs_captured, each with the
+# kind _zacrs_command_kind gives it. One set operation per kind, in the same
+# precedence, replaces a function call per name, which dominated capture
+# time for the thousands of names after a pipe; the name lists are built on
+# first use, so a few names are cheaper looked up one by one. Kinds are
+# ranked before source order, so splitting by kind keeps the result.
+# Each name takes the call's group description (_xdesc), as in the per-name
+# loop. Uses _zacrs_cap, _xdesc and _group_columns of the compadd override,
+# and _zacrs_kind_lists_ready and the _zacrs_*_names lists of
+# _zacrs_compsys_func.
+_zacrs_capture_command_names() {
+    local _kind _metadata _description=$'\t'"$_xdesc"$'\t'
+    if (( ! _zacrs_kind_lists_ready )); then
+        _zacrs_command_kind_lists
+        _zacrs_kind_lists_ready=1
+    fi
+    local -a _rest=( "${_zacrs_cap[@]}" ) _part
+    for _kind in alias function builtin command; do
+        # The set operators take an array name, not an expansion, so name
+        # each list rather than copying thousands of names per call.
+        case $_kind in
+            alias) _part=( "${(@)_rest:*_zacrs_alias_names}" ) ;;
+            function) _part=( "${(@)_rest:*_zacrs_function_names}" ) ;;
+            builtin) _part=( "${(@)_rest:*_zacrs_builtin_names}" ) ;;
+            command) _part=( "${(@)_rest:*_zacrs_command_names}" ) ;;
+        esac
+        (( ${#_part} )) || continue
+        _rest=( "${(@)_rest:|_part}" )
+        _metadata="$_description$_kind$_group_columns"
+        _zacrs_captured+=( "${(@)_part/%/$_metadata}" )
+    done
+    _metadata="$_description$_group_columns"
+    _zacrs_captured+=( "${(@)_rest/%/$_metadata}" )
+}
+
 _zacrs_compsys_func() {
     # Reuse the native completion widget without running candidate providers,
     # initializing compsys, or mutating its captured-candidate state.
@@ -178,8 +213,15 @@ _zacrs_compsys_func() {
     typeset -gi _zacrs_ctx_valid=0
     typeset -g  _zacrs_ctx_prefix=""
     typeset -gi _zacrs_ctx_prefix_len=0
-    local _zacrs_cmd_pos=0
-    _zacrs_is_cmd_pos "$LBUFFER" "${LBUFFER##* }" && _zacrs_cmd_pos=1
+    # Names by what they run as, for _zacrs_capture_command_names.
+    local -a _zacrs_alias_names _zacrs_function_names _zacrs_builtin_names _zacrs_command_names
+    local -i _zacrs_kind_lists_ready=0
+    # Whether the engine is told the cursor is in command position.
+    local -i _zacrs_line_cmd_pos=0
+    () {
+        local REPLY _zacrs_command_context_is_command=0
+        _zacrs_command_context "$LBUFFER" && _zacrs_line_cmd_pos=$_zacrs_command_context_is_command
+    }
 
     [[ -n "$ZACRS_DEBUG" ]] && print -r -- "=== compsys $(date '+%H:%M:%S') BUFFER='$BUFFER' LBUFFER='$LBUFFER' ===" >> "$ZACRS_LOG"
 
@@ -234,8 +276,16 @@ _zacrs_compsys_func() {
 
             local -a _zacrs_cap=()
             builtin compadd -O _zacrs_cap "$@" 2>/dev/null
+            # Names take their kind where compsys completes command names (the
+            # -command- context, which _main_complete and the _normal entry
+            # both set) and the line is in command position, as the engine is
+            # told. Precommands such as sudo, command or nohup also reach
+            # -command-, but run external programs, so names after them take
+            # no kind from what they are in this shell.
+            local -i _zacrs_cmd_pos=0
+            [[ "$curcontext" == *:-command-:* ]] && (( _zacrs_line_cmd_pos )) && _zacrs_cmd_pos=1
 
-            [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
+            [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 context=$curcontext current=$CURRENT args: ${(j: :)${(@q)@}}"
 
             # Every match of this call shares its source group columns.
             local _group_columns=""
@@ -250,14 +300,24 @@ _zacrs_compsys_func() {
             fi
 
             local _full_prefix="${IPREFIX}${_hidden_prefix}${_vis_prefix}"
-            # Plain argument matches share empty description/kind metadata.
+            # Plain argument matches share their metadata: the call's group
+            # description (-X, which the format style adds) and no kind.
             # Format them in one expansion rather than looping over large
-            # package lists in the interactive shell.
-            if (( ! _is_file && ! _zacrs_cmd_pos && ${#_desc_map} == 0 )) \
-                && [[ -z "${_full_prefix}${_vis_suffix}${_xdesc}" ]] \
-                && (( ${_zacrs_cap[(I)*/]} == 0 )); then
-                local _zacrs_plain_metadata=$'\t\t'"$_group_columns"
-                _zacrs_captured+=( "${(@)_zacrs_cap/%/$_zacrs_plain_metadata}" )
+            # package lists in the interactive shell. Many command names in
+            # command position get their kind from name lists the same way,
+            # as long as none of them is a path; a few are looked up one by
+            # one below.
+            if (( ! _is_file && ${#_desc_map} == 0 )) \
+                && [[ -z "${_full_prefix}${_vis_suffix}" ]] \
+                && (( ${_zacrs_cap[(I)*/]} == 0 )) \
+                && (( ! _zacrs_cmd_pos \
+                    || ( ${#_zacrs_cap} >= 32 && ${_zacrs_cap[(I)*/*]} == 0 ) )); then
+                if (( _zacrs_cmd_pos )); then
+                    _zacrs_capture_command_names
+                else
+                    local _zacrs_plain_metadata=$'\t'"$_xdesc"$'\t'"$_group_columns"
+                    _zacrs_captured+=( "${(@)_zacrs_cap/%/$_zacrs_plain_metadata}" )
+                fi
             else
                 local _m _path
                 for _m in "${_zacrs_cap[@]}"; do
