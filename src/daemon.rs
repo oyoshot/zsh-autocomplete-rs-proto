@@ -1203,7 +1203,8 @@ impl DaemonServer {
             } => {
                 let stale_clear_bytes = match prev_popup {
                     Some(prev) => {
-                        let (row, height) = rows_after_scroll(prev, rows);
+                        let (row, height) =
+                            ui::popup::rows_moved(prev, -i32::from(rows), app.term_rows);
                         ui::render::clear_stale_rows_to_bytes(row, height, &popup)?
                     }
                     None => Vec::new(),
@@ -1679,6 +1680,9 @@ impl DaemonServer {
                     term_rows,
                 }) => {
                     let previous_popup = crate::ui::popup::Popup::compute(&app);
+                    // A terminal that moves its content on resize moves the
+                    // cursor with it; the client asks the terminal where.
+                    let moved = i32::from(cursor_row) - i32::from(app.cursor_row);
                     app.set_terminal_state(cursor_row, cursor_col, term_cols, term_rows);
                     if !app.popup_fits() {
                         // The client clears the popup when the session ends.
@@ -1694,7 +1698,11 @@ impl DaemonServer {
                     let before = FramePrefix::Scroll {
                         bytes: &scroll_bytes,
                         rows: scrolled,
-                        prev_popup: Some((previous_popup.row, previous_popup.height)),
+                        prev_popup: Some(ui::popup::rows_moved(
+                            (previous_popup.row, previous_popup.height),
+                            moved,
+                            term_rows,
+                        )),
                     };
                     if self.send_frame(writer, &app, before, false, None).is_err() {
                         break;
@@ -1880,13 +1888,6 @@ fn scroll_for_popup(app: &mut App) -> (Vec<u8>, u16) {
     (scroll_bytes, scroll_amount)
 }
 
-/// Where rows `(row, height)` end up after the screen scrolls up `scrolled`
-/// rows. Rows pushed off the top are dropped.
-fn rows_after_scroll((row, height): (u16, u16), scrolled: u16) -> (u16, u16) {
-    let lost = scrolled.saturating_sub(row);
-    (row.saturating_sub(scrolled), height.saturating_sub(lost))
-}
-
 fn init_tracing() {
     if std::env::var_os("RUST_LOG").is_none() {
         return;
@@ -1951,7 +1952,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 mod tests {
     use super::{
         CompleteParams, DaemonServer, FramePrefix, RenderParams, read_prefix_and_candidates,
-        read_text_line, rows_after_scroll,
+        read_text_line,
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
@@ -2843,11 +2844,47 @@ mod tests {
     }
 
     #[test]
-    fn rows_after_scroll_drops_rows_pushed_off_the_top() {
-        assert_eq!(rows_after_scroll((14, 4), 0), (14, 4));
-        assert_eq!(rows_after_scroll((14, 4), 9), (5, 4));
-        assert_eq!(rows_after_scroll((3, 5), 5), (0, 3));
-        assert_eq!(rows_after_scroll((3, 2), 9), (0, 0));
+    fn handle_complete_resize_follows_content_the_terminal_moved() {
+        let mut server = test_server();
+        // The popup sits on rows 2..8. A taller terminal then pulls 9 lines
+        // of scrollback in above it, and the cursor and the old popup move
+        // down to rows 10 and 11..17 with them.
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 1,
+                cursor_col: 1,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                command_context: None,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\nghub\tcommand\tcommand\nglow\tcommand\tcommand\n",
+            &[SessionMessage::Resize {
+                cursor_row: 10,
+                cursor_col: 1,
+                term_cols: 80,
+                term_rows: 33,
+            }],
+        );
+        let (first, _) = read_frame(&mut reader);
+        let first = TextFrameHeader::parse(first.trim_end()).unwrap();
+        assert_eq!((first.popup_row, first.popup_height), (2, 6));
+
+        let (header, tty) = read_frame(&mut reader);
+        let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
+        assert_eq!((frame.cursor_row, frame.popup_row), (10, 11));
+        // Rows 2..8 now show scrollback, not the popup: leave them alone.
+        for row in 3..=8 {
+            let clear = format!("\u{1b}[{row};1H\u{1b}[2K");
+            assert!(!tty.contains(&clear), "{clear:?} in {tty:?}");
+        }
     }
 
     #[test]

@@ -316,6 +316,16 @@ fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
 }
 
 #[test]
+fn zsh_popup_sessions_follow_content_the_terminal_moves_on_resize() {
+    for case in ["moved", "typeahead", "silent"] {
+        run_popup_script(
+            include_str!("support/popup_session_resize_moved.zsh"),
+            &[("ZACRS_TEST_CASE", case)],
+        );
+    }
+}
+
+#[test]
 fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
     // Tab asks for the cursor position, also over a visible popup. A 3-row
     // terminal fits no popup, so Tab then inserts the only candidate or runs

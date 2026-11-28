@@ -1,8 +1,9 @@
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use filedescriptor::{POLLIN, pollfd};
 use rustix::termios::{OptionalActions, Termios};
@@ -36,7 +37,7 @@ pub fn try_daemon_render(
     command_context: Option<&str>,
     candidates_raw: &[u8],
 ) -> Result<RenderResponse, DaemonUnavailable> {
-    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_cols, term_rows) = terminal_size();
 
     let request = Request::Render {
         prefix: prefix.to_string(),
@@ -105,7 +106,7 @@ pub fn try_daemon_complete(
     context_key: Option<&str>,
     popup_key: Option<&str>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
-    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_cols, term_rows) = terminal_size();
     let stream = connect_stream()?;
     stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(60))).ok();
@@ -191,50 +192,76 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
 
     let mut raw_mode =
         RawModeGuard::new(tty.try_clone().map_err(|_| DaemonUnavailable::NotRunning)?)?;
+    // Keys typed before the session could read them, then keys typed while a
+    // resize waited for the cursor position.
+    let mut typed = VecDeque::new();
     let mut pos = 0;
     while pos < stale_bytes.len() {
-        let key = extract_single_key(&stale_bytes, &mut pos);
-        if key.is_empty() {
-            break;
-        }
-        if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
-            raw_mode.restore();
-            state.clear_popup(&mut tty_writer)?;
-            return Ok((result, stale_bytes[pos..].to_vec()));
-        }
+        typed.push_back(extract_single_key(&stale_bytes, &mut pos));
     }
-
+    // Cursor position replies still due after a resize stopped waiting.
+    let mut late_replies = 0usize;
     loop {
-        match read_session_event(
-            &mut tty,
-            &mut sigwinch_pipe.reader,
-            state.cursor_row,
-            state.cursor_col,
-        )? {
+        let event = match typed.pop_front() {
+            Some(key) => SessionEvent::Key(key),
+            None => read_session_event(&mut tty, &mut sigwinch_pipe.reader)?,
+        };
+        let result = match event {
             SessionEvent::Key(key) => {
-                if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
-                    raw_mode.restore();
-                    state.clear_popup(&mut tty_writer)?;
-                    return Ok((result, Vec::new()));
+                if late_replies > 0 && parse_cursor_report(&key).is_some() {
+                    late_replies -= 1;
+                    continue;
                 }
+                state.send_key(reader, writer, &mut tty_writer, &key)?
             }
             SessionEvent::Resize {
-                cursor_row,
-                cursor_col,
-                term_cols,
-                term_rows,
+                mut term_cols,
+                mut term_rows,
             } => {
-                if let Some(result) = state.send_resize(
+                // Terminals that move their content on resize move the cursor
+                // with it, so ask where it is now. While an earlier reply is
+                // still due, the terminal is slow or silent: do not wait again.
+                // Without a reply, keep the last known position.
+                let (mut row, mut col) = (state.cursor_row, state.cursor_col);
+                loop {
+                    if late_replies == 0
+                        && let Some(reported) =
+                            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies)?
+                    {
+                        (row, col) = reported;
+                    }
+                    // Dragging a window resizes it again and again: redraw
+                    // only for the size it settles on.
+                    if !drain_resize_pipe(&mut sigwinch_pipe.reader)? {
+                        break;
+                    }
+                    (term_cols, term_rows) = terminal_size();
+                }
+                // As the daemon does, so both move the popup by the same rows.
+                let cursor_row = row.min(term_rows.saturating_sub(1));
+                let cursor_col = col.min(term_cols.saturating_sub(1));
+                state.send_resize(
                     reader,
                     writer,
                     &mut tty_writer,
                     (cursor_row, cursor_col, term_cols, term_rows),
-                )? {
-                    raw_mode.restore();
-                    state.clear_popup(&mut tty_writer)?;
-                    return Ok((result, Vec::new()));
-                }
+                )?
             }
+        };
+        if let Some(result) = result {
+            // A reply that arrived after the session would reach the shell
+            // as typed input. Clear the popup before waiting for it; raw mode
+            // stays on to read it, and the clear writes no newlines.
+            if late_replies > 0 {
+                state.clear_popup(&mut tty_writer)?;
+                // The result stands even if the terminal cannot be read.
+                let _ = discard_late_replies(&mut tty, &mut typed, late_replies);
+                raw_mode.restore();
+            } else {
+                raw_mode.restore();
+                state.clear_popup(&mut tty_writer)?;
+            }
+            return Ok((result, typed.into_iter().flatten().collect()));
         }
     }
 }
@@ -373,6 +400,12 @@ impl SessionState {
         dims: (u16, u16, u16, u16),
     ) -> Result<Option<TextCompleteResult>, DaemonUnavailable> {
         let (cursor_row, cursor_col, term_cols, term_rows) = dims;
+        // The popup moved with the cursor. Clear it there if the session ends.
+        (self.popup_row, self.popup_height) = ui::popup::rows_moved(
+            (self.popup_row, self.popup_height),
+            i32::from(cursor_row) - i32::from(self.cursor_row),
+            term_rows,
+        );
         self.cursor_row = cursor_row;
         self.cursor_col = cursor_col;
         let req = TextSessionRequest::Resize {
@@ -446,12 +479,89 @@ const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 enum SessionEvent {
     Key(Vec<u8>),
-    Resize {
-        cursor_row: u16,
-        cursor_col: u16,
-        term_cols: u16,
-        term_rows: u16,
-    },
+    Resize { term_cols: u16, term_rows: u16 },
+}
+
+/// How long a resize waits for the terminal to report the cursor position.
+const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Asks the terminal for the cursor position. Keys that arrive before the
+/// reply go to `typed`. Returns `None` if the query cannot be written or the
+/// terminal does not reply in time; a reply still due counts in `late_replies`.
+fn query_cursor(
+    tty: &mut File,
+    tty_writer: &mut File,
+    typed: &mut VecDeque<Vec<u8>>,
+    late_replies: &mut usize,
+) -> Result<Option<(u16, u16)>, DaemonUnavailable> {
+    if tty_writer
+        .write_all(b"\x1b[6n")
+        .and_then(|_| tty_writer.flush())
+        .is_err()
+    {
+        return Ok(None);
+    }
+    let deadline = Instant::now() + CURSOR_REPLY_TIMEOUT;
+    while let Some(key) = read_key_before(tty, deadline)? {
+        if let Some(position) = parse_cursor_report(&key) {
+            return Ok(Some(position));
+        }
+        typed.push_back(key);
+    }
+    *late_replies += 1;
+    Ok(None)
+}
+
+/// Waits up to `CURSOR_REPLY_TIMEOUT` for `late_replies` cursor position
+/// replies and drops them. Other keys go to `typed`.
+fn discard_late_replies(
+    tty: &mut File,
+    typed: &mut VecDeque<Vec<u8>>,
+    mut late_replies: usize,
+) -> Result<(), DaemonUnavailable> {
+    let deadline = Instant::now() + CURSOR_REPLY_TIMEOUT;
+    while late_replies > 0 {
+        let Some(key) = read_key_before(tty, deadline)? else {
+            break;
+        };
+        if parse_cursor_report(&key).is_some() {
+            late_replies -= 1;
+        } else {
+            typed.push_back(key);
+        }
+    }
+    Ok(())
+}
+
+/// Reads one key if one arrives before `deadline`.
+fn read_key_before(
+    tty: &mut File,
+    deadline: Instant,
+) -> Result<Option<Vec<u8>>, DaemonUnavailable> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    let mut fds = [readable(tty)];
+    if left.is_zero() || poll_retry(&mut fds, Some(left))? == 0 {
+        return Ok(None);
+    }
+    read_key(tty).map(Some)
+}
+
+/// Parses a cursor position report, `ESC [ row ; col R`, into a 0-based row
+/// and column.
+fn parse_cursor_report(key: &[u8]) -> Option<(u16, u16)> {
+    let body = key.strip_prefix(b"\x1b[")?.strip_suffix(b"R")?;
+    let (row, col) = std::str::from_utf8(body).ok()?.split_once(';')?;
+    // `parse` alone would accept a leading `+`.
+    let number = |value: &str| -> Option<u16> {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse().ok())?
+    };
+    Some((
+        number(row)?.saturating_sub(1),
+        number(col)?.saturating_sub(1),
+    ))
 }
 
 /// Self-pipe that becomes readable whenever SIGWINCH arrives.
@@ -526,8 +636,6 @@ fn poll_for_read(fd: &impl AsRawFd) -> Result<bool, DaemonUnavailable> {
 fn read_session_event(
     tty: &mut File,
     resize: &mut UnixStream,
-    current_cursor_row: u16,
-    current_cursor_col: u16,
 ) -> Result<SessionEvent, DaemonUnavailable> {
     loop {
         let mut fds = [readable(tty), readable(resize)];
@@ -535,10 +643,8 @@ fn read_session_event(
 
         if is_readable(&fds[1]) {
             drain_resize_pipe(resize)?;
-            let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (term_cols, term_rows) = terminal_size();
             return Ok(SessionEvent::Resize {
-                cursor_row: current_cursor_row,
-                cursor_col: current_cursor_col,
                 term_cols,
                 term_rows,
             });
@@ -550,13 +656,20 @@ fn read_session_event(
     }
 }
 
-fn drain_resize_pipe(resize: &mut UnixStream) -> Result<(), DaemonUnavailable> {
+/// The terminal size in columns and rows, or 80x24 if it is unknown.
+fn terminal_size() -> (u16, u16) {
+    crossterm::terminal::size().unwrap_or((80, 24))
+}
+
+/// Empties the resize pipe. Returns whether a resize was pending.
+fn drain_resize_pipe(resize: &mut UnixStream) -> Result<bool, DaemonUnavailable> {
     let mut buf = [0u8; 64];
+    let mut drained = false;
     loop {
         match resize.read(&mut buf) {
-            Ok(0) => return Ok(()),
-            Ok(_) => continue,
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Ok(0) => return Ok(drained),
+            Ok(_) => drained = true,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(drained),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return Err(DaemonUnavailable::NotRunning),
         }
@@ -872,22 +985,100 @@ mod tests {
     }
 
     #[test]
+    fn query_cursor_keeps_keys_typed_before_the_reply() {
+        let (mut tty, mut terminal) = file_pipe();
+        let (mut queries, mut tty_writer) = file_pipe();
+        terminal.write_all(b"a\x1b[B\x1b[12;5R").unwrap();
+
+        let mut typed = VecDeque::new();
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
+
+        assert_eq!(position, Some((11, 4)));
+        assert_eq!(typed, [b"a".to_vec(), b"\x1b[B".to_vec()]);
+        assert_eq!(late_replies, 0);
+        drop(tty_writer);
+        let mut asked = Vec::new();
+        queries.read_to_end(&mut asked).unwrap();
+        assert_eq!(asked, b"\x1b[6n");
+    }
+
+    #[test]
+    fn query_cursor_gives_up_on_a_silent_terminal() {
+        let (mut tty, _terminal) = file_pipe();
+        let (_queries, mut tty_writer) = file_pipe();
+        let mut typed = VecDeque::new();
+
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
+
+        assert_eq!(position, None);
+        assert!(typed.is_empty());
+        assert_eq!(late_replies, 1);
+    }
+
+    #[test]
+    fn query_cursor_expects_no_reply_to_a_query_it_could_not_send() {
+        let (mut tty, _terminal) = file_pipe();
+        let (queries, mut tty_writer) = file_pipe();
+        drop(queries);
+        let mut typed = VecDeque::new();
+
+        let mut late_replies = 0;
+        let position =
+            query_cursor(&mut tty, &mut tty_writer, &mut typed, &mut late_replies).unwrap();
+
+        assert_eq!(position, None);
+        assert_eq!(late_replies, 0);
+    }
+
+    #[test]
+    fn discard_late_replies_keeps_the_keys_around_them() {
+        let (mut tty, mut terminal) = file_pipe();
+        terminal.write_all(b"x\x1b[3;4Ry").unwrap();
+        let mut typed = VecDeque::new();
+
+        discard_late_replies(&mut tty, &mut typed, 1).unwrap();
+
+        assert_eq!(typed, [b"x".to_vec()]);
+        // Keys after the last reply stay in the terminal for the shell.
+        drop(terminal);
+        let mut rest = Vec::new();
+        tty.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, b"y");
+    }
+
+    #[test]
+    fn parse_cursor_report_accepts_only_position_reports() {
+        assert_eq!(parse_cursor_report(b"\x1b[1;1R"), Some((0, 0)));
+        assert_eq!(parse_cursor_report(b"\x1b[24;100R"), Some((23, 99)));
+        for key in [
+            &b"\x1b[B"[..],
+            b"\x1b[;5R",
+            b"\x1b[1;R",
+            b"\x1b[+1;5R",
+            b"R",
+            b"\x1b[1;5~",
+        ] {
+            assert_eq!(parse_cursor_report(key), None, "{key:?}");
+        }
+    }
+
+    #[test]
     fn read_session_event_returns_resize_when_resize_fd_is_ready() {
         let (mut tty_reader, tty_writer) = file_pipe();
         let (mut resize_reader, mut resize_writer) = UnixStream::pair().unwrap();
         resize_reader.set_nonblocking(true).unwrap();
         resize_writer.write_all(&[1]).unwrap();
 
-        let event = read_session_event(&mut tty_reader, &mut resize_reader, 7, 11).unwrap();
+        let event = read_session_event(&mut tty_reader, &mut resize_reader).unwrap();
         match event {
             SessionEvent::Resize {
-                cursor_row,
-                cursor_col,
                 term_cols,
                 term_rows,
             } => {
-                assert_eq!(cursor_row, 7);
-                assert_eq!(cursor_col, 11);
                 assert!(term_cols > 0);
                 assert!(term_rows > 0);
             }
