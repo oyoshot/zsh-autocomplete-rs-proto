@@ -91,6 +91,20 @@ probe() {
 zpty -b zacrs_small zsh -di
 wait_file ready ready
 
+if [[ "$ZACRS_TEST_FITS" == 1 ]]; then
+    # The smallest terminal that fits: both size checks must let it through.
+    zpty -w -n zacrs_small ls
+    wait_cursor_query
+    for attempt in {1..300}; do
+        drain_pty
+        [[ "$pty_output" == *'┌'* && "$pty_output" == *'└'* ]] && break
+        sleep 0.01
+    done
+    [[ "$pty_output" == *'┌'* && "$pty_output" == *'└'* ]] || fail 'drew no popup in a terminal that fits'
+    print -r -- 'ok: the smallest terminal that fits shows the popup'
+    exit 0
+fi
+
 # Typing must neither show the automatic popup nor do the work for one.
 zpty -w -n zacrs_small ls
 # The first probe may arrive as type-ahead, which defers the redraw hook. The

@@ -263,49 +263,56 @@ fn zsh_new_lines_discard_popup_state_after_cancellation_and_acceptance() {
 
 #[test]
 fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
-    let root = tempfile::tempdir().unwrap();
-    let runtime = tempfile::Builder::new()
-        .prefix("zacrs-resize.")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let plugin = support::install_zsh_plugin(root.path(), false);
-    let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
-    let (output, timed_out) = run_shell(
-        Command::new("zsh")
-            .args(["-df", "-c", include_str!("support/popup_resize_small.zsh")])
-            .env_clear()
-            .env("PATH", env::var_os("PATH").unwrap_or_default())
-            .env("HOME", root.path())
-            .env("ZDOTDIR", root.path())
-            .env("XDG_CONFIG_HOME", root.path().join("config"))
+    for shrink in ["rows 3", "cols 7"] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = tempfile::Builder::new()
+            .prefix("zacrs-resize.")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let plugin = support::install_zsh_plugin(root.path(), false);
+        let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+        let (output, timed_out) = run_shell(
+            Command::new("zsh")
+                .args(["-df", "-c", include_str!("support/popup_resize_small.zsh")])
+                .env_clear()
+                .env("PATH", env::var_os("PATH").unwrap_or_default())
+                .env("HOME", root.path())
+                .env("ZDOTDIR", root.path())
+                .env("XDG_CONFIG_HOME", root.path().join("config"))
+                .env("XDG_RUNTIME_DIR", runtime.path())
+                .env("ZACRS_BIN", binary)
+                .env("ZACRS_PLUGIN", plugin)
+                .env("ZACRS_TEST_SHRINK", shrink)
+                .env("TERM", "xterm-256color")
+                .current_dir(root.path()),
+            Duration::from_secs(20),
+        );
+        // Also stop the private daemon if the PTY script timed out.
+        let _ = Command::new(binary)
+            .args(["daemon", "stop"])
             .env("XDG_RUNTIME_DIR", runtime.path())
-            .env("ZACRS_BIN", binary)
-            .env("ZACRS_PLUGIN", plugin)
-            .env("TERM", "xterm-256color")
-            .current_dir(root.path()),
-        Duration::from_secs(20),
-    );
-    // Also stop the private daemon if the PTY script timed out.
-    let _ = Command::new(binary)
-        .args(["daemon", "stop"])
-        .env("XDG_RUNTIME_DIR", runtime.path())
-        .output();
-    assert!(!timed_out, "{output:?}");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+            .output();
+        assert!(!timed_out, "{output:?}");
+        assert!(
+            output.status.success(),
+            "shrink={shrink}\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }
 
 #[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
-    for (daemon, rows, cols) in [
-        (true, "3", "100"),
-        (false, "3", "100"),
-        (true, "24", "6"),
-        (false, "24", "6"),
+    // The last two are the smallest terminal that fits, where a popup must
+    // still appear.
+    for (daemon, rows, cols, fits) in [
+        (true, "3", "100", false),
+        (false, "3", "100", false),
+        (true, "24", "7", false),
+        (false, "24", "7", false),
+        (true, "4", "8", true),
+        (false, "4", "8", true),
     ] {
         let root = tempfile::tempdir().unwrap();
         let runtime = tempfile::Builder::new()
@@ -332,6 +339,7 @@ fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
                 .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
                 .env("ZACRS_TEST_ROWS", rows)
                 .env("ZACRS_TEST_COLS", cols)
+                .env("ZACRS_TEST_FITS", if fits { "1" } else { "0" })
                 .env("TERM", "xterm-256color")
                 .current_dir(root.path()),
             Duration::from_secs(20),

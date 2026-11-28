@@ -26,7 +26,7 @@ _test_ready() {
 }
 add-zle-hook-widget line-init _test_ready
 _test_probe() {
-    print -r -- "$BUFFER:$CURSOR:$_zacrs_popup_visible:$LINES" > "$HOME/probe"
+    print -r -- "$BUFFER:$CURSOR:$_zacrs_popup_visible" > "$HOME/probe"
 }
 zle -N _test_probe
 bindkey '^Y' _test_probe
@@ -86,6 +86,17 @@ settle() {
         sleep 0.01
     done
 }
+# The session draws its first frame, with a selected row, only after the
+# client has installed its resize handler.
+wait_session_frame() {
+    local attempt
+    for attempt in {1..300}; do
+        drain_pty
+        [[ "$pty_output" == *$'\e[7m'* ]] && return 0
+        sleep 0.01
+    done
+    fail 'waiting for the popup session to draw its first frame'
+}
 assert_no_frame() {
     [[ "$pty_output" != *'┌'* && "$pty_output" != *'└'* ]] || fail "drew a popup frame $1"
 }
@@ -96,13 +107,14 @@ zpty -w -n zacrs_resize ls
 wait_popup
 
 # Tab opens the interactive session on top of the visible popup.
+pty_output=''
 zpty -w -n zacrs_resize $'\t'
-settle
+wait_session_frame
 [[ ! -e "$HOME/tab-done" ]] || fail 'the popup session ended before the resize'
 
 # Shrink the terminal under the open session.
 pty_output=''
-stty rows 3 < "$(<"$HOME/tty")"
+stty ${=ZACRS_TEST_SHRINK} < "$(<"$HOME/tty")"
 wait_file tab-done done
 settle
 assert_no_frame 'after the resize'
@@ -110,7 +122,7 @@ assert_no_frame 'after the resize'
 
 # The session ended as a cancel: the buffer is intact and no popup is left.
 zpty -w -n zacrs_resize $'\x19'
-wait_file probe 'ls:2:0:3'
+wait_file probe 'ls:2:0'
 settle
 assert_no_frame 'after the session'
 

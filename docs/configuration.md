@@ -16,8 +16,9 @@ range, for example `1–10 / 42`. The marker and range are omitted when the term
 is too narrow to fit them.
 
 The popup is drawn below the cursor line and never over it. It needs at least
-4 rows (the cursor line, the frame and one candidate) and 7 columns (the
-narrowest popup that shows two characters of a candidate). In a smaller
+4 rows (the cursor line, the frame and one candidate) and 8 columns (the
+narrowest popup in which a shortened candidate still shows a character
+before the ellipsis, even a double-width one). In a smaller
 terminal no popup is shown while typing, and Tab inserts the only
 candidate if there is exactly one, or otherwise runs Zsh's own completion.
 Shrinking the terminal below that size while a popup is open closes it, as

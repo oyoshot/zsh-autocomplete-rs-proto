@@ -2824,7 +2824,7 @@ mod tests {
     #[test]
     fn handle_render_returns_empty_when_no_popup_fits() {
         let mut server = test_server();
-        for (term_cols, term_rows) in [(80, 3), (6, 24)] {
+        for (term_cols, term_rows) in [(80, 3), (7, 24)] {
             let response = server.handle_render(
                 RenderParams {
                     prefix: "g".to_string(),
@@ -2850,7 +2850,7 @@ mod tests {
     #[test]
     fn handle_complete_falls_back_to_native_completion_when_no_popup_fits() {
         let mut server = test_server();
-        for (term_cols, term_rows) in [(80, 3), (6, 24)] {
+        for (term_cols, term_rows) in [(80, 3), (7, 24)] {
             let mut reader = run_complete_session(
                 &mut server,
                 complete_params_for_terminal(term_cols, term_rows, false),
