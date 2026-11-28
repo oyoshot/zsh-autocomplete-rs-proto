@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # A configuration that never runs compinit leaves compsys to the adapter. Later
-# shells must still find completion functions added to $fpath after the first
-# dump, and must skip insecure directories without asking from inside a widget.
+# shells must find completion functions added to $fpath after the first dump,
+# and the adapter must leave the user's $fpath as it is.
 
 set -eu
 
@@ -24,29 +24,29 @@ typeset dump="$XDG_CACHE_HOME/zsh/compdump"
 
 mkdir -p "$tmp_dir/zdotdir" "$ZACRS_FALLBACK_FUNCTIONS" "$ZACRS_FALLBACK_WORK" \
     "$XDG_CACHE_HOME/zsh"
-chmod 755 "$ZACRS_FALLBACK_FUNCTIONS" "$ZACRS_FALLBACK_WORK"
-: > "$ZACRS_FALLBACK_WORK/work-file"
 
 add_completion() {
     local dir=$1 command=$2
     print -rl -- "#compdef $command" "compadd -- $command-candidate" > "$dir/_$command"
-    chmod 644 "$dir/_$command"
 }
 
 cat > "$tmp_dir/zdotdir/.zshrc" <<'EOF'
-fpath=("$ZACRS_FALLBACK_FUNCTIONS" $fpath)
-[[ -d "$ZACRS_FALLBACK_UNSAFE" ]] && fpath=("$ZACRS_FALLBACK_UNSAFE" $fpath)
+fpath=("$ZACRS_FALLBACK_UNSAFE" "$ZACRS_FALLBACK_FUNCTIONS" $fpath)
+typeset -g fallback_fpath="${(j.:.)fpath}"
 cd "$ZACRS_FALLBACK_WORK"
 source "$ZACRS_FALLBACK_UTIL"
 source "$ZACRS_FALLBACK_COMPSYS"
 
 # Collect the way the adapter does: from an ordinary widget, stderr discarded.
+# A changed $fpath shows up in the result.
 _zacrs_fallback_capture() {
     local fd tab=$'\t'
     exec {fd}>&2
     zle _zacrs_compsys 2>/dev/null
     exec 2>&$fd {fd}>&-
-    print -rl -- "${_zacrs_captured[@]%%$tab*}" > "$ZACRS_FALLBACK_MARKER"
+    local -a result=("${_zacrs_captured[@]%%$tab*}")
+    [[ "${(j.:.)fpath}" == "$fallback_fpath" ]] || result+=("fpath changed: ${(j.:.)fpath}")
+    print -rl -- "${result[@]}" > "$ZACRS_FALLBACK_MARKER"
 }
 zle -N _zacrs_fallback_capture
 bindkey -M emacs "^T" _zacrs_fallback_capture
@@ -94,18 +94,19 @@ run_session() {
 
 add_completion "$ZACRS_FALLBACK_FUNCTIONS" zacrsold
 run_session zacrsold zacrsold-candidate 'adapter initializes compsys when compinit never ran'
-if [[ ! -f "$dump" ]] || grep -q zacrsnew "$dump"; then
-    print -u2 -r -- "not ok: first shell writes a dump without the later function"
-    exit 1
-fi
+[[ -f "$dump" ]] || { print -u2 -r -- 'not ok: first shell writes the dump'; exit 1 }
 
 add_completion "$ZACRS_FALLBACK_FUNCTIONS" zacrsnew
 run_session zacrsnew zacrsnew-candidate 'a later shell finds a function added after the dump'
 
-# compaudit treats a world-writable directory as insecure.
-rm -f -- "$dump"
-mkdir -p "$ZACRS_FALLBACK_UNSAFE"
+# compaudit would prompt about a world-writable directory or remove it.
+mkdir -m 777 "$ZACRS_FALLBACK_UNSAFE"
 add_completion "$ZACRS_FALLBACK_UNSAFE" zacrsunsafe
-chmod 777 "$ZACRS_FALLBACK_UNSAFE"
-run_session zacrsunsafe work-file 'functions in an insecure directory are skipped without a prompt'
-run_session zacrsold zacrsold-candidate 'completion still works beside an insecure directory'
+run_session zacrsunsafe zacrsunsafe-candidate 'a world-writable directory stays in $fpath without a prompt'
+
+# An up-to-date dump is loaded, not rewritten.
+touch -t 200001010000 "$dump"
+run_session zacrsold zacrsold-candidate 'a later shell loads an up-to-date dump'
+typeset -a old_dump=($dump(Nmd+1))
+(( ${#old_dump} )) || { print -u2 -r -- 'not ok: an up-to-date dump is not rewritten'; exit 1 }
+print -r -- 'ok: an up-to-date dump is not rewritten'

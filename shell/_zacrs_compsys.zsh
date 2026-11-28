@@ -25,12 +25,13 @@ _zacrs_ensure_compinit() {
         (( $+functions[_main_complete] )) && return 0
     fi
 
-    # compinit hasn't run at all — initialize it. Without -C, compinit checks
-    # the dump against $fpath, so functions added later are found, and runs
-    # compaudit; -i removes insecure directories from $fpath because a widget
-    # cannot answer compaudit's prompt.
+    # compinit hasn't run at all — initialize it. Without -C, compinit
+    # regenerates the dump when the number of files in $fpath or the Zsh
+    # version changes. -u skips compaudit, which would prompt or remove
+    # insecure directories from the user's $fpath; users who want the audit
+    # run compinit themselves.
     _zacrs_dbg "compinit: initializing (was not called yet)"
-    autoload -Uz compinit 2>/dev/null && compinit -i -d "${ZSH_COMPDUMP:-${XDG_CACHE_HOME:-$HOME/.cache}/zsh/compdump}" 2>/dev/null
+    autoload -Uz compinit 2>/dev/null && compinit -u -d "${ZSH_COMPDUMP:-${XDG_CACHE_HOME:-$HOME/.cache}/zsh/compdump}" 2>/dev/null
 
     (( $+functions[_main_complete] ))
 }
