@@ -80,10 +80,15 @@ done
 # set, on both sides of the length where it hands over to `od`, and the decoder
 # must read them back.
 typeset every_byte='' at_limit=${(l:2048::abc :):-} past_limit=${(l:2049::x y:):-} wide=${(l:400::日本:):-}
-typeset -i byte
-for (( byte = 0; byte < 256; byte++ )); do
-    every_byte+=${(#)byte}
-done
+# With MULTIBYTE on, values from 128 would become two-byte characters.
+() {
+    setopt localoptions nomultibyte
+    local -i byte
+    for (( byte = 0; byte < 256; byte++ )); do
+        every_byte+=${(#)byte}
+    done
+    assert_equal 256 ${#every_byte} 'the every-byte sample holds 256 bytes'
+}
 for encoder_options in multibyte nomultibyte ksharrays shwordsplit; do
     for sample in '' 'git ch' '-n' $'tab\there\nline\x01\x7f' '日本語 ñ é' '%s\n' \
         $'\xff\xfe raw' $'\e[Z' $'a\0b' "$every_byte" "$wide" "$at_limit" "$past_limit"; do

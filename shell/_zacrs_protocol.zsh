@@ -13,10 +13,10 @@ _zacrs_parse_done_line() {
 
 # Hex-encode the bytes of $1 into REPLY. Every daemon render sends one, so
 # input of up to 2048 bytes is encoded in the shell: starting od and tr costs
-# more than the rest of the request. Beyond about 3000 bytes they are faster.
+# more than the rest of the request. Beyond about 2500 bytes they are faster.
 _zacrs_encode_hex_to_REPLY() {
-    # Bytes rather than characters, no splitting or globbing of the unquoted
-    # expansion, and decimal arithmetic output, whatever the caller has set.
+    # Bytes rather than characters, and no globbing of the unquoted expansion,
+    # whatever the caller has set.
     emulate -L zsh
     unsetopt multibyte
     if (( ${#1} > 2048 )); then
