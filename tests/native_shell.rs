@@ -316,6 +316,29 @@ fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
 }
 
 #[test]
+fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
+    // Tab asks for the cursor position only when no popup is visible, which
+    // a 3-row terminal guarantees for the cases that need it.
+    for (case, rows) in [
+        ("typing", "24"),
+        ("single", "3"),
+        ("native", "3"),
+        ("session", "24"),
+    ] {
+        for daemon in ["1", "0"] {
+            run_popup_script(
+                include_str!("support/popup_query_typeahead.zsh"),
+                &[
+                    ("ZACRS_TEST_CASE", case),
+                    ("ZACRS_TEST_ROWS", rows),
+                    ("ZACRS_TEST_DAEMON", daemon),
+                ],
+            );
+        }
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.

@@ -22,7 +22,8 @@ pub struct RenderResponse {
 }
 
 pub enum CompleteSessionOutcome {
-    Done(TextCompleteResult),
+    /// The result, and the type-ahead bytes that no popup session consumed.
+    Done(TextCompleteResult, Vec<u8>),
     CacheMiss,
 }
 
@@ -143,7 +144,7 @@ pub fn try_daemon_complete(
         return Ok(CompleteSessionOutcome::CacheMiss);
     }
 
-    let result = run_text_popup_session(
+    let (result, unread) = run_text_popup_session(
         &mut reader,
         &mut writer,
         &header,
@@ -152,9 +153,15 @@ pub fn try_daemon_complete(
         cursor_row,
         cursor_col,
     )?;
-    Ok(CompleteSessionOutcome::Done(result))
+    Ok(CompleteSessionOutcome::Done(result, unread))
 }
 
+/// Runs the popup session that `initial_header` starts, if it starts one.
+///
+/// `stale_bytes` are keys typed before the session could read the terminal.
+/// They go to the session first. The bytes it did not consume, because no
+/// session started or because an earlier key ended it, are returned with the
+/// result so the caller can hand them back to the shell.
 pub fn run_text_popup_session<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -163,12 +170,13 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
     prev_popup: Option<(u16, u16)>,
     cursor_row: u16,
     cursor_col: u16,
-) -> Result<TextCompleteResult, DaemonUnavailable> {
+) -> Result<(TextCompleteResult, Vec<u8>), DaemonUnavailable> {
     if initial_header == "NONE" {
         return Err(DaemonUnavailable::EmptyResult);
     }
     if initial_header.starts_with("DONE ") {
         return TextCompleteResult::read_from(reader, initial_header)
+            .map(|result| (result, stale_bytes))
             .map_err(|_| DaemonUnavailable::NotRunning);
     }
 
@@ -178,23 +186,21 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
 
     let mut state = SessionState::with_prev_popup(prev_popup, cursor_row, cursor_col);
     if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
-        return Ok(result);
+        return Ok((result, stale_bytes));
     }
 
     let mut raw_mode =
         RawModeGuard::new(tty.try_clone().map_err(|_| DaemonUnavailable::NotRunning)?)?;
-    if !stale_bytes.is_empty() {
-        let mut pos = 0;
-        while pos < stale_bytes.len() {
-            let key = extract_single_key(&stale_bytes, &mut pos);
-            if key.is_empty() {
-                break;
-            }
-            if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
-                raw_mode.restore();
-                state.clear_popup(&mut tty_writer)?;
-                return Ok(result);
-            }
+    let mut pos = 0;
+    while pos < stale_bytes.len() {
+        let key = extract_single_key(&stale_bytes, &mut pos);
+        if key.is_empty() {
+            break;
+        }
+        if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
+            raw_mode.restore();
+            state.clear_popup(&mut tty_writer)?;
+            return Ok((result, stale_bytes[pos..].to_vec()));
         }
     }
 
@@ -209,7 +215,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
                     raw_mode.restore();
                     state.clear_popup(&mut tty_writer)?;
-                    return Ok(result);
+                    return Ok((result, Vec::new()));
                 }
             }
             SessionEvent::Resize {
@@ -226,7 +232,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 )? {
                     raw_mode.restore();
                     state.clear_popup(&mut tty_writer)?;
-                    return Ok(result);
+                    return Ok((result, Vec::new()));
                 }
             }
         }
@@ -794,11 +800,11 @@ mod tests {
         let mut reader = BufReader::new("APPLY chain=1 execute=1 restore_hex=\n".as_bytes());
         let mut writer = Vec::new();
 
-        let result = run_text_popup_session(
+        let (result, unread) = run_text_popup_session(
             &mut reader,
             &mut writer,
             "DONE 0 cargo ",
-            vec![],
+            b"x\x1b[D".to_vec(),
             None,
             0,
             0,
@@ -809,6 +815,8 @@ mod tests {
         assert_eq!(result.text, "cargo ");
         assert!(result.chain);
         assert!(result.execute);
+        // No session ran, so every typed-ahead byte goes back to the shell.
+        assert_eq!(unread, b"x\x1b[D");
     }
 
     #[test]
