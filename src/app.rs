@@ -1,5 +1,6 @@
 use crate::candidate::Candidate;
 use crate::fuzzy::{FuzzyMatcher, MatchMode};
+use crate::ui::popup::Popup;
 use std::collections::HashMap;
 
 const DEFAULT_MAX_VISIBLE: usize = 10;
@@ -394,10 +395,16 @@ impl App {
     }
 
     pub fn sync_max_visible(&mut self) {
-        let max_popup_height = self.term_rows.saturating_sub(1);
-        let max_visible = max_popup_height.saturating_sub(2).max(1) as usize;
+        // Stays at one row even when no popup fits; callers check
+        // `popup_fits` before drawing.
+        let max_visible = Popup::rows_available(self.term_rows).max(1);
         self.max_visible = DEFAULT_MAX_VISIBLE.min(max_visible);
         self.clamp_viewport();
+    }
+
+    /// Whether the terminal is large enough to show the popup at all.
+    pub fn popup_fits(&self) -> bool {
+        Popup::fits_terminal(self.term_cols, self.term_rows)
     }
 
     /// Lowers `max_visible` to at most `limit` rows, never below one, and

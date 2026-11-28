@@ -264,6 +264,76 @@ fn zsh_new_lines_discard_popup_state_after_cancellation_and_acceptance() {
     }
 }
 
+/// Runs a PTY popup script on top of the shared driver, with a private home
+/// and daemon, and fails with the script's output if it does not pass.
+fn run_popup_script(script: &str, envs: &[(&str, &str)]) {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tempfile::Builder::new()
+        .prefix("zacrs-popup.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let plugin = support::install_zsh_plugin(root.path(), false);
+    let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+    let script = format!("{}{script}", include_str!("support/popup_pty.zsh"));
+    let (output, timed_out) = run_shell(
+        Command::new("zsh")
+            .args(["-df", "-c", &script])
+            .env_clear()
+            .env("PATH", env::var_os("PATH").unwrap_or_default())
+            .env("HOME", root.path())
+            .env("ZDOTDIR", root.path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("ZACRS_BIN", binary)
+            .env("ZACRS_PLUGIN", plugin)
+            .env("TERM", "xterm-256color")
+            .envs(envs.iter().copied())
+            .current_dir(root.path()),
+        Duration::from_secs(20),
+    );
+    // Also stop the private daemon if the PTY script timed out.
+    let _ = Command::new(binary)
+        .args(["daemon", "stop"])
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .output();
+    assert!(!timed_out, "{envs:?}\n{output:?}");
+    assert!(
+        output.status.success(),
+        "{envs:?}\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
+    for shrink in ["rows 3", "cols 7"] {
+        run_popup_script(
+            include_str!("support/popup_resize_small.zsh"),
+            &[("ZACRS_TEST_SHRINK", shrink)],
+        );
+    }
+}
+
+#[test]
+fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
+    // The last size is the smallest terminal that fits, where a popup must
+    // still appear.
+    for (rows, cols, fits) in [("3", "100", "0"), ("24", "7", "0"), ("4", "8", "1")] {
+        for daemon in ["1", "0"] {
+            run_popup_script(
+                include_str!("support/popup_small_terminal.zsh"),
+                &[
+                    ("ZACRS_TEST_DAEMON", daemon),
+                    ("ZACRS_TEST_ROWS", rows),
+                    ("ZACRS_TEST_COLS", cols),
+                    ("ZACRS_TEST_FITS", fits),
+                ],
+            );
+        }
+    }
+}
+
 #[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();

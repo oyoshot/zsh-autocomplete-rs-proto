@@ -833,6 +833,15 @@ _zacrs_line_pre_redraw() {
     else
         return
     fi
+    # No popup fits in a terminal this small, so skip the cursor query,
+    # candidate gathering, IPC and the type-ahead deferral. The engine makes
+    # the same check (Popup::fits_terminal) and stays authoritative if the
+    # limits diverge.
+    if (( LINES < 4 || COLUMNS < 8 )); then
+        _zacrs_prev_lbuffer="$LBUFFER"
+        _zacrs_clear_popup
+        return
+    fi
     # Type-ahead detected: skip heavy work.  Do NOT update
     # _zacrs_prev_lbuffer so the next redraw retries this buffer.
     if (( PENDING > 0 )); then
