@@ -317,13 +317,15 @@ fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
 
 #[test]
 fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
-    // Tab asks for the cursor position only when no popup is visible, which
-    // a 3-row terminal guarantees for the cases that need it.
+    // Tab asks for the cursor position, also over a visible popup. A 3-row
+    // terminal fits no popup, so Tab then inserts the only candidate or runs
+    // native completion.
     for (case, rows) in [
         ("typing", "24"),
         ("single", "3"),
         ("native", "3"),
         ("session", "24"),
+        ("hidden", "24"),
         ("passthrough", "24"),
     ] {
         for daemon in ["1", "0"] {
@@ -385,6 +387,18 @@ fn zsh_failed_frame_reads_clear_the_popup_on_screen() {
             include_str!("support/popup_draw_failure.zsh"),
             &[("ZACRS_TEST_CASE", case)],
         );
+    }
+}
+
+#[test]
+fn zsh_popup_sessions_redraw_the_word_where_it_is_on_screen() {
+    for case in ["moved", "silent"] {
+        for daemon in ["1", "0"] {
+            run_popup_script(
+                include_str!("support/popup_tab_cursor.zsh"),
+                &[("ZACRS_TEST_CASE", case), ("ZACRS_TEST_DAEMON", daemon)],
+            );
+        }
     }
 }
 

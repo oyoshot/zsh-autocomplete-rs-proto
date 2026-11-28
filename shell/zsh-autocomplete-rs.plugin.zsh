@@ -601,17 +601,13 @@ _zacrs_apply() {
 
 _zacrs_invoke_daemon() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}" candidates_present="${9:-0}"
+    local cursor_row="$4" cursor_col="$5" reuse_visible="${6:-0}" context_key="${7:-}" accept_single="${8:-0}" candidates_present="${9:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
     local command_context=""
     if _zacrs_command_context "$LBUFFER"; then
         command_context="$REPLY"
         is_cmd_pos=$_zacrs_command_context_is_command
-    fi
-    if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
-        cursor_row=0 cursor_col=0
-        _zacrs_query_cursor_keeping_stale
     fi
 
     local stale_hex=""
@@ -673,17 +669,13 @@ _zacrs_invoke_daemon() {
 
 _zacrs_invoke() {
     local prefix="$1" prefix_len="$2" candidates_str="$3"
-    local cursor_row="${4:-}" cursor_col="${5:-}" accept_single="${6:-0}"
+    local cursor_row="$4" cursor_col="$5" accept_single="${6:-0}"
     local shift_tab_hex=""
     local is_cmd_pos=0
     local command_context=""
     if _zacrs_command_context "$LBUFFER"; then
         command_context="$REPLY"
         is_cmd_pos=$_zacrs_command_context_is_command
-    fi
-    if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
-        cursor_row=0 cursor_col=0
-        _zacrs_query_cursor_keeping_stale
     fi
     local stale_hex=""
     [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
@@ -745,9 +737,10 @@ _zacrs_requeue_stale() {
 
 # A second attempt in the same widget keeps the keys of the first in front.
 _zacrs_query_cursor_keeping_stale() {
-    local earlier="${_zacrs_cursor_stale:-}"
-    _zacrs_get_cursor_pos
+    local earlier="${_zacrs_cursor_stale:-}" found=0
+    _zacrs_get_cursor_pos && found=1
     _zacrs_cursor_stale="$earlier$_zacrs_cursor_stale"
+    (( found ))
 }
 
 # The client reports the keys its session did not consume as "UNREAD <hex>".
@@ -815,7 +808,6 @@ _zacrs_complete_popup() {
 
 _zacrs_complete_with_popup() {
     local prefix="" prefix_len=0 candidates_str=""
-    local cursor_row="" cursor_col=""
     local reuse_visible=0
     local naive_prefix="${LBUFFER##* }"
     _zacrs_current_context_key
@@ -830,12 +822,20 @@ _zacrs_complete_with_popup() {
         && (( _zacrs_popup_snapshot_lines == LINES )); then
         reuse_visible=1
         prefix_len=$_zacrs_popup_snapshot_prefix_len
-        cursor_row=$_zacrs_popup_cursor_row
-        cursor_col=$_zacrs_last_render_cursor_col
     fi
 
     if (( ! reuse_visible )) || (( ! _zacrs_daemon_available )); then
         _zacrs_collect_candidates
+    fi
+
+    # Ask once per Tab, also over a visible popup: the automatic popup
+    # recorded its position before Zsh drew the last key, and the session
+    # redraws the word from the cursor. Without a reply, keep the visible
+    # popup where it is.
+    local cursor_row=0 cursor_col=0
+    if ! _zacrs_query_cursor_keeping_stale && (( reuse_visible )); then
+        cursor_row=$_zacrs_popup_cursor_row
+        cursor_col=$_zacrs_last_render_cursor_col
     fi
 
     _zacrs_suppressed=0

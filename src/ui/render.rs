@@ -405,11 +405,13 @@ pub fn clear_rect_to_bytes(
     Ok(buf)
 }
 
+/// Clears what a previous popup leaves outside the new popup: rows the new
+/// popup does not cover, and on rows it does cover, the cells left of it, in
+/// case the popup moved right. Its own frame clears the cells right of it.
 pub fn clear_stale_rows_to_bytes(
     prev_popup_row: u16,
     prev_popup_height: u16,
-    new_popup_row: u16,
-    new_popup_height: u16,
+    new_popup: &Popup,
 ) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(128);
 
@@ -418,21 +420,24 @@ pub fn clear_stale_rows_to_bytes(
     }
 
     let prev_end = prev_popup_row.saturating_add(prev_popup_height);
-    let new_end = new_popup_row.saturating_add(new_popup_height);
+    let new_end = new_popup.row.saturating_add(new_popup.height);
     let mut wrote_any = false;
 
     for row in prev_popup_row..prev_end {
-        if row < new_popup_row || row >= new_end {
-            if !wrote_any {
-                crossterm::queue!(&mut buf, cursor::SavePosition)?;
-                wrote_any = true;
-            }
-            crossterm::queue!(
-                &mut buf,
-                cursor::MoveTo(0, row),
-                terminal::Clear(terminal::ClearType::CurrentLine),
-            )?;
+        // Erase the whole line, or on a covered row, from its start through
+        // the cell left of the popup (crossterm has no command for that).
+        let (col, erase) = if !(new_popup.row..new_end).contains(&row) {
+            (0, "\x1b[2K")
+        } else if let Some(left) = new_popup.col.checked_sub(1) {
+            (left, "\x1b[1K")
+        } else {
+            continue;
+        };
+        if !wrote_any {
+            crossterm::queue!(&mut buf, cursor::SavePosition)?;
+            wrote_any = true;
         }
+        crossterm::queue!(&mut buf, cursor::MoveTo(col, row), Print(erase))?;
     }
 
     if wrote_any {
@@ -982,19 +987,40 @@ mod tests {
         assert_eq!(popup.col, 0);
     }
 
+    fn popup_at(row: u16, col: u16, height: u16) -> Popup {
+        Popup {
+            row,
+            col,
+            width: 20,
+            height,
+        }
+    }
+
     #[test]
     fn clear_stale_rows_to_bytes_is_empty_when_ranges_match() {
-        let bytes = clear_stale_rows_to_bytes(6, 4, 6, 4).unwrap();
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(6, 0, 4)).unwrap();
         assert!(bytes.is_empty());
     }
 
     #[test]
     fn clear_stale_rows_to_bytes_clears_non_overlapping_rows() {
-        let bytes = clear_stale_rows_to_bytes(6, 4, 7, 2).unwrap();
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(7, 0, 2)).unwrap();
         let ansi = String::from_utf8_lossy(&bytes);
         assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
         assert!(ansi.contains("[7;1H"));
         assert!(ansi.contains("[10;1H"));
+    }
+
+    #[test]
+    fn clear_stale_rows_to_bytes_clears_left_of_a_popup_that_moved_right() {
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(6, 5, 2)).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        // Covered rows keep the popup's cells and lose the ones left of it.
+        assert!(ansi.contains("[7;5H\u{1b}[1K"), "{ansi:?}");
+        assert!(ansi.contains("[8;5H\u{1b}[1K"), "{ansi:?}");
+        // Uncovered rows are cleared whole.
+        assert!(ansi.contains("[9;1H\u{1b}[2K"), "{ansi:?}");
+        assert!(ansi.contains("[10;1H\u{1b}[2K"), "{ansi:?}");
     }
 
     #[test]

@@ -26,13 +26,12 @@ zle -N expand-or-complete _test_native
 _test_ready() { print -r -- ready > "$HOME/ready"; }
 add-zle-hook-widget line-init _test_ready
 _test_probe() { print -r -- "$BUFFER" > "$HOME/probe"; }
-# Tab reuses the cursor position of a visible popup. Hide it so that Tab asks
-# the terminal again.
+zle -N _test_probe
+bindkey '^Y' _test_probe
+# Hide the popup, so that Tab starts a session without one on screen.
 _test_hide() { _zacrs_clear_popup; }
 zle -N _test_hide
 bindkey '^O' _test_hide
-zle -N _test_probe
-bindkey '^Y' _test_probe
 PROMPT='> '
 RPROMPT=''
 ZSH
@@ -92,6 +91,15 @@ case "$ZACRS_TEST_CASE" in
         # The first key ends the popup session; the rest belongs to the line.
         send_keys ls
         wait_buffer ls
+        dsr_typeahead=' ab'
+        send_keys $'\t'
+        wait_reply
+        wait_buffer 'ls ab'
+        ;;
+    hidden)
+        # As "session", with no popup on screen when Tab starts the session.
+        send_keys ls
+        wait_buffer ls
         send_keys $'\C-o'
         wait_buffer ls
         dsr_typeahead=' ab'
@@ -103,8 +111,6 @@ case "$ZACRS_TEST_CASE" in
         # The session hands its first key back to the shell. It must run
         # before the key typed after it.
         send_keys ls
-        wait_buffer ls
-        send_keys $'\C-o'
         wait_buffer ls
         dsr_typeahead=$'\C-a'x
         send_keys $'\t'
