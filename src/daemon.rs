@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::app::{App, CompletionSet};
 use crate::config::{Config, ConfigReloader, KeyBindings, Theme, config_path};
-use crate::fuzzy::FuzzyMatcher;
+use crate::fuzzy::{FuzzyMatcher, OvershootQuery};
 use crate::handoff::compute_reuse_token;
 use crate::input::{self, Action};
 use crate::protocol::{
@@ -366,6 +366,36 @@ impl DaemonServer {
         Some(entry.tsv)
     }
 
+    /// Candidates for a fresh gather that returned nothing because the user
+    /// typed past a name (`README.mdx` for `README.md`). Compsys filters by the
+    /// current prefix, so the names exist only in the set cached for a shorter
+    /// prefix in the same context. Only names that the prefix extends are
+    /// returned. The fresh gather confirmed none of them, so callers must not
+    /// apply one without the user choosing it.
+    fn overshoot_rescue_tsv(&self, context_key: &str, current_prefix: &str) -> Option<String> {
+        let entry = self.candidate_cache.get(context_key)?;
+        if entry.source_prefix.len() >= current_prefix.len()
+            || !current_prefix.starts_with(&entry.source_prefix)
+        {
+            return None;
+        }
+        let overshoot = OvershootQuery::new(current_prefix, false);
+        let tsv = entry
+            .tsv
+            .lines()
+            .filter(|line| {
+                let text = line.split('\t').next().unwrap_or_default();
+                overshoot.score(text).is_some()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if tsv.is_empty() {
+            return None;
+        }
+        debug!(context_key, "overshoot rescue from cached candidates");
+        Some(tsv)
+    }
+
     /// Store `tsv` in the candidate cache under `context_key`.
     /// Evicts the oldest entry when `CANDIDATE_CACHE_MAX_ENTRIES` is exceeded.
     /// Re-inserting an existing key moves it to the most-recent position.
@@ -691,6 +721,10 @@ impl DaemonServer {
                 // configured abbreviations. Do not conflate it with a cache-only
                 // request, which also has no TSV lines but leaves this flag unset.
                 if tsv_opt.is_none() && candidates_present {
+                    let rescued = context_key
+                        .as_deref()
+                        .and_then(|key| self.overshoot_rescue_tsv(key, &prefix))
+                        .unwrap_or_default();
                     let response = self.handle_render(
                         RenderParams {
                             prefix: prefix.clone(),
@@ -702,7 +736,7 @@ impl DaemonServer {
                             command_position,
                             command_context: command_context.clone(),
                         },
-                        b"",
+                        rescued.as_bytes(),
                     );
                     match response {
                         Response::Success {
@@ -710,7 +744,7 @@ impl DaemonServer {
                             metadata,
                         } => {
                             if let Some(ref key) = popup_key {
-                                self.store_active_popup(key, prefix, String::new());
+                                self.store_active_popup(key, prefix, rescued);
                             }
                             let meta = metadata.unwrap_or_default();
                             let _ = protocol::write_text_ok(&mut writer, &meta, tty_bytes.len());
@@ -931,7 +965,10 @@ impl DaemonServer {
                 let tsv = match tsv_opt {
                     None => {
                         if candidates_present {
-                            String::new()
+                            context_key
+                                .as_deref()
+                                .and_then(|key| self.overshoot_rescue_tsv(key, &prefix))
+                                .unwrap_or_default()
                         } else {
                             if context_key.is_none() {
                                 if let Some(ref key) = popup_key {
@@ -1333,7 +1370,11 @@ impl DaemonServer {
             return None;
         }
 
-        app.select_first();
+        // A name the user typed past is only a suggestion: Enter and Space keep
+        // the typed text until the user moves to the name explicitly.
+        if !app.match_mode().is_overshoot() {
+            app.select_first();
+        }
         Some(app)
     }
 
@@ -1380,7 +1421,9 @@ impl DaemonServer {
             .then(|| app.unambiguous_prefix().map(str::to_string))
             .flatten();
 
-        if accept_single && app.filtered_indices().len() == 1 {
+        // Accepting a name the user typed past drops typed text, and the fresh
+        // gather did not confirm it, so the popup always asks first.
+        if accept_single && !app.match_mode().is_overshoot() && app.filtered_indices().len() == 1 {
             if let Some(candidate) = app.selected_candidate() {
                 let _ = write_apply_result(
                     writer,
@@ -1482,7 +1525,11 @@ impl DaemonServer {
                         Action::TypeChar(c) => {
                             let clear_bytes = ui::render::clear_to_bytes(&app).unwrap_or_default();
                             app.type_char(c);
-                            if app.filtered_indices().is_empty() {
+                            // Typing past every candidate leaves the popup, as
+                            // before; overshoot rescue must not keep it open
+                            // and turn the next Enter into a truncation.
+                            if app.filtered_indices().is_empty() || app.match_mode().is_overshoot()
+                            {
                                 let _ = write_apply_result(
                                     writer,
                                     &ApplyResult::cancel(app.filter_text.clone()),
@@ -3665,6 +3712,225 @@ mod tests {
         assert!(tty.contains("gpo"), "tty was: {tty:?}");
         assert!(tty.contains("git push origin HEAD"), "tty was: {tty:?}");
         assert!(!tty.contains("go"), "tty was: {tty:?}");
+    }
+
+    fn plain_tty(tty: &str) -> String {
+        let mut plain = String::new();
+        termwiz::escape::parser::Parser::new().parse(tty.as_bytes(), |action| match action {
+            termwiz::escape::Action::Print(c) => plain.push(c),
+            termwiz::escape::Action::PrintString(s) => plain.push_str(&s),
+            _ => {}
+        });
+        plain
+    }
+
+    const OVERSHOOT_CACHED_FILES: &str =
+        "README.md\t\tfile\nREADME.mdx.bak\t\tfile\nRakefile\t\tfile\n";
+
+    fn overshoot_complete_request(reuse_token: Option<&str>) -> TextCompleteRequest {
+        TextCompleteRequest {
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            prev_popup: None,
+            command_position: false,
+            command_context: None,
+            accept_single: true,
+            candidates_present: true,
+            reuse_token: reuse_token.map(str::to_string),
+            shift_tab_sequence: None,
+            context_key: Some("ctx".to_string()),
+            popup_key: Some("popup-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn handle_text_render_empty_gather_rescues_cached_name_typed_past() {
+        let mut server = test_server();
+        server.store_cached_tsv("ctx", "README.m".to_string(), OVERSHOOT_CACHED_FILES.into());
+
+        let output = run_text_request(
+            &mut server,
+            text_request_input(
+                "render 5 2 80 24 context_key=ctx popup_key=popup-1 candidates_present=1",
+                "README.mdx",
+                None,
+            ),
+        );
+
+        let (_, tty) = read_text_ok(&output);
+        let tty = plain_tty(&tty);
+        assert!(tty.contains("README.md"), "tty was: {tty:?}");
+        // The fresh gather did not confirm these, so the cache must not revive them.
+        assert!(!tty.contains("README.mdx.bak"), "tty was: {tty:?}");
+        assert!(!tty.contains("Rakefile"), "tty was: {tty:?}");
+        assert_eq!(
+            server.get_active_popup("popup-1").unwrap().tsv,
+            "README.md\t\tfile"
+        );
+    }
+
+    #[test]
+    fn handle_text_render_empty_gather_ignores_cache_for_unrelated_prefix() {
+        let mut server = test_server();
+        server.store_cached_tsv("ctx", "src".to_string(), OVERSHOOT_CACHED_FILES.into());
+
+        for prefix in ["README.mdx", "sr"] {
+            let output = run_text_request(
+                &mut server,
+                text_request_input(
+                    "render 5 2 80 24 context_key=ctx candidates_present=1",
+                    prefix,
+                    None,
+                ),
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output),
+                "EMPTY\n",
+                "prefix {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_text_complete_overshoot_rescue_always_asks_before_dropping_typed_text() {
+        // Also with the auto popup visible: the fresh gather did not confirm
+        // the cached name, so a single candidate is not accepted at once.
+        for reuse_token in [None, Some("reuse-1")] {
+            let mut server = test_server();
+            server.store_cached_tsv("ctx", "README.m".to_string(), OVERSHOOT_CACHED_FILES.into());
+
+            let request = overshoot_complete_request(reuse_token);
+            let output = run_text_request(
+                &mut server,
+                text_request_input(&request.header_line(), "README.mdx", None),
+            );
+
+            let rendered = String::from_utf8_lossy(&output);
+            assert!(
+                rendered.starts_with("FRAME "),
+                "{reuse_token:?}: {rendered}"
+            );
+            assert!(
+                plain_tty(&rendered).contains("README.md"),
+                "{reuse_token:?}: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_text_complete_leaves_shell_syntax_after_a_cached_name_to_native_expansion() {
+        let mut server = test_server();
+        server.store_cached_tsv(
+            "ctx",
+            "file.t".to_string(),
+            "file.txt\t\tfile\n".to_string(),
+        );
+
+        let request = overshoot_complete_request(None);
+        let output = run_text_request(
+            &mut server,
+            text_request_input(&request.header_line(), "file.txt{,.bak}", None),
+        );
+
+        // Code 4 hands the word to zle expand-or-complete, as before the rescue.
+        let result = read_text_complete_result(&output);
+        assert_eq!(result.code, 4);
+    }
+
+    fn overshoot_session_params() -> CompleteParams {
+        CompleteParams {
+            prefix: "README.mdx".to_string(),
+            cursor_row: 5,
+            cursor_col: 2,
+            term_cols: 80,
+            term_rows: 24,
+            prev_popup_row: None,
+            prev_popup_height: None,
+            command_position: false,
+            command_context: None,
+            accept_single: true,
+            reuse_popup: true,
+            shift_tab_sequence: None,
+        }
+    }
+
+    #[test]
+    fn handle_complete_overshoot_session_keeps_typed_text_until_a_name_is_chosen() {
+        for (key, done) in [
+            (&b"\r"[..], "DONE 1 README.mdx"),
+            (&b" "[..], "DONE 2 README.mdx "),
+        ] {
+            let mut server = test_server();
+            let mut reader = run_complete_session(
+                &mut server,
+                overshoot_session_params(),
+                "README.md\t\tfile\n",
+                &[SessionMessage::Key(key)],
+            );
+            let _ = read_frame(&mut reader);
+            let (actual, _) = read_done(&mut reader);
+            assert_eq!(
+                actual.strip_suffix('\n').unwrap_or(&actual),
+                done,
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_complete_overshoot_session_applies_a_name_moved_to_explicitly() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            overshoot_session_params(),
+            "README.md\t\tfile\n",
+            &[SessionMessage::Key(b"\t"), SessionMessage::Key(b" ")],
+        );
+        let _ = read_frame(&mut reader);
+        let _ = read_frame(&mut reader);
+        let (done, _) = read_done(&mut reader);
+        assert_eq!(
+            done.strip_suffix('\n').unwrap_or(&done),
+            "DONE 2 README.md "
+        );
+    }
+
+    #[test]
+    fn handle_complete_typing_past_every_candidate_still_leaves_popup() {
+        let mut server = test_server();
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "README.".to_string(),
+                cursor_row: 5,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                prev_popup_row: None,
+                prev_popup_height: None,
+                command_position: false,
+                command_context: None,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "README.md\t\tfile\nREADME.txt\t\tfile\n",
+            &[
+                SessionMessage::Key(b"m"),
+                SessionMessage::Key(b"d"),
+                SessionMessage::Key(b"x"),
+            ],
+        );
+        let _ = read_frame(&mut reader);
+        let _ = read_frame(&mut reader);
+        let _ = read_frame(&mut reader);
+        let (done, _) = read_done(&mut reader);
+        assert_eq!(
+            done.strip_suffix('\n').unwrap_or(&done),
+            "DONE 1 README.mdx"
+        );
     }
 
     #[test]

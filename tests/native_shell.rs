@@ -408,6 +408,16 @@ fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
 }
 
 #[test]
+fn zsh_file_name_typed_past_is_offered_from_the_previous_candidates() {
+    for daemon in ["1", "0"] {
+        run_popup_script(
+            include_str!("support/popup_overshoot.zsh"),
+            &[("ZACRS_TEST_DAEMON", daemon)],
+        );
+    }
+}
+
+#[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();
     let (_, timed_out) = run_shell(
