@@ -324,6 +324,7 @@ fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
         ("single", "3"),
         ("native", "3"),
         ("session", "24"),
+        ("passthrough", "24"),
     ] {
         for daemon in ["1", "0"] {
             run_popup_script(

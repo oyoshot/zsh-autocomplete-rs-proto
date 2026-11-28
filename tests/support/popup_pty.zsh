@@ -60,6 +60,16 @@ wait_output() {
     done
     fail "waiting for $what"
 }
+# Wait until the terminal has answered a query, with `dsr_typeahead` first.
+wait_reply() {
+    local attempt
+    for attempt in {1..300}; do
+        drain_pty
+        [[ -z "$dsr_typeahead" ]] && return 0
+        sleep 0.01
+    done
+    fail 'waiting for the plugin to ask for the cursor position'
+}
 assert_no_popup() {
     drain_pty
     [[ "$pty_output" != *'┌'* && "$pty_output" != *'└'* ]] || fail "drew a popup frame $1"

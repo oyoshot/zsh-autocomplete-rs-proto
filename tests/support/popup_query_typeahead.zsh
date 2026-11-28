@@ -40,29 +40,20 @@ ZSH
 # wait_buffer <text>: probe until the edit buffer is exactly this.
 wait_buffer() {
     local attempt
-    for attempt in {1..30}; do
-        : > "$HOME/probe"
-        send_keys $'\x19'
-        local inner
-        for inner in {1..20}; do
-            drain_pty
-            [[ "$(<"$HOME/probe")" == "$1" ]] && return 0
-            [[ -s "$HOME/probe" ]] && break
-            sleep 0.01
-        done
-    done
-    fail "buffer is ${(qqq)$(<"$HOME/probe")}, expected ${(qqq)1}"
-}
-
-# Wait until the terminal has answered the query, with the typed keys first.
-wait_reply() {
-    local attempt
+    : > "$HOME/probe"
+    send_keys $'\x19'
     for attempt in {1..300}; do
         drain_pty
-        [[ -z "$dsr_typeahead" ]] && return 0
+        [[ "$(<"$HOME/probe")" == "$1" ]] && return 0
+        # Ask again after a wrong answer, and now and then in case the
+        # probe key itself was typed ahead of a reply.
+        if [[ -s "$HOME/probe" ]] || (( attempt % 20 == 0 )); then
+            : > "$HOME/probe"
+            send_keys $'\x19'
+        fi
         sleep 0.01
     done
-    fail 'waiting for the plugin to ask for the cursor position'
+    fail "buffer is ${(qqq)$(<"$HOME/probe")}, expected ${(qqq)1}"
 }
 
 start_shell
@@ -75,6 +66,8 @@ case "$ZACRS_TEST_CASE" in
         send_keys l
         wait_reply
         wait_buffer ls
+        # The popup then follows the buffer that the queued key produced.
+        wait_output 'the popup for the final buffer' '┌' 'blk'
         ;;
     single)
         # Tab inserts the only candidate without opening a popup session.
@@ -105,6 +98,18 @@ case "$ZACRS_TEST_CASE" in
         send_keys $'\t'
         wait_reply
         wait_buffer 'ls ab'
+        ;;
+    passthrough)
+        # The session hands its first key back to the shell. It must run
+        # before the key typed after it.
+        send_keys ls
+        wait_buffer ls
+        send_keys $'\C-o'
+        wait_buffer ls
+        dsr_typeahead=$'\C-a'x
+        send_keys $'\t'
+        wait_reply
+        wait_buffer xls
         ;;
 esac
 

@@ -413,7 +413,12 @@ _zacrs_render() {
         cursor_col=$_zacrs_last_render_cursor_col
     else
         _zacrs_get_cursor_pos
-        _zacrs_requeue_stale
+        if _zacrs_requeue_stale; then
+            # Like type-ahead: the next redraw retries with the new buffer.
+            _zacrs_clear_popup
+            _zacrs_prev_lbuffer=""
+            return
+        fi
     fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
@@ -549,8 +554,10 @@ _zacrs_apply() {
                 new_lbuffer="${base}${restore_text}"
             fi
             _zacrs_suppressed=0
+            # The key that ended the session was typed before any unread
+            # keys. zle -U is a stack, so queue them as one string.
             _zacrs_decode_hex_to_REPLY "$result_text"
-            [[ -n "$REPLY" ]] && zle -U "$REPLY"
+            _zacrs_cursor_stale="$REPLY${_zacrs_cursor_stale:-}"
             ;;
     esac
 
@@ -635,11 +642,11 @@ _zacrs_invoke_daemon() {
     if [[ "${lines[1]}" == "CACHE_MISS" ]]; then
         return 2
     fi
-    _zacrs_keep_unread_stale "${lines[3]:-}"
     if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 1
     fi
+    _zacrs_keep_unread_stale "${lines[3]:-}"
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
@@ -700,10 +707,10 @@ _zacrs_invoke() {
 
     local -a lines
     lines=("${(@f)output}")
-    _zacrs_keep_unread_stale "${lines[3]:-}"
     if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
         return 1
     fi
+    _zacrs_keep_unread_stale "${lines[3]:-}"
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
@@ -717,9 +724,11 @@ _zacrs_invoke() {
 # Keys typed between a cursor position query and the terminal's reply are
 # read along with the reply and kept in _zacrs_cursor_stale. A popup session
 # takes them as its first input. Whatever is left when the widget is done
-# goes back to ZLE.
+# goes back to ZLE. Succeeds if there were keys to queue. PENDING does not
+# count queued keys, so callers that care must use this status.
 _zacrs_requeue_stale() {
-    [[ -n "${_zacrs_cursor_stale:-}" ]] && zle -U "$_zacrs_cursor_stale"
+    [[ -n "${_zacrs_cursor_stale:-}" ]] || return 1
+    zle -U "$_zacrs_cursor_stale"
     _zacrs_cursor_stale=""
 }
 
@@ -785,10 +794,12 @@ _zacrs_collect_candidates() {
 # === Popup completion widget ===
 
 _zacrs_complete_popup() {
-    _zacrs_complete_with_popup
-    local complete_status=$?
-    _zacrs_requeue_stale
-    return $complete_status
+    {
+        _zacrs_complete_with_popup
+    } always {
+        # Also on interrupt, so keys never leak into a later widget.
+        _zacrs_requeue_stale
+    }
 }
 
 _zacrs_complete_with_popup() {
@@ -930,7 +941,12 @@ _zacrs_line_pre_redraw() {
             cursor_col=$_zacrs_last_render_cursor_col
         else
             _zacrs_get_cursor_pos
-            _zacrs_requeue_stale
+            if _zacrs_requeue_stale; then
+                # Like type-ahead: the next redraw retries with the new buffer.
+                _zacrs_clear_popup
+                _zacrs_prev_lbuffer=""
+                return
+            fi
         fi
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
         # candidates 引数を空にして送信 → デーモンがキャッシュを探す
