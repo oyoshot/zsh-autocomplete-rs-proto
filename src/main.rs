@@ -1,5 +1,4 @@
-use zsh_autocomplete_rs::app::App;
-use zsh_autocomplete_rs::candidate::Candidate;
+use zsh_autocomplete_rs::app::CompletionSet;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::protocol::TextCompleteResult;
@@ -182,31 +181,25 @@ fn run_render(
     }
 
     // Fallback: direct execution
-    let mut candidates =
-        Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
-    candidates.extend(
-        config
-            .abbreviations
-            .iter()
-            .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
-            .map(|abbr| {
-                Candidate::abbreviation(
-                    abbr.trigger.clone(),
-                    abbr.expansion.clone(),
-                    abbr.description.clone(),
-                )
-            }),
+    let set = CompletionSet::new(
+        config,
+        std::str::from_utf8(&raw_stdin).unwrap_or(""),
+        command_position,
+        command_context.as_deref(),
     );
 
-    if candidates.is_empty() {
+    if set.is_empty() {
         return Ok(1);
     }
 
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new()
-        .with_kind_order(config.kind_order.at_position(command_position));
-    let mut app = App::new_with_matcher(
-        candidates, prefix, cursor_row, cursor_col, cols, rows, fuzzy,
+    let mut app = set.into_app(
+        prefix,
+        cursor_row,
+        cursor_col,
+        cols,
+        rows,
+        zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new(),
     );
     if app.filtered_indices().is_empty() {
         return Ok(1);

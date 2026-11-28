@@ -5,8 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use crate::app::App;
-use crate::candidate::Candidate;
+use crate::app::{App, CompletionSet};
 use crate::config::{Config, ConfigReloader, KeyBindings, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
 use crate::handoff::compute_reuse_token;
@@ -1205,36 +1204,21 @@ impl DaemonServer {
             }
         };
 
-        let mut candidates = Candidate::parse_lines_dedup(tsv_str);
-
-        candidates.extend(
-            self.config
-                .abbreviations
-                .iter()
-                .filter(|abbr| abbr.is_available_at(command_position, command_context.as_deref()))
-                .map(|abbr| {
-                    Candidate::abbreviation(
-                        abbr.trigger.clone(),
-                        abbr.expansion.clone(),
-                        abbr.description.clone(),
-                    )
-                }),
+        let set = CompletionSet::new(
+            &self.config,
+            tsv_str,
+            command_position,
+            command_context.as_deref(),
         );
 
-        if candidates.is_empty() {
+        if set.is_empty() {
             debug!("render request had no candidates");
             return Response::Empty;
         }
 
         // Take fuzzy matcher out to reuse, put it back after
-        let fuzzy = self
-            .fuzzy
-            .take()
-            .unwrap_or_default()
-            .with_kind_order(self.config.kind_order.at_position(command_position));
-        let mut app = App::new_with_matcher(
-            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
-        );
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let mut app = set.into_app(prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy);
 
         if app.filtered_indices().is_empty() {
             debug!("render request had no matching candidates after filter");
@@ -1322,35 +1306,15 @@ impl DaemonServer {
         command_context: Option<&str>,
     ) -> Option<App> {
         let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
-        let mut candidates = Candidate::parse_lines_dedup(tsv);
+        let set = CompletionSet::new(&self.config, tsv, command_position, command_context);
 
-        candidates.extend(
-            self.config
-                .abbreviations
-                .iter()
-                .filter(|abbr| abbr.is_available_at(command_position, command_context))
-                .map(|abbr| {
-                    Candidate::abbreviation(
-                        abbr.trigger.clone(),
-                        abbr.expansion.clone(),
-                        abbr.description.clone(),
-                    )
-                }),
-        );
-
-        if candidates.is_empty() {
+        if set.is_empty() {
             let _ = write_apply_result(writer, &ApplyResult::no_candidates());
             return None;
         }
 
-        let fuzzy = self
-            .fuzzy
-            .take()
-            .unwrap_or_default()
-            .with_kind_order(self.config.kind_order.at_position(command_position));
-        let mut app = App::new_with_matcher(
-            candidates, prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy,
-        );
+        let fuzzy = self.fuzzy.take().unwrap_or_default();
+        let mut app = set.into_app(prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy);
 
         // When auto_insert_unambiguous is disabled, keep filter_text at the typed
         // prefix so that cancel/passthrough paths never return an extended value.
