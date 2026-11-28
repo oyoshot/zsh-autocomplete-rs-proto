@@ -1,6 +1,3 @@
-set -eu
-zmodload zsh/zpty
-
 cat > "$HOME/.zshrc" <<'ZSH'
 unsetopt MONITOR
 stty rows 24 cols 100
@@ -34,51 +31,7 @@ PROMPT='> '
 RPROMPT=''
 ZSH
 
-cleanup() {
-    zpty -d zacrs_resize 2>/dev/null || true
-    "$ZACRS_BIN" daemon stop >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
-typeset pty_output='' dsr_pending=''
-drain_pty() {
-    local chunk=''
-    while zpty -r -t zacrs_resize chunk 2>/dev/null; do
-        pty_output+="$chunk"
-        dsr_pending+="$chunk"
-        while [[ "$dsr_pending" == *$'\e[6n'* ]]; do
-            zpty -w -n zacrs_resize $'\e[2;5R'
-            dsr_pending="${dsr_pending#*$'\e[6n'}"
-        done
-        dsr_pending="${dsr_pending[-3,-1]}"
-    done
-    return 0
-}
-fail() {
-    print -u2 -r -- "not ok: $*"
-    print -u2 -r -- "pty: ${(qqq)pty_output}"
-    exit 1
-}
-wait_file() {
-    local file="$1" expected="$2" attempt
-    for attempt in {1..300}; do
-        drain_pty
-        [[ -f "$HOME/$file" && "$(<"$HOME/$file")" == "$expected" ]] && return 0
-        sleep 0.01
-    done
-    fail "waiting for $file = ${(qqq)expected}"
-}
-wait_popup() {
-    setopt localoptions extendedglob
-    local attempt
-    for attempt in {1..300}; do
-        drain_pty
-        local plain_output=${pty_output//$'\e'\[[0-9\;]#m/}
-        [[ "$plain_output" == *'┌ ls '* && "$plain_output" == *'lscpu'* ]] && return 0
-        sleep 0.01
-    done
-    fail 'waiting for a real completion popup'
-}
+# Give output that must not appear a moment to arrive.
 settle() {
     local attempt
     for attempt in {1..20}; do
@@ -86,30 +39,17 @@ settle() {
         sleep 0.01
     done
 }
-# The session draws its first frame, with a selected row, only after the
-# client has installed its resize handler.
-wait_session_frame() {
-    local attempt
-    for attempt in {1..300}; do
-        drain_pty
-        [[ "$pty_output" == *$'\e[7m'* ]] && return 0
-        sleep 0.01
-    done
-    fail 'waiting for the popup session to draw its first frame'
-}
-assert_no_frame() {
-    [[ "$pty_output" != *'┌'* && "$pty_output" != *'└'* ]] || fail "drew a popup frame $1"
-}
 
-zpty -b zacrs_resize zsh -di
-wait_file ready ready
-zpty -w -n zacrs_resize ls
-wait_popup
+start_shell
+send_keys ls
+wait_output 'the automatic popup' '┌' '└'
 
-# Tab opens the interactive session on top of the visible popup.
+# Tab opens the interactive session on top of the visible popup. The session
+# draws its first frame, with a selected row, only after the client has
+# installed its resize handler.
 pty_output=''
-zpty -w -n zacrs_resize $'\t'
-wait_session_frame
+send_keys $'\t'
+wait_output 'the popup session to draw its first frame' $'\e[7m'
 [[ ! -e "$HOME/tab-done" ]] || fail 'the popup session ended before the resize'
 
 # Shrink the terminal under the open session.
@@ -117,13 +57,13 @@ pty_output=''
 stty ${=ZACRS_TEST_SHRINK} < "$(<"$HOME/tty")"
 wait_file tab-done done
 settle
-assert_no_frame 'after the resize'
+assert_no_popup 'after the resize'
 [[ "$pty_output" == *$'\e[2K'* ]] || fail 'did not clear the popup rows'
 
 # The session ended as a cancel: the buffer is intact and no popup is left.
-zpty -w -n zacrs_resize $'\x19'
+send_keys $'\x19'
 wait_file probe 'ls:2:0'
 settle
-assert_no_frame 'after the session'
+assert_no_popup 'after the session'
 
 print -r -- 'ok: shrinking the terminal under an open popup closes it'

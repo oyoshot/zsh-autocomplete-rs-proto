@@ -1320,7 +1320,7 @@ impl DaemonServer {
         tsv: &str,
         command_position: bool,
         command_context: Option<&str>,
-    ) -> Option<(App, Vec<u8>)> {
+    ) -> Option<App> {
         let native_candidates_present = tsv.lines().any(|line| !line.is_empty());
         let mut candidates = Candidate::parse_lines_dedup(tsv);
 
@@ -1369,10 +1369,8 @@ impl DaemonServer {
             return None;
         }
 
-        let scroll_bytes = scroll_for_popup(&mut app);
-
         app.select_first();
-        Some((app, scroll_bytes))
+        Some(app)
     }
 
     fn handle_complete<R: BufRead, W: Write>(
@@ -1397,7 +1395,7 @@ impl DaemonServer {
             shift_tab_sequence,
         } = params;
 
-        let (mut app, scroll_bytes) = match self.setup_session(
+        let mut app = match self.setup_session(
             writer,
             prefix,
             cursor_row,
@@ -1444,6 +1442,7 @@ impl DaemonServer {
             return;
         }
 
+        let scroll_bytes = scroll_for_popup(&mut app);
         let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
         let prev_popup = prev_popup_row.zip(prev_popup_height);
         if self
@@ -1838,14 +1837,10 @@ fn cancel_text(app: &App) -> &str {
 }
 
 /// Compute scroll-up bytes needed to make room for the popup below the
-/// cursor, and move `app.cursor_row` up to match. Does nothing when no
-/// popup fits the terminal.
+/// cursor, and move `app.cursor_row` up to match. Callers check
+/// `App::popup_fits` first.
 fn scroll_for_popup(app: &mut App) -> Vec<u8> {
     let mut scroll_bytes = Vec::new();
-    if !app.popup_fits() {
-        return scroll_bytes;
-    }
-
     let scroll_amount =
         ui::popup::Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
     if scroll_amount > 0 {
@@ -2333,7 +2328,7 @@ mod tests {
             worker.join().unwrap();
         }
         let mut output = Vec::new();
-        let (app, _) = server
+        let app = server
             .setup_session(
                 &mut output,
                 "gs".into(),

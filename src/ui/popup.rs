@@ -404,6 +404,15 @@ mod tests {
         assert_eq!(Popup::rows_available(0), 0);
     }
 
+    /// The Zsh adapter repeats the size limit to skip work for a popup that
+    /// cannot appear. It has no way to read these constants, so pin its copy.
+    #[test]
+    fn zsh_adapter_uses_the_same_size_limit() {
+        let plugin = include_str!("../../shell/zsh-autocomplete-rs.plugin.zsh");
+        let check = format!("(( LINES < {MIN_TERM_ROWS} || COLUMNS < {MIN_TERM_COLS} ))");
+        assert!(plugin.contains(&check), "expected `{check}` in the plugin");
+    }
+
     /// In any terminal a popup fits, scrolling by `scroll_to_fit` leaves room
     /// to place the popup directly below the cursor and inside the terminal,
     /// so it never covers the cursor line. Runs as a randomized test under

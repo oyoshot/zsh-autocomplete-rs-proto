@@ -1,6 +1,3 @@
-set -eu
-zmodload zsh/zpty
-
 cat > "$HOME/.zshrc" <<'ZSH'
 unsetopt MONITOR
 # Too few rows for the cursor line, the frame and a candidate, or too few
@@ -35,78 +32,28 @@ PROMPT='> '
 RPROMPT=''
 ZSH
 
-cleanup() {
-    zpty -d zacrs_small 2>/dev/null || true
-    "$ZACRS_BIN" daemon stop >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
-typeset pty_output='' dsr_pending=''
-drain_pty() {
-    local chunk=''
-    while zpty -r -t zacrs_small chunk 2>/dev/null; do
-        pty_output+="$chunk"
-        dsr_pending+="$chunk"
-        while [[ "$dsr_pending" == *$'\e[6n'* ]]; do
-            zpty -w -n zacrs_small $'\e[2;5R'
-            dsr_pending="${dsr_pending#*$'\e[6n'}"
-        done
-        dsr_pending="${dsr_pending[-3,-1]}"
-    done
-    return 0
-}
-fail() {
-    print -u2 -r -- "not ok: $*"
-    print -u2 -r -- "pty: ${(qqq)pty_output}"
-    exit 1
-}
-wait_file() {
-    local file="$1" expected="$2" attempt
-    for attempt in {1..300}; do
-        drain_pty
-        [[ -f "$HOME/$file" && "$(<"$HOME/$file")" == "$expected" ]] && return 0
-        sleep 0.01
-    done
-    fail "waiting for $file = ${(qqq)expected}"
-}
 wait_cursor_query() {
-    local attempt
-    for attempt in {1..300}; do
-        drain_pty
-        [[ "$pty_output" == *$'\e[6n'* ]] && return 0
-        sleep 0.01
-    done
-    fail 'waiting for the plugin to ask for the cursor position'
-}
-assert_no_popup() {
-    drain_pty
-    [[ "$pty_output" != *'┌'* && "$pty_output" != *'└'* ]] || fail "drew a popup frame $1"
+    wait_output 'the plugin to ask for the cursor position' $'\e[6n'
 }
 probe() {
     : > "$HOME/probe"
-    zpty -w -n zacrs_small $'\x19'
+    send_keys $'\x19'
     wait_file probe "ls:2:0:$ZACRS_TEST_DAEMON"
 }
 
-zpty -b zacrs_small zsh -di
-wait_file ready ready
+start_shell
 
 if [[ "$ZACRS_TEST_FITS" == 1 ]]; then
     # The smallest terminal that fits: both size checks must let it through.
-    zpty -w -n zacrs_small ls
+    send_keys ls
     wait_cursor_query
-    for attempt in {1..300}; do
-        drain_pty
-        [[ "$pty_output" == *'┌'* && "$pty_output" == *'└'* ]] && break
-        sleep 0.01
-    done
-    [[ "$pty_output" == *'┌'* && "$pty_output" == *'└'* ]] || fail 'drew no popup in a terminal that fits'
+    wait_output 'a popup in a terminal that fits' '┌' '└'
     print -r -- 'ok: the smallest terminal that fits shows the popup'
     exit 0
 fi
 
 # Typing must neither show the automatic popup nor do the work for one.
-zpty -w -n zacrs_small ls
+send_keys ls
 # The first probe may arrive as type-ahead, which defers the redraw hook. The
 # second one runs only after the hook has seen the final buffer.
 probe
@@ -115,7 +62,7 @@ assert_no_popup 'while typing'
 [[ "$pty_output" != *$'\e[6n'* ]] || fail 'asked for the cursor position while typing'
 
 # Tab cannot show a popup either, so it hands over to native completion.
-zpty -w -n zacrs_small $'\t'
+send_keys $'\t'
 # The engine decides this one: the plugin asks for the cursor position and
 # then gets "no candidates" back.
 wait_cursor_query
