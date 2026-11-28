@@ -58,6 +58,21 @@ _test_accept() {
     BUFFER=''
     zle .accept-line
 }
+_test_oversize() {
+    # More than the daemon accepts in one request (1 MiB).
+    _zacrs_compsys() {
+        _zacrs_ctx_valid=0
+        _zacrs_captured=()
+        local -i i
+        local padding=${(l:600::x:):-}
+        for (( i = 1; i <= 1800; i++ )); do
+            _zacrs_captured+=("ls-oversized-candidate-$i-$padding"$'\tcommand')
+        done
+    }
+    print -r -- oversized > "$HOME/oversized"
+}
+zle -N _test_oversize
+bindkey '^P' _test_oversize
 zle -N _test_probe
 zle -N _test_reload
 zle -N _test_defer
@@ -161,4 +176,21 @@ for abort_key in $'\x03' $'\x07' $'\x18' $'\x0f'; do
     (( ++next_line ))
     assert_fresh_line "$next_line"
 done
+# The daemon refuses a candidate set over its request limit. The subprocess
+# draws that popup, and the daemon stays in use for later requests.
+[[ "$ZACRS_TEST_DAEMON" == 1 ]] || { print -r -- 'ok: no daemon to keep'; exit 0 }
+zpty -w -n zacrs_lifecycle $'\x10'
+wait_file oversized oversized
+pty_output=''
+zpty -w -n zacrs_lifecycle ls
+typeset -i attempt
+for attempt in {1..500}; do
+    drain_pty
+    [[ "$pty_output" == *'oversized-candidate'* ]] && break
+    sleep 0.01
+done
+[[ "$pty_output" == *'oversized-candidate'* ]] || fail 'waiting for the oversized popup'
+: > "$HOME/probe"
+zpty -w -n zacrs_lifecycle $'\x19'
+wait_file probe "ls:2:1:$ZACRS_TEST_ENTER:$ZACRS_TEST_DAEMON"
 print -r -- 'ok: new ZLE lines discard stale popup state without erasing the prompt'

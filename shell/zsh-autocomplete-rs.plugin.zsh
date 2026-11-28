@@ -398,6 +398,11 @@ _zacrs_daemon_send_render() {
     elif [[ "$header" == CACHE_MISS ]]; then
         exec {fd}<&-
         return 3
+    elif [[ "$header" == 'ERROR payload too large' ]]; then
+        # The daemon refused this candidate set, not the session. The caller
+        # draws it through the subprocess; later requests still use the daemon.
+        exec {fd}<&-
+        return 2
     else
         exec {fd}<&-
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
