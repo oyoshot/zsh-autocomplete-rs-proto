@@ -351,12 +351,6 @@ fn keys(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) ->
 /// Time from the last key to a fully drawn popup, with a daemon. Both adapters
 /// stay open and take turns, so drift in the machine affects them alike.
 fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -> Result<Results> {
-    // Unbuffered progress, for a run that stops without a result.
-    let trace = |step: &str| {
-        if std::env::var_os("ZACRS_BENCH_TRACE").is_some() {
-            eprintln!("popup: {step}");
-        }
-    };
     fs::write(
         session.home.path().join(".zshrc"),
         include_str!("zle/popup.zsh"),
@@ -366,7 +360,6 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
     let mut shells = Vec::new();
     for (name, entry) in adapters {
         let plugin = session.stage(entry, name, "plain")?;
-        trace(&format!("spawn {name}"));
         let mut shell = session.shell(&plugin, name, false, false)?;
         shell.probe(
             &session.home.path().join(format!("ready-{name}")),
@@ -394,15 +387,11 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
                     shell.probe(&idle, &format!("{marks}\n"))
                 };
                 // A new word before the one completed makes a new cache entry.
-                trace(&format!("{name} rep {rep} {command}: setup"));
                 shell.clear_output();
                 shell.send(format!("\x15{command} x{rep} ").as_bytes())?;
                 shell.popup_drawn()?;
-                trace("setup drawn");
                 let mut timed = |shell: &mut pty::Shell, key: &[u8]| -> Result<f64> {
-                    trace("settle");
                     settle(shell)?;
-                    trace("key");
                     shell.clear_output();
                     let start = Instant::now();
                     shell.send(key)?;
@@ -419,10 +408,8 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
             }
         }
     }
-    trace("stopping");
     drop(shells);
     session.daemon("stop")?;
-    trace("stopped");
     Ok(Results::from([("popup".into(), samples)]))
 }
 
