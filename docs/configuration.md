@@ -53,17 +53,25 @@ With a nonempty query, candidates are ordered by matching score, shorter
 candidate text, kind priority, then text. With an empty query, kind priority
 comes first, followed by shorter text and text order.
 
-Customize kind priority in `[completion]`. This is the default order:
+Customize kind priority in `[completion]`. The default order depends on the
+cursor position. At command position, it is:
 
 ```toml
 [completion]
 kind_order = ["directory", "file", "abbreviation", "command", "alias", "builtin", "function", "other"]
 ```
 
+At argument positions, abbreviations move after every native kind:
+`directory`, `file`, `command`, `alias`, `builtin`, `function`, `other`, then
+`abbreviation`.
+
 Earlier entries have higher priority. Omitted kinds follow the listed ones in
-their default order; `kind_order = []` and omitting the setting both use the
-default. For example, `kind_order = ["command"]` puts commands first for empty
-queries and equal-score/equal-length matches. To prefer commands over
+their default order for the current position; `kind_order = []` and omitting
+the setting both use the default. A list that names `abbreviation` applies as
+written at both positions, so copying the command-position list above also
+keeps abbreviations ahead of native candidates at argument positions. For
+example, `kind_order = ["command"]` puts commands first for empty queries and
+equal-score/equal-length matches. To prefer commands over
 abbreviations while keeping paths first, use
 `kind_order = ["directory", "file", "command"]`.
 
@@ -76,9 +84,12 @@ candidates, while an open interactive popup retains its starting order.
 
 This setting changes only kind priority. It does not override a better matching
 score or shorter text, or change which abbreviations are eligible in the
-current context. The default keeps paths first at empty argument positions such
-as `nvim <Tab>` and `mv <Tab>`; explicitly putting `abbreviation` first also
-prioritizes eligible argument abbreviations there.
+current context. With the default order, subcommands, options, and paths such
+as `git <Tab>`, `nvim <Tab>`, and `mv <Tab>` come before eligible argument
+abbreviations, including those restricted with `when.command`. Typing part of a
+trigger still ranks it by matching score. To list argument abbreviations
+earlier, name `abbreviation` in `kind_order`; putting it first prioritizes them
+everywhere.
 
 ## Abbreviations
 
@@ -86,13 +97,14 @@ Static abbreviations are portable completion candidates. By default they are
 offered only at command position. Expansions are inserted literally without
 running shell evaluation while candidates are being gathered or displayed.
 
-Abbreviations use the same matching score as other candidates. For equal scores
-and text lengths, the default kind order is directories, files, abbreviations, then
-commands and other native candidates. For example, an abbreviation
-`mkdir = "mkdir -p"` appears before the `mkdir` command for both `mkd` and
-`mkdir`. Better matches and shorter candidate text still take precedence.
-With an empty query, the default kind order keeps paths before abbreviations,
-including at argument positions such as `nvim <Tab>` and `mv <Tab>`.
+Abbreviations use the same matching score as other candidates. At command
+position, for equal scores and text lengths, the default kind order is
+directories, files, abbreviations, then commands and other native candidates.
+For example, an abbreviation `mkdir = "mkdir -p"` appears before the `mkdir`
+command for both `mkd` and `mkdir`. Better matches and shorter candidate text still take precedence.
+At argument positions, abbreviations follow native candidates such as
+subcommands, options, and paths, so `git <Tab>` lists subcommands before
+`when.position = "any"` abbreviations.
 
 For simple entries, use the `[abbreviations]` table:
 
