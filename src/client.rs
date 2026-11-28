@@ -250,10 +250,17 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
         };
         if let Some(result) = result {
             // A reply that arrived after the session would reach the shell
-            // as typed input.
-            discard_late_replies(&mut tty, &mut typed, late_replies)?;
-            raw_mode.restore();
-            state.clear_popup(&mut tty_writer)?;
+            // as typed input. Clear the popup before waiting for it; raw mode
+            // stays on to read it, and the clear writes no newlines.
+            if late_replies > 0 {
+                state.clear_popup(&mut tty_writer)?;
+                // The result stands even if the terminal cannot be read.
+                let _ = discard_late_replies(&mut tty, &mut typed, late_replies);
+                raw_mode.restore();
+            } else {
+                raw_mode.restore();
+                state.clear_popup(&mut tty_writer)?;
+            }
             return Ok((result, typed.into_iter().flatten().collect()));
         }
     }
@@ -1035,8 +1042,12 @@ mod tests {
 
         discard_late_replies(&mut tty, &mut typed, 1).unwrap();
 
-        // Keys after the last reply stay in the terminal for the shell.
         assert_eq!(typed, [b"x".to_vec()]);
+        // Keys after the last reply stay in the terminal for the shell.
+        drop(terminal);
+        let mut rest = Vec::new();
+        tty.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, b"y");
     }
 
     #[test]
