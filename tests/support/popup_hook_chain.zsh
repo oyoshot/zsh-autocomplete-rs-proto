@@ -41,8 +41,16 @@ probe() {
 }
 assert_later_hook_ran() {
     [[ -s "$HOME/before" ]] || fail "no redraw was observed $1"
-    [[ "$(<"$HOME/after")" == "$(<"$HOME/before")" ]] \
-        || fail "the hook after ours missed a redraw $1: before=${(qqq)$(<"$HOME/before")} after=${(qqq)$(<"$HOME/after")}"
+    # The redraw after the last probe may still be between the two hooks. A
+    # skipped redraw never catches up, so waiting cannot hide one.
+    local attempt before after
+    for attempt in {1..300}; do
+        drain_pty
+        before="$(<"$HOME/before")" after="$(<"$HOME/after")"
+        [[ "$after" == "$before" ]] && return 0
+        sleep 0.01
+    done
+    fail "the hook after ours missed a redraw $1: before=${(qqq)before} after=${(qqq)after}"
 }
 
 start_shell
