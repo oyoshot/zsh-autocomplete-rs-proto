@@ -232,9 +232,7 @@ enter_line '_test_load_plugin; _test_load_plugin'
 for abort_key in $'\x03' $'\x07'; do
     zpty -w -n zacrs_enter $'next \x19'
     wait_file "$HOME/editor" 'gs '
-    next_ready=$(( $(<"$HOME/ready") + 1 ))
-    zpty -w -n zacrs_enter "$abort_key"
-    wait_file "$HOME/ready" "$next_ready"
+    abort_line "$abort_key"
     zpty -w -n zacrs_enter $'gs \x19'
     wait_file "$HOME/editor" 'git status '
     enter_line $'\x15'
@@ -276,9 +274,7 @@ for direction in / '?'; do
         wait_file "$HOME/search-before" forward
     fi
     # Cancel the recalled line and verify that ordinary expansion was restored.
-    next_ready=$(( $(<"$HOME/ready") + 1 ))
-    zpty -w -n zacrs_enter $'\x03'
-    wait_file "$HOME/ready" "$next_ready"
+    abort_line $'\x03'
     zpty -w -n zacrs_enter $'gs \x19'
     wait_file "$HOME/editor" 'git status '
     enter_line $'\x15'
@@ -295,14 +291,11 @@ for direction in / '?'; do
     fi
     zpty -w -n zacrs_enter "$direction"$'needle h\ri\x19'
     wait_file "$HOME/editor" 'gs needle hay'
-    next_ready=$(( $(<"$HOME/ready") + 1 ))
-    zpty -w -n zacrs_enter $'\x03'
-    wait_file "$HOME/ready" "$next_ready"
+    abort_line $'\x03'
 done
 enter_line 'bindkey -M vicmd "/" vi-history-search-backward; bindkey -M vicmd "?" vi-history-search-forward'
 
 # Interrupt the minibuffer itself; the borrowed Space binding must be restored.
-next_ready=$(( $(<"$HOME/ready") + 1 ))
 pty_output=''
 zpty -w -n zacrs_enter $'\e/needle #'
 # VINTR can flush queued input. Wait until the native search reader has
@@ -313,8 +306,7 @@ for attempt in {1..500}; do
     sleep 0.01
 done
 [[ "$pty_output" == *'#'* ]] || fail 'vi search query was not displayed'
-zpty -w -n zacrs_enter $'\x03'
-wait_file "$HOME/ready" "$next_ready"
+abort_line $'\x03'
 zpty -w -n zacrs_enter $'gs \x19'
 wait_file "$HOME/editor" 'git status '
 enter_line $'\x15'
