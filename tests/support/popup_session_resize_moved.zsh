@@ -10,23 +10,11 @@ _zacrs_compsys() {
     _zacrs_captured=($'ls\tcommand' $'lsblk\tcommand' $'lscpu\tcommand')
 }
 zle -N _zacrs_compsys
-# Report when the Tab widget, and with it the popup session, has returned.
-_test_tab() {
-    zle _zacrs_complete_popup
-    print -r -- done > "$HOME/tab-done"
-}
-zle -N _test_tab
-bindkey '^I' _test_tab
 _test_ready() {
     print -r -- "$TTY" > "$HOME/tty"
     print -r -- ready > "$HOME/ready"
 }
 add-zle-hook-widget line-init _test_ready
-_test_probe() {
-    print -r -- "$BUFFER:$CURSOR:$_zacrs_popup_visible" > "$HOME/probe"
-}
-zle -N _test_probe
-bindkey '^Y' _test_probe
 PROMPT='> '
 RPROMPT=''
 ZSH

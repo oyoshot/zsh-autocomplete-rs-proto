@@ -1203,8 +1203,8 @@ impl DaemonServer {
             } => {
                 let stale_clear_bytes = match prev_popup {
                     Some(prev) => {
-                        let (row, height) = ui::popup::rows_moved(prev, -i32::from(rows));
-                        let height = height.min(app.term_rows.saturating_sub(row));
+                        let (row, height) =
+                            ui::popup::rows_moved(prev, -i32::from(rows), app.term_rows);
                         ui::render::clear_stale_rows_to_bytes(row, height, &popup)?
                     }
                     None => Vec::new(),
@@ -1701,6 +1701,7 @@ impl DaemonServer {
                         prev_popup: Some(ui::popup::rows_moved(
                             (previous_popup.row, previous_popup.height),
                             moved,
+                            term_rows,
                         )),
                     };
                     if self.send_frame(writer, &app, before, false, None).is_err() {

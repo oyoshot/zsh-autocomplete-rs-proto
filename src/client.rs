@@ -37,7 +37,7 @@ pub fn try_daemon_render(
     command_context: Option<&str>,
     candidates_raw: &[u8],
 ) -> Result<RenderResponse, DaemonUnavailable> {
-    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_cols, term_rows) = terminal_size();
 
     let request = Request::Render {
         prefix: prefix.to_string(),
@@ -106,7 +106,7 @@ pub fn try_daemon_complete(
     context_key: Option<&str>,
     popup_key: Option<&str>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
-    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_cols, term_rows) = terminal_size();
     let stream = connect_stream()?;
     stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(60))).ok();
@@ -192,22 +192,14 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
 
     let mut raw_mode =
         RawModeGuard::new(tty.try_clone().map_err(|_| DaemonUnavailable::NotRunning)?)?;
+    // Keys typed before the session could read them, then keys typed while a
+    // resize waited for the cursor position.
+    let mut typed = VecDeque::new();
     let mut pos = 0;
     while pos < stale_bytes.len() {
-        let key = extract_single_key(&stale_bytes, &mut pos);
-        if key.is_empty() {
-            break;
-        }
-        if let Some(result) = state.send_key(reader, writer, &mut tty_writer, &key)? {
-            raw_mode.restore();
-            state.clear_popup(&mut tty_writer)?;
-            return Ok((result, stale_bytes[pos..].to_vec()));
-        }
+        typed.push_back(extract_single_key(&stale_bytes, &mut pos));
     }
-
-    // Keys typed while a resize waited for the cursor position, and the
-    // cursor position replies that came too late for it.
-    let mut typed = VecDeque::new();
+    // Cursor position replies still due after a resize stopped waiting.
     let mut late_replies = 0usize;
     loop {
         let event = match typed.pop_front() {
@@ -223,16 +215,29 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 state.send_key(reader, writer, &mut tty_writer, &key)?
             }
             SessionEvent::Resize {
-                term_cols,
-                term_rows,
+                mut term_cols,
+                mut term_rows,
             } => {
                 // Terminals that move their content on resize move the cursor
-                // with it, so ask where it is now.
-                let reported = query_cursor(&mut tty, &mut tty_writer, &mut typed)?;
-                let (row, col) = reported.unwrap_or_else(|| {
-                    late_replies += 1;
-                    (state.cursor_row, state.cursor_col)
-                });
+                // with it, so ask where it is now. While an earlier reply is
+                // still due, the terminal is slow or silent: do not wait again.
+                let reported = loop {
+                    let reported = if late_replies == 0 {
+                        let reported = query_cursor(&mut tty, &mut tty_writer, &mut typed)?;
+                        late_replies += usize::from(reported.is_none());
+                        reported
+                    } else {
+                        None
+                    };
+                    // Dragging a window resizes it again and again: redraw
+                    // only for the size it settles on.
+                    if !drain_resize_pipe(&mut sigwinch_pipe.reader)? {
+                        break reported;
+                    }
+                    (term_cols, term_rows) = terminal_size();
+                };
+                let (row, col) = reported.unwrap_or((state.cursor_row, state.cursor_col));
+                // As the daemon does, so both move the popup by the same rows.
                 let cursor_row = row.min(term_rows.saturating_sub(1));
                 let cursor_col = col.min(term_cols.saturating_sub(1));
                 state.send_resize(
@@ -389,6 +394,7 @@ impl SessionState {
         (self.popup_row, self.popup_height) = ui::popup::rows_moved(
             (self.popup_row, self.popup_height),
             i32::from(cursor_row) - i32::from(self.cursor_row),
+            term_rows,
         );
         self.cursor_row = cursor_row;
         self.cursor_col = cursor_col;
@@ -500,11 +506,12 @@ fn query_cursor(
 fn parse_cursor_report(key: &[u8]) -> Option<(u16, u16)> {
     let body = key.strip_prefix(b"\x1b[")?.strip_suffix(b"R")?;
     let (row, col) = std::str::from_utf8(body).ok()?.split_once(';')?;
+    // `parse` alone would accept a leading `+`.
     let number = |value: &str| -> Option<u16> {
-        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        value.parse::<u16>().ok()
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse().ok())?
     };
     Some((
         number(row)?.saturating_sub(1),
@@ -591,7 +598,7 @@ fn read_session_event(
 
         if is_readable(&fds[1]) {
             drain_resize_pipe(resize)?;
-            let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let (term_cols, term_rows) = terminal_size();
             return Ok(SessionEvent::Resize {
                 term_cols,
                 term_rows,
@@ -604,13 +611,20 @@ fn read_session_event(
     }
 }
 
-fn drain_resize_pipe(resize: &mut UnixStream) -> Result<(), DaemonUnavailable> {
+/// The terminal size in columns and rows, or 80x24 if it is unknown.
+fn terminal_size() -> (u16, u16) {
+    crossterm::terminal::size().unwrap_or((80, 24))
+}
+
+/// Empties the resize pipe. Returns whether a resize was pending.
+fn drain_resize_pipe(resize: &mut UnixStream) -> Result<bool, DaemonUnavailable> {
     let mut buf = [0u8; 64];
+    let mut drained = false;
     loop {
         match resize.read(&mut buf) {
-            Ok(0) => return Ok(()),
-            Ok(_) => continue,
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Ok(0) => return Ok(drained),
+            Ok(_) => drained = true,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(drained),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return Err(DaemonUnavailable::NotRunning),
         }
