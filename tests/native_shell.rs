@@ -480,6 +480,11 @@ fn zsh_cached_candidates_are_not_served_for_a_word_that_starts_elsewhere() {
 }
 
 #[test]
+fn zsh_older_binary_rejecting_file_arguments_prints_nothing_on_the_edit_line() {
+    run_popup_script(include_str!("support/popup_old_binary.zsh"), &[]);
+}
+
+#[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();
     let (_, timed_out) = run_shell(

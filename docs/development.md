@@ -276,7 +276,8 @@ same binary; comparing incompatible protocol revisions requires a separate
 end-to-end experiment with matching binaries.
 
 TOML includes raw samples, mean, standard deviation, median, 10th/90th
-percentiles, and paired differences between adapters and against no adapter.
+percentiles, the 99th from 100 samples up, and paired differences between
+adapters and against no adapter.
 It also records the command, platform, Zsh version, Git blob hashes of the harness, binary
 and sources, and adapter revisions when the sources are in Git checkouts. For exported
 sources, retain the revision alongside the result. Keep the build profile and

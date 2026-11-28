@@ -61,6 +61,9 @@ typeset -g _zacrs_daemon_started=0
 typeset -g _zacrs_daemon_next_retry=0
 typeset -g _zacrs_socket_path=""
 typeset -g _zacrs_popup_snapshot_lbuffer="" _zacrs_popup_snapshot_buffer=""
+typeset -g _zacrs_popup_snapshot_cwd="" _zacrs_popup_snapshot_home=""
+typeset -g _zacrs_popup_snapshot_file_options=""
+typeset -gi _zacrs_popup_snapshot_daemon=0
 typeset -gi _zacrs_popup_snapshot_cursor=0
 typeset -gi _zacrs_popup_snapshot_prefix_len=0
 typeset -gi _zacrs_popup_snapshot_columns=0
@@ -80,9 +83,9 @@ typeset -gi _zacrs_enter_session_initialized=${_zacrs_enter_session_initialized:
 typeset -gi _zacrs_edit_transport_state=0
 typeset -gi _zacrs_enter_expansion=0
 typeset -gi _zacrs_space_enabled=0
+typeset -gi _zacrs_filesystem_requested=0 _zacrs_filesystem_valid=0
 # Preserve the counter across plugin reloads so old daemon entries cannot
 # collide with a newly sourced copy in the same shell process.
-typeset -gi _zacrs_filesystem_requested=0
 typeset -gi _zacrs_candidate_cache_generation=${_zacrs_candidate_cache_generation:-0}
 
 _zacrs_invalidate_candidate_cache() {
@@ -549,7 +552,9 @@ _zacrs_render() {
     _zacrs_filesystem_args
     render_args+=("${reply[@]}")
     local output
-    output=$(printf '%s' "$candidates_str" | "$ZACRS_BIN" "${render_args[@]}")
+    # An older binary rejects arguments it does not know; keep its usage
+    # error off the edit line.
+    output=$(printf '%s' "$candidates_str" | "$ZACRS_BIN" "${render_args[@]}" 2>/dev/null)
     local exit_code=$?
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then

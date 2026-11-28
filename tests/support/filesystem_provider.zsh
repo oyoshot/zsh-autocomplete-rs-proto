@@ -183,7 +183,7 @@ _test_run() {
         _zacrs_daemon_send_render 2 1 space $'space-result\tcommand\tcommand' '' "$raw_key" 0 1 || code=$?
         [[ $code == 0 ]] || { print -r -- raw-render-header > "$_test_root/state"; return; }
         local fd=$_zacrs_send_render_fd
-        _zacrs_daemon_draw_atomic $fd $_zacrs_parsed_tty_len 0 0 0 0
+        _zacrs_daemon_draw_atomic $fd $_zacrs_parsed_tty_len 2
         exec {fd}<&-
         _zacrs_invoke_daemon space 5 '' 2 1 0 "$raw_key" 1 0 || code=$?
         [[ $code == 0 && "$BUFFER" == $'probe space-result  tail\\n\\c\v\xc2\xa0' ]] || { print -r -- raw-complete-header > "$_test_root/state"; return; }

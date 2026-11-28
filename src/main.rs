@@ -200,7 +200,9 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     };
 
     // Tab refuses a set over the limit, so do not draw a popup for one.
-    if raw_stdin.len() > daemon::MAX_CANDIDATE_BYTES {
+    // The adapter sends this input without the final newline that the other
+    // paths count, so the limit falls one byte earlier here.
+    if raw_stdin.len() >= daemon::MAX_CANDIDATE_BYTES {
         return Ok(1);
     }
 

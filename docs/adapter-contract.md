@@ -202,15 +202,19 @@ found by reading and not confirmed by running.
 |---|---|---|
 | Roles | Source order (native, then files, then command tables), the three-character threshold for typo rescue, the blank-buffer skip and "always accept a single candidate on Tab" are decided in the adapter | read |
 | Roles | The auto-trigger and Tab each implement candidate collection; only the auto-trigger retries an empty native result | read |
-| 1 | Command position has four definitions that disagree, for example on `ls & gi` | read |
+| 1 | Command position has more than one definition, and they disagree, for example on `ls & gi`: candidate kinds use the native context, while the command-table fallback and typo rescue use a handwritten check that does not know `&` | read |
 | 1 | The typed word is the native one after a gather and "text after the last space" for the cache probe and for popup reuse | read |
+| Roles | Whether a gathered set may be cached is decided in the adapter: it sends the cache key only when the native prefix is the text after the last space (`_zacrs_prefix_is_last_word`). The engine cannot decide it, because it is told only one of the two prefixes | confirmed |
 | 2 | The cache key is built by the adapter from the working directory, buffer, home and options, with a hand-kept list of characters to escape so the engine's header parser does not split it | confirmed |
 | 8 | The adapter stores the lookup environment three times and compares it itself; the engine sees it only inside the key | read |
 | 2 | The engine computes a reuse token; the adapter discards it and sends the constant `1` | read |
-| 4 | An oversized set, a failed file lookup and a malformed request each produce different replies on the socket, the subprocess render and Tab | read |
+| 4 | A failed file lookup and a malformed request each produce different replies on the socket, the subprocess render and Tab. An oversized set has the same result for the user on all three, through three different replies | read |
+| 3 | The adapter builds no cache key when the buffer, working directory and home exceed 1,024 characters together, which turns off cached popups and names typed past for that line | confirmed |
+| 4 | A filter containing a line break, and a file request to a daemon without `filesystem=2`, go to the subprocess, where nothing is cached or reused | read |
 | 4 | Terminal size comes from `COLUMNS`/`LINES` on the socket and from the terminal on the subprocess | read |
 | 5 | An unknown request closes the connection with no reply | read |
-| Budgets | The cursor position is asked of the terminal on every changed key; the reuse of the last position appears unreachable | read |
+| Budgets | The cursor position is asked of the terminal on every changed key that draws, twice when it gathers | confirmed |
+| Budgets | At an argument position where native completion finds nothing and no file request is valid, each changed key starts a subshell for a command-table gather that can only return something at command position | read |
 | — | A candidate whose text is `END` with empty description and kind is taken as the end of the candidate list | read |
 
 The last row is a defect, not a design gap.
