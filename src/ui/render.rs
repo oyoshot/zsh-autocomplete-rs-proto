@@ -88,8 +88,16 @@ fn print_candidate(
         text.strip_suffix('…').unwrap_or(text).len()
     };
     let mut offset = 0;
-    for range in ranges.iter().filter(|r| r.end <= original_end) {
-        crossterm::queue!(buf, Print(&text[offset..range.start]))?;
+    let mut shown = ranges.iter().filter(|r| r.end <= original_end).peekable();
+    while let Some(run) = shown.next() {
+        // Emphasize adjacent matches as one run: a typed prefix matches
+        // character by character, and the escape sequences around each one
+        // would multiply the frame size.
+        let mut end = run.end;
+        while let Some(next) = shown.next_if(|r| r.start == end) {
+            end = next.end;
+        }
+        crossterm::queue!(buf, Print(&text[offset..run.start]))?;
         if !selected {
             crossterm::queue!(buf, SetForegroundColor(theme.match_fg))?;
         }
@@ -98,13 +106,13 @@ fn print_candidate(
             // NO_COLOR makes crossterm's color commands reset all attributes.
             // Set bold after the foreground so non-color emphasis survives.
             SetAttribute(Attribute::Bold),
-            Print(&text[range.clone()]),
+            Print(&text[run.start..end]),
             SetAttribute(Attribute::NormalIntensity)
         )?;
         if !selected {
             crossterm::queue!(buf, SetForegroundColor(base))?;
         }
-        offset = range.end;
+        offset = end;
     }
     crossterm::queue!(buf, Print(&text[offset..]))?;
     if !selected {
@@ -668,6 +676,65 @@ mod tests {
             let text = printed_text(&bytes);
             assert!(!text.rsplit_once('└').unwrap().1.contains('/'));
         }
+    }
+
+    /// The text of each bold run, in order.
+    fn bold_runs(bytes: &[u8]) -> Vec<String> {
+        String::from_utf8_lossy(bytes)
+            .split("\u{1b}[1m")
+            .skip(1)
+            .map(|rest| rest.split("\u{1b}[22m").next().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn adjacent_matches_are_emphasized_as_one_run() {
+        for (text, ranges, expected) in [
+            ("lsblk", &[0..1, 1..2, 2..3, 4..5][..], &["lsb", "k"][..]),
+            ("日本語", &[0..3, 3..6], &["日本"]),
+        ] {
+            for selected in [false, true] {
+                let mut buf = Vec::new();
+                print_candidate(&mut buf, text, text, ranges, &Theme::default(), selected).unwrap();
+                assert_eq!(bold_runs(&buf), expected, "{text} selected={selected}");
+            }
+        }
+    }
+
+    #[test]
+    fn matches_after_a_hidden_directory_are_one_run() {
+        // "dir/" is hidden, so the matches of "ab" start the shown text.
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("dir/abc\t\tfile"),
+                Candidate::parse_line("dir/abd\t\tfile"),
+            ],
+            "dir/ab".into(),
+            1,
+            0,
+            80,
+            24,
+        );
+        let (bytes, _) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        assert_eq!(bold_runs(&bytes), ["ab", "ab"]);
+    }
+
+    #[test]
+    fn a_match_run_cut_by_the_ellipsis_keeps_its_shown_characters() {
+        let mut buf = Vec::new();
+        // "abcdef" shortened to "abcd…": the matches past "d" are not shown.
+        let ranges: Vec<_> = (0..6).map(|i| i..i + 1).collect();
+        print_candidate(
+            &mut buf,
+            "abcd…",
+            "abcdef",
+            &ranges,
+            &Theme::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(bold_runs(&buf), ["abcd"]);
+        assert_eq!(printed_text(&buf), "abcd…");
     }
 
     #[test]
