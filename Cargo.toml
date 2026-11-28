@@ -30,14 +30,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 termwiz = "0.23"
 globset = "0.4"
+rustix = { version = "1", default-features = false, features = ["std", "termios"] }
+signal-hook = { version = "0.3", default-features = false }
+filedescriptor = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3"
 portable-pty = "0.9"
-filedescriptor = "0.8"
 signal-hook = "0.3"
 bolero = "0.13"
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
