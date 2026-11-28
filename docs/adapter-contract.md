@@ -86,7 +86,7 @@ each reason.
 A change made outside the shell while the shell is busy, such as a directory
 replaced at the same path during a gather or while the picker is open. Comparing
 values cannot detect a change that is undone before the comparison, and the
-model below finds that case under every variant.
+specification below finds that case even with every check enabled.
 
 ## Budgets on the input path
 
@@ -101,25 +101,31 @@ path keeps behavior, not speed.
 
 ## Checked against a model
 
-[`design/adapter-model.py`](design/adapter-model.py) explores every interleaving
-of keys, in-shell environment changes, slow gathers, Tab and daemon restarts in a
-small model: two word positions, two environments, prefixes up to two
-characters. It checks that a drawn popup and an applied edit always come from
-candidates gathered for the current word and environment.
+[`design/adapter-contract-spec/AdapterContract.tla`](design/adapter-contract-spec/AdapterContract.tla)
+is a TLA+ specification of the exchange. TLC explores every interleaving of
+keys, in-shell environment changes, slow gathers, Tab and daemon restarts for
+two word positions, two environments and prefixes up to two characters. The
+invariant is that a drawn popup and an applied edit always come from candidates
+gathered for the current word and environment.
 
-| Variant | States | Result |
+| Configuration | Distinct states | Result |
 |---|---|---|
-| Popup reuse matched on word and prefix only | 14,972 | An edit from before a `cd` is applied after it |
-| Rule 8: the engine compares the whole snapshot | 15,418 | Safe |
-| Rule 8, and the adapter also re-checks | 15,418 | Safe; the re-check adds nothing |
-| Any variant, with changes from outside the shell | up to 463,308 | Unsafe, as "Not protected" says |
+| `WordAndPrefixOnly`: popup reuse matched on word and prefix | — | Violated: an edit from before a `cd` is applied after it |
+| `Rule8`: the engine compares the whole snapshot | 18,364 | Holds |
+| `Rule8AdapterRechecks`: the adapter also re-checks | 18,364 | Holds; the re-check adds nothing |
+| `Rule8ExternalChanges`: changes from outside the shell | — | Violated, as "Not protected" says |
 
-The model checks the design, not the code.
+```sh
+cd docs/design/adapter-contract-spec
+tlc -config Rule8.cfg AdapterContract.tla
+```
+
+TLC is not run in CI. The specification checks the design, not the code: nothing
+ties its actions to the Rust or Zsh sources.
 
 ## Other shells
 
-The two tables above name no Zsh syntax. Six throwaway adapters in
-[`design/adapter-prototypes/`](design/adapter-prototypes/) each drove the
+The two tables above name no Zsh syntax. Six throwaway adapters each drove the
 unchanged engine binary through Tab, a selection and the resulting edit in a
 pseudo-terminal, on one Linux machine:
 
@@ -132,10 +138,11 @@ pseudo-terminal, on one Linux machine:
 | xonsh 0.25 | The prompt_toolkit completer | The prompt_toolkit buffer | Cursor position not available |
 | Elvish 0.21 | `edit:wordify`, a completer the adapter chooses | `edit:current-command` | No single "complete this line" call, so command names were not covered |
 
-Each ran three or four scenarios once. They used the subprocess path only, so
-neither the daemon nor an automatic popup was exercised, and none handled every
-reply code. Five of the six needed a helper to read the cursor position, which
-is why that fact is optional and falls to the engine.
+Each ran three or four scenarios once, on the subprocess path only, so neither
+the daemon nor an automatic popup was exercised, and none handled every reply
+code. Five of the six needed a helper program to read the cursor position, which
+is why that fact is optional and falls to the engine. The prototypes were not
+kept: they were 20 to 40 lines each, untested, and depended on that helper.
 
 ## Where the code differs today
 
