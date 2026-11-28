@@ -11,17 +11,28 @@ _zacrs_parse_done_line() {
     return 0
 }
 
-# Hex-encode the bytes of $1 into REPLY. Runs in the shell: this is on the
-# path of every daemon render, where starting od and tr cost more than the
-# rest of the request.
+# Hex-encode the bytes of $1 into REPLY. Every daemon render sends one, so
+# short input is encoded in the shell: starting od and tr costs more than the
+# rest of the request. The loop costs more than they do from a few kilobytes.
+typeset -gA _zacrs_hex_of_byte
 _zacrs_encode_hex_to_REPLY() {
-    local input="$1" LC_ALL=C char hex
-    local -i i
+    # Bytes, not characters, and 1-based subscripts, whatever the caller set.
+    emulate -L zsh
+    unsetopt multibyte
+    if (( ${#1} > 1024 )); then
+        REPLY=$(print -rn -- "$1" | od -An -tx1 -v | tr -d ' \n')
+        return
+    fi
+    local char
+    if (( ! ${#_zacrs_hex_of_byte} )); then
+        local -i byte
+        for (( byte = 0; byte < 256; byte++ )); do
+            _zacrs_hex_of_byte[$byte]=${(L)${(l:2::0:)$(( [##16] byte ))}}
+        done
+    fi
     REPLY=""
-    for (( i = 1; i <= ${#input}; i++ )); do
-        char=${input[i]}
-        printf -v hex '%02x' "$(( #char ))"
-        REPLY+=$hex
+    for char in ${(s::)1}; do
+        REPLY+=$_zacrs_hex_of_byte[$(( #char ))]
     done
 }
 

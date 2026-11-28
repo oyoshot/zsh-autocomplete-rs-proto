@@ -891,7 +891,6 @@ _zacrs_keep_unread_stale() {
     fi
 }
 
-
 # === Shared completion helpers ===
 
 # Choose the fallback source once native completion has produced nothing.
