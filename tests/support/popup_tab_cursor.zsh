@@ -47,8 +47,8 @@ pty_output=''
 send_keys $'\t'
 wait_output 'the popup session' $'\e[7m'
 # The session's popup follows the cursor one column right of the automatic
-# popup, so it erases the old popup's left column on the rows it covers.
-wait_output 'the old left column to be erased' $'\e[3;4H\e[1K'
+# popup and erases each row it draws whole, the old popup's left column too.
+wait_output 'the old left column to be erased' $'\e[3;5H\e[2K'
 send_keys $'\e[B'
 wait_output 'the redrawn word' $'\e[2;3Hls'
 [[ "$pty_output" != *$'\e[2;2Hls'* ]] || fail 'redrew the word a column too far left'
