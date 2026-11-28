@@ -1,5 +1,9 @@
 # Shell adapter boundaries
 
+The rule for deciding whether new behavior belongs in the adapter or the engine
+is in [the adapter and engine contract](adapter-contract.md). This page records
+how each existing feature was built.
+
 The shared Rust engine owns configuration, exact abbreviation lookup, selection
 protection, and literal edit results. It does not classify reserved words,
 operators, declarations, quoting, or command boundaries from shell text.
