@@ -131,6 +131,27 @@ trigger still ranks it by matching score. To list argument abbreviations
 earlier, name `abbreviation` in `kind_order`; putting it first prioritizes them
 everywhere.
 
+## Names typed past
+
+When nothing matches, candidates that the query starts with are listed
+instead, longest first and without match emphasis: `README.mdx` lists
+`README.md`, and `claudecode` at command position lists `claude`. Case and
+Latin folding follow ordinary matching. A directory that the query continues
+into, such as `src` for `src/new.rs`, is not listed. Choosing one replaces the
+typed word, so the extra text is removed.
+
+For paths and other arguments, Zsh returns nothing for a word typed past an
+existing name. The daemon then uses the candidates it gathered for a shorter
+word in the same argument position and directory, keeping only the names the
+current word extends. This needs the daemon and a popup shown while typing that
+word; without them the popup closes and the typed text is kept.
+
+These candidates are never applied without an explicit choice. Tab opens the
+popup with nothing selected, even for a single candidate; Enter and Space then
+keep the typed text, and moving to a candidate first applies it. Typing in an
+open popup until nothing matches still closes it and keeps the typed text, so
+`README.md` followed by `.bak` is not replaced by `README.md`.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are

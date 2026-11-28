@@ -30,6 +30,15 @@ pub struct ScoredMatch {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct MatchMode {
     max_typos: u16,
+    /// No candidate matched, so the result lists candidates that the query
+    /// starts with: the user typed past them (`README.mdx` for `README.md`).
+    overshoot: bool,
+}
+
+impl MatchMode {
+    pub(crate) fn is_overshoot(self) -> bool {
+        self.overshoot
+    }
 }
 
 pub(crate) struct FilterResult {
@@ -52,7 +61,9 @@ impl FuzzyMatcher {
         query: &str,
         mode: MatchMode,
     ) -> Vec<std::ops::Range<usize>> {
-        if query.is_empty() {
+        // An overshoot candidate is the typed text minus its tail; marking it
+        // as matched would hide the difference that the user has to notice.
+        if query.is_empty() || mode.overshoot {
             return Vec::new();
         }
         let max_typos = mode.max_typos;
@@ -211,10 +222,54 @@ impl FuzzyMatcher {
             } else {
                 0
             };
-        FilterResult {
-            matches: self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos),
-            mode: MatchMode { max_typos },
+        let matches = self.filter_frizbee_matches(candidates, query, fuzzy_scope, max_typos);
+        if matches.is_empty() {
+            let overshoot = self.filter_overshoot_matches(candidates, query, fuzzy_scope);
+            if !overshoot.is_empty() {
+                return FilterResult {
+                    matches: overshoot,
+                    mode: MatchMode {
+                        max_typos: 0,
+                        overshoot: true,
+                    },
+                };
+            }
         }
+        FilterResult {
+            matches,
+            mode: MatchMode {
+                max_typos,
+                overshoot: false,
+            },
+        }
+    }
+
+    /// Fallback for a query that matches nothing: keep candidates whose text
+    /// the query extends, longest first, so the closest one is on top.
+    /// Kept out of line so the ordinary matching path compiles as before.
+    #[cold]
+    #[inline(never)]
+    fn filter_overshoot_matches(
+        &self,
+        candidates: &[Candidate],
+        query: &str,
+        fuzzy_scope: Option<&[usize]>,
+    ) -> Vec<ScoredMatch> {
+        let overshoot = OvershootQuery::new(query);
+        let matched = |candidate_idx: usize| {
+            overshoot
+                .score(&candidates[candidate_idx].text)
+                .map(|score| ScoredMatch {
+                    candidate_idx,
+                    score,
+                })
+        };
+        let mut results: Vec<ScoredMatch> = match fuzzy_scope {
+            Some(scope) => scope.iter().filter_map(|&idx| matched(idx)).collect(),
+            None => (0..candidates.len()).filter_map(matched).collect(),
+        };
+        sort_scored_matches(&mut results, candidates, &self.kind_order);
+        results
     }
 
     pub fn filter(&mut self, candidates: &[Candidate], query: &str) -> Vec<ScoredCandidate> {
@@ -323,6 +378,80 @@ impl FuzzyMatcher {
 
         sort_scored_matches(&mut results, candidates, &self.kind_order);
         results
+    }
+}
+
+/// Recognizes candidates that a query extends, using the same case and Latin
+/// folding as ordinary matching so `readme.mdx` still reaches `README.md`.
+pub(crate) struct OvershootQuery<'a> {
+    query: Cow<'a, str>,
+    normalize: bool,
+    fold_case: bool,
+}
+
+impl<'a> OvershootQuery<'a> {
+    pub(crate) fn new(query: &'a str) -> Self {
+        let normalize = normalize_for_matching(query) == query;
+        let fold_case = !query.chars().any(char::is_uppercase);
+        Self {
+            query: normalize_case_for_matching(query, fold_case),
+            normalize,
+            fold_case,
+        }
+    }
+
+    /// Returns the candidate's length in characters when the query starts with
+    /// it and continues past it within the same path segment, so a longer,
+    /// closer candidate scores higher.
+    pub(crate) fn score(&self, text: &str) -> Option<u32> {
+        // Reject most candidates before normalizing all of them. ASCII
+        // normalizes to itself, and normalizing the first character alone
+        // yields the first normalized character, since combining marks only
+        // follow a base character.
+        let first = text.chars().next()?;
+        let first_matches = |a: char| {
+            self.query.chars().next().is_none_or(|b| {
+                if self.fold_case {
+                    a.eq_ignore_ascii_case(&b)
+                } else {
+                    a == b
+                }
+            })
+        };
+        if first.is_ascii() {
+            if !first_matches(first) {
+                return None;
+            }
+        } else {
+            let head = normalize_candidate_for_matching(
+                &text[..first.len_utf8()],
+                self.normalize,
+                self.fold_case,
+            );
+            if !head.chars().next().is_none_or(first_matches) {
+                return None;
+            }
+        }
+        // ASCII text keeps its length through normalization.
+        if text.is_ascii() && text.len() >= self.query.len() {
+            return None;
+        }
+        let text = normalize_candidate_for_matching(text, self.normalize, self.fold_case);
+        if text.len() >= self.query.len() {
+            return None;
+        }
+        let head = self.query.get(..text.len())?;
+        let matches = if self.fold_case {
+            head.eq_ignore_ascii_case(&text)
+        } else {
+            head == text
+        };
+        // A name the query continues inside of, such as `dir/` or `dir` for
+        // `dir/file`, is a parent directory rather than the typed name.
+        if !matches || text.ends_with('/') || self.query[text.len()..].contains('/') {
+            return None;
+        }
+        Some(u32::try_from(text.chars().count()).unwrap_or(u32::MAX))
     }
 }
 
@@ -602,6 +731,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn query_typed_past_names_lists_them_longest_first_without_highlight() {
+        let candidates = vec![
+            Candidate::parse_line("READ\t\tfile"),
+            Candidate::parse_line("README.md\t\tfile"),
+            Candidate::parse_line("Rakefile\t\tfile"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "readme.mdx", None);
+
+        assert!(result.mode.is_overshoot());
+        let texts: Vec<_> = result
+            .matches
+            .iter()
+            .map(|m| candidates[m.candidate_idx].text.as_str())
+            .collect();
+        assert_eq!(texts, ["README.md", "READ"]);
+        assert!(
+            matcher
+                .highlight_ranges(&candidates[1], "readme.mdx", result.mode)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn overshoot_is_only_a_fallback_when_nothing_matches() {
+        let candidates = vec![
+            Candidate::parse_line("README.md\t\tfile"),
+            Candidate::parse_line("README.mdx\t\tfile"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "README.mdx", None);
+
+        assert!(!result.mode.is_overshoot());
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(
+            candidates[result.matches[0].candidate_idx].text,
+            "README.mdx"
+        );
+    }
+
+    #[test]
+    fn overshoot_respects_smart_case_and_scope() {
+        let candidates = vec![
+            Candidate::parse_line("readme.md\t\tfile"),
+            Candidate::parse_line("README.md\t\tfile"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "README.mdx", None);
+        let texts: Vec<_> = result
+            .matches
+            .iter()
+            .map(|m| candidates[m.candidate_idx].text.as_str())
+            .collect();
+        assert_eq!(texts, ["README.md"]);
+
+        let scoped = matcher.filter_with_mode(&candidates, "readme.mdx", Some(&[0]));
+        assert_eq!(scoped.matches.len(), 1);
+        assert_eq!(scoped.matches[0].candidate_idx, 0);
+    }
+
+    #[test]
+    fn overshoot_skips_directories_the_query_continues_into() {
+        let candidates = vec![
+            Candidate::parse_line("newdir\t\tdirectory"),
+            Candidate::parse_line("newdir/\t\tdirectory"),
+            Candidate::parse_line("src/main.rs\t\tfile"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "newdir/file.txt", None);
+        assert!(result.matches.is_empty());
+        // The typed name's own segment can still be rescued below a directory.
+        let result = matcher.filter_with_mode(&candidates, "src/main.rsx", None);
+        assert!(result.mode.is_overshoot());
+        assert_eq!(
+            candidates[result.matches[0].candidate_idx].text,
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn command_typed_past_is_rescued_beyond_typo_budget() {
+        let candidates = vec![
+            Candidate::parse_line("claude\tcommand\tcommand_rescue"),
+            Candidate::parse_line("clang\tcommand\tcommand_rescue"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+
+        let result = matcher.filter_with_mode(&candidates, "claudecode", None);
+
+        assert!(result.mode.is_overshoot());
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(candidates[result.matches[0].candidate_idx].text, "claude");
+    }
+
+    #[test]
     fn custom_kind_order_applies_to_empty_and_scored_queries_including_other_and_rescue() {
         let candidates = vec![
             Candidate::parse_line("gs\t\tdirectory"),
@@ -858,7 +1086,14 @@ mod tests {
                 .filter_matches(&[candidate.clone()], "gti", None)
                 .is_empty()
         );
-        let ranges = matcher.highlight_ranges(&candidate, "gti", MatchMode { max_typos: 1 });
+        let ranges = matcher.highlight_ranges(
+            &candidate,
+            "gti",
+            MatchMode {
+                max_typos: 1,
+                overshoot: false,
+            },
+        );
         assert!(!ranges.is_empty());
         assert!(
             ranges
