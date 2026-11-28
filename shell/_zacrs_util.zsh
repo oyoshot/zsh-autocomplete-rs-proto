@@ -271,13 +271,14 @@ _zacrs_expand_command_abbreviation() {
     [[ "$BUFFER" == *[[:space:]] ]] && context+=" "
     local _zacrs_abbreviation_header _zacrs_abbreviation_apply
     _zacrs_abbreviation_request "$operation" "$BUFFER" "$reply[1]" "$reply[2]" "$reply[3]" "$reply[4]" "$_zacrs_abbr_valid" "$context" || return 1
-    [[ "$_zacrs_abbreviation_header" == 'DONE 0 '* || "$_zacrs_abbreviation_header" == 'DONE 0' ]] || return 1
-    [[ "$_zacrs_abbreviation_apply" == 'APPLY '* ]] || return 1
     local literal_path_known=0 literal_path="" literal_suffix=""
     local result_code result_text chain execute restore_text cursor_offset selection_applied insert_trigger
-    _zacrs_parse_done_line "$_zacrs_abbreviation_header" || return 1
-    _zacrs_parse_apply_line "$_zacrs_abbreviation_apply" || return 1
-    (( ! literal_path_known )) || return 1
+    if ! _zacrs_parse_done_line "$_zacrs_abbreviation_header" ||
+        ! _zacrs_parse_apply_line "$_zacrs_abbreviation_apply" || (( literal_path_known )); then
+        _zacrs_edit_transport_state=-1
+        return 1
+    fi
+    (( result_code == 0 )) || return 1
     # Enter placeholder edits and Space edits both invalidate the old suggestion.
     unset POSTDISPLAY
     BUFFER="$result_text"
