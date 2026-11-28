@@ -43,7 +43,7 @@ struct Args {
     samples: u32,
     #[arg(long, default_value_t = 3)]
     warmups: u32,
-    #[arg(long, default_value = "keys", value_parser = ["keys", "startup"])]
+    #[arg(long, default_value = "keys", value_parser = ["keys", "startup", "popup"])]
     workload: String,
     #[arg(long, default_value = "zsh")]
     zsh: PathBuf,
@@ -348,6 +348,71 @@ fn keys(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) ->
     Ok(results)
 }
 
+/// Milliseconds from writing `key` to a fully drawn popup, starting from an
+/// idle shell. A popup is on screen before the hook that drew it returns;
+/// waiting for the shell keeps that hook's tail out of the next interval.
+fn timed_key(shell: &mut pty::Shell, idle: &Path, key: &[u8]) -> Result<f64> {
+    if idle.exists() {
+        fs::remove_file(idle)?;
+    }
+    shell.send(b"\x1d")?;
+    shell.probe(idle, "idle\n")?;
+    let start = Instant::now();
+    shell.send_until_popup(key)?;
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// Time from a key to a fully drawn popup, with a daemon, for a key that
+/// gathers candidates and a key the daemon answers from its cache.
+fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -> Result<Results> {
+    fs::write(
+        session.home.path().join(".zshrc"),
+        include_str!("zle/popup.zsh"),
+    )?;
+    session.config(false, false)?;
+    session.daemon("ensure")?;
+    let mut shells = Vec::new();
+    for (name, entry) in adapters {
+        let plugin = session.stage(entry, name, "plain")?;
+        let mut shell = session.shell(&plugin, name, false, false)?;
+        shell.probe(
+            &session.home.path().join(format!("ready-{name}")),
+            "ready\n",
+        )?;
+        shells.push((name.clone(), shell));
+    }
+    let mut samples = Samples::new();
+    for rep in 0..u64::from(args.samples) + u64::from(args.warmups) {
+        for turn in 0..shells.len() {
+            interrupted()?;
+            // Rotate who goes first.
+            let index = (turn + rep as usize) % shells.len();
+            let (name, shell) = &mut shells[index];
+            let idle = session.home.path().join(format!("idle-{name}"));
+            let mut measured = Sample::new();
+            for (size, command) in [(100, "bench-small"), (10_000, "bench-large")] {
+                // A new word before the one completed makes a new cache entry.
+                shell.send_until_popup(format!("\x15{command} x{rep} ").as_bytes())?;
+                // A prefix the cache has not seen for this word: gather.
+                measured.insert(format!("gather_{size}_ms"), timed_key(shell, &idle, b"w")?);
+                // Leave for another word and come back with one key each. The
+                // daemon still holds the set gathered for this word and prefix.
+                shell.send_until_popup(b"\x0f")?;
+                measured.insert(
+                    format!("cached_{size}_ms"),
+                    timed_key(shell, &idle, b"\x10")?,
+                );
+            }
+            if rep >= u64::from(args.warmups) {
+                samples.entry(name.clone()).or_default().push(measured);
+            }
+        }
+    }
+    drop(shells);
+    session.daemon("stop")?;
+    Ok(Results::from([("popup".into(), samples)]))
+}
+
 #[derive(Serialize)]
 struct Stats {
     n: usize,
@@ -358,11 +423,15 @@ struct Stats {
     max: f64,
     p10: f64,
     p90: f64,
+    /// Absent below 100 samples, where it would only repeat the maximum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p99: Option<f64>,
 }
 fn distribution(mut values: Vec<f64>) -> Stats {
     values.sort_by(f64::total_cmp);
     let n = values.len();
     let mean = values.iter().sum::<f64>() / n as f64;
+    let rank = |quantile: f64| values[(quantile * (n - 1) as f64).round_ties_even() as usize];
     Stats {
         n,
         mean,
@@ -370,8 +439,9 @@ fn distribution(mut values: Vec<f64>) -> Stats {
         median: (values[(n - 1) / 2] + values[n / 2]) / 2.0,
         min: values[0],
         max: values[n - 1],
-        p10: values[(0.1 * (n - 1) as f64).round_ties_even() as usize],
-        p90: values[(0.9 * (n - 1) as f64).round_ties_even() as usize],
+        p10: rank(0.1),
+        p90: rank(0.9),
+        p99: (n >= 100).then(|| rank(0.99)),
     }
 }
 type Summary = BTreeMap<String, BTreeMap<String, BTreeMap<String, Stats>>>;
@@ -503,25 +573,28 @@ fn main() -> Result<()> {
         binary_git_blob: git_hash(&binary)?, binary: binary.clone(),
         adapters: adapters.iter().map(|(name, entry)| Ok((name.clone(), adapter(entry)?))).collect::<Result<_>>()?,
         samples: args.samples, warmups: args.warmups, workload: args.workload.clone(),
-        method: if args.workload == "startup" {
-            "fresh interactive PTY (80x24); warm common compdump; EPOCHREALTIME source interval; PTY creation through final line-init; rotating order; same binary; cold excludes stop time, not filesystem caches"
-        } else {
-            "fresh interactive PTY (80x24); compinit -i -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate"
+        method: match args.workload.as_str() {
+            "startup" => "fresh interactive PTY (80x24); warm common compdump; EPOCHREALTIME source interval; PTY creation through final line-init; rotating order; same binary; cold excludes stop time, not filesystem caches",
+            "popup" => "one interactive PTY (80x24) per adapter, rotating order; compinit -i -D; reused daemon; fixed-list completers of 100 and 10000 words; shell idle, then last key written to PTY through the end of the popup frame read from the PTY; cursor queries answered by the harness",
+            _ => "fresh interactive PTY (80x24); compinit -i -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate",
         }.into(),
     };
     let session = Session::new(binary, zsh)?;
-    let samples = if args.workload == "startup" {
-        startup(&args, &session, &adapters)?
-    } else {
-        keys(&args, &session, &adapters)?
+    let samples = match args.workload.as_str() {
+        "startup" => startup(&args, &session, &adapters)?,
+        "popup" => popup(&args, &session, &adapters)?,
+        _ => keys(&args, &session, &adapters)?,
     };
     let summary = summarize(&samples);
     for (group, variants) in &summary {
         for (variant, metrics) in variants {
             for (metric, stats) in metrics {
+                let tail = stats
+                    .p99
+                    .map_or_else(String::new, |p99| format!(", p99 {p99:.3}"));
                 println!(
-                    "{group} {variant} {metric}: {:.3} ± {:.3}",
-                    stats.mean, stats.sd
+                    "{group} {variant} {metric}: {:.3} ± {:.3} (median {:.3}, p90 {:.3}{tail})",
+                    stats.mean, stats.sd, stats.median, stats.p90
                 );
             }
         }

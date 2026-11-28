@@ -1,4 +1,8 @@
-# Shell adapter boundary for abbreviation edits
+# Shell adapter boundaries
+
+The rule for deciding whether new behavior belongs in the adapter or the engine
+is in [the adapter and engine contract](adapter-contract.md). This page records
+how each existing feature was built.
 
 The shared Rust engine owns configuration, exact abbreviation lookup, selection
 protection, and literal edit results. It does not classify reserved words,
@@ -96,3 +100,124 @@ Pending completion suffixes bypass abbreviation expansion and go directly to
 the current insertion widget. Querying completion context would consume that
 state even without an edit, so restoring only the buffer and cursor is
 insufficient. Removal and retention remain the native widget's responsibility.
+
+## Candidate set limit
+
+The engine offers a popup only for a candidate set of at most 1 MiB of TSV.
+For a larger set, a render request draws nothing and a completion request
+answers `DONE 4`, the result that sends Tab to the shell's own completion. The
+limit is the same on every path, so a popup that is drawn can always be
+selected from.
+
+The adapter does not hold the limit. It sends the candidates and follows the
+reply: the daemon's `ERROR payload too large` means no popup for that request
+and leaves the daemon in use.
+
+## Filesystem fallback provider
+
+The shared filesystem logic delegates path construction and separator handling
+to the host through `std::path`; portability remains an engine goal. Filesystem
+identities are owned `PathBuf` values and borrowed `Path` values at lookup
+boundaries. Directory separators are display/insertion metadata, using the host
+default unless configuration overrides it. Prefix inputs remain incomplete UTF-8
+text supplied by the adapter, not a shell grammar. Drive-qualified relative
+prefixes are declined because this query does not carry per-drive shell cwd.
+
+Linux and macOS are currently validated with the Zsh adapter, Unix sockets and
+Unix terminal/PTY integration. Those transport and adapter implementations are
+platform-specific; host-aware path logic does not claim a working Windows
+runtime or complete coverage of Windows partial-path syntax.
+
+Rust owns literal filesystem enumeration and constructs structured candidates
+without passing filenames through native completion's line-delimited TSV. The
+existing selection policy remains native completion first, filesystem and shell
+command-table fallback only after native completion produces no candidates.
+PATH, aliases, builtins, functions and command rescue remain in the adapter in
+this first slice. Arbitrary native completion, asynchronous scheduling and a
+shared provider manager are later work.
+
+The Zsh adapter captures the native words and prefix before providers can
+change them with `compset`. Only when native completion leaves no candidates
+does the adapter lex the full buffer to verify the capture. It supplies a
+literal path prefix, its insertion/display spelling and the current working
+directory. It offers this capability only at an unquoted literal word end of
+a simple command, including an empty argument. The full raw word must match
+the captured prefix, Zsh's lexical words must cover the input, and the command
+head must be literal and non-reserved. Zsh leaves argument completion after
+an aliased head or a precommand modifier such as `exec` to native completion.
+Quoted or escaped words, substitutions,
+patterns, cursors inside a word, and continuation or recursive editors do not
+request filesystem fallback. When the adapter cannot verify the context, it
+leaves filesystem edits disabled.
+Native completion continues to handle those contexts independently. Explicit
+command paths such as `./` and home-relative paths such as `~/` are supported;
+bare command words retain the command-table path. Home-relative candidates keep
+that display spelling but insert a safely quoted expanded path.
+
+Each request carries an absolute lookup base. Zsh supplies cwd for an ordinary
+relative path and HOME for a home-relative path. The adapter verifies that
+`$PWD` still names the shell's actual working directory before requesting or
+reusing fallback candidates. Before opening the picker, it records the
+physical lookup directory for relative selections. A change of directory
+while the picker is open prevents the relative edit.
+`render-files` and `complete-files` carry three length-framed UTF-8 fields before
+the existing prefix/candidate payload. The adapter requires `filesystem=2` in
+the daemon handshake for these requests. With an older daemon, it uses the
+subprocess for filesystem preview and selection while keeping native
+completion and abbreviation requests on the daemon.
+The daemon's filter uses a single line. The adapter sends a filter containing
+a carriage return or line feed to the subprocess for both preview and Tab,
+where it travels as an argument. A visible preview is not reused for such a
+filter. The Rust client also rejects such a filter without connecting, so
+another caller cannot leak the remainder into the candidate payload.
+When `CASE_GLOB` is off, the adapter requests case-insensitive basename matching
+and carries that policy into the popup filter. With `CASE_PATHS` also off, Rust
+resolves typed parent components case-insensitively using Unicode simple case
+folding. Display uses the actual casing with the typed separators and dot
+components so the expanded filter can still match it.
+`GLOB_DOTS` allows a basename without an explicit dot to match hidden entries.
+The daemon retains structured filesystem snapshots with candidate and active
+popup caches, so navigation and cached selection do not enumerate again. The
+adapter only reuses cached candidates in top-level command editing. The cache
+scopes reuse to session, generation, cwd, HOME, the input on both sides of the
+word being completed and the glob and syntax settings used to verify literal words, including
+`INTERACTIVE_COMMENTS`, `BANG_HIST`, `COMPLETE_ALIASES` and `ALIASES`. The
+existing exact-prefix rule still applies. The adapter generates context keys only when
+a daemon is available and the buffer, cwd and HOME fit within 1,024 characters.
+Popup snapshots require
+the complete buffer to match. For a cached
+filesystem selection, the client must advertise `literal_paths=1` so the
+daemon can return the path and suffix without risking their loss in transit.
+Without that capability the daemon returns a no-edit result. If the daemon
+connection fails during a cache-only Tab handoff, the adapter
+collects the current query before falling back to the subprocess. A provider
+changing cwd or HOME after native context capture invalidates the captured
+filesystem query. A retry that observes the new environment refreshes the key
+before submitting the query.
+
+Literal file paths are separate from display text and configured suffixes.
+Directory separators are presentation/insertion metadata, not stored inside
+the candidate path. The selected path is converted to UTF-8 only at the IPC
+boundary; the existing non-UTF-8 limitation remains explicit.
+Control characters and literal backslashes have distinct display escapes, while
+exact UTF-8 filename bytes, including tabs and newlines, survive collection and
+selection. A complete APPLY line carries the literal path and suffix as paired
+hex metadata. The terminal restore field lets Zsh check record completeness
+after command substitution removes the newline. Truncated records and invalid
+hex preserve the input. Zsh quotes the path
+with its native quoting facility before applying the suffix, including quoting
+tokens that match an ordinary, global or suffix alias. Unambiguous-prefix
+extension is disabled for this source so cancellation cannot apply unquoted
+display text. Preview and interactive selection start with the typed filter.
+Non-UTF-8 names are skipped, never converted lossily. Directory symlinks are
+classified as directories. Each query budgets 1 MiB for candidate rows and
+owned path/display data. Case-insensitive traversal also limits parent
+directories to 1 MiB of path data at each level. The scan budget of 65,536
+entries covers parents and leaves together, including nonmatches. Exceeding a
+limit or encountering a directory iteration error drops the entire set so a
+partial set cannot be selected automatically.
+
+Filesystem collection currently runs synchronously in the shared daemon when a
+fresh request is handled. A slow filesystem can therefore delay other requests;
+this first slice does not provide asynchronous scheduling or cancellation of an
+in-progress directory scan. Moving scheduling to Rust is a separate next step.

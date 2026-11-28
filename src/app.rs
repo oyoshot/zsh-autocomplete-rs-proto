@@ -11,6 +11,24 @@ struct CachedFilter {
     mode: MatchMode,
 }
 
+pub(crate) enum InitialFilter {
+    TypedPrefix(String),
+    CommonPrefix(String),
+    CollectedFiles(String),
+}
+
+impl InitialFilter {
+    fn for_completion(prefix: String, expand_common_prefix: bool, collected_files: bool) -> Self {
+        if collected_files {
+            Self::CollectedFiles(prefix)
+        } else if expand_common_prefix {
+            Self::CommonPrefix(prefix)
+        } else {
+            Self::TypedPrefix(prefix)
+        }
+    }
+}
+
 /// Selection and scroll position over a list of `len` rows, of which at most
 /// `max_visible` are shown.
 ///
@@ -147,12 +165,14 @@ impl Viewport {
     }
 }
 
-/// The candidates for one completion request: native candidates plus the
-/// abbreviations eligible at the cursor, ranked with the kind order for the
-/// same position.
+/// The candidates for one completion request: files the engine collected,
+/// the shell's native candidates and the abbreviations eligible at the
+/// cursor, ranked with the kind order for the same position.
 pub struct CompletionSet {
     candidates: Vec<Candidate>,
     kind_order: KindOrder,
+    collected_files: bool,
+    expand_common_prefix: bool,
 }
 
 impl CompletionSet {
@@ -162,7 +182,26 @@ impl CompletionSet {
         command_position: bool,
         command_context: Option<&str>,
     ) -> Self {
-        let mut candidates = Candidate::parse_lines_dedup(native_tsv);
+        Self::with_files(
+            config,
+            Vec::new(),
+            native_tsv,
+            command_position,
+            command_context,
+        )
+    }
+
+    /// Like `new`, with the files the engine collected for this request.
+    pub fn with_files(
+        config: &Config,
+        files: Vec<Candidate>,
+        native_tsv: &str,
+        command_position: bool,
+        command_context: Option<&str>,
+    ) -> Self {
+        let collected_files = !files.is_empty();
+        let mut candidates = files;
+        candidates.extend(Candidate::parse_lines_dedup(native_tsv));
         candidates.extend(
             config
                 .abbreviations
@@ -173,6 +212,8 @@ impl CompletionSet {
         Self {
             candidates,
             kind_order: config.kind_order.at_position(command_position),
+            collected_files,
+            expand_common_prefix: config.auto_insert_unambiguous,
         }
     }
 
@@ -180,8 +221,14 @@ impl CompletionSet {
         self.candidates.is_empty()
     }
 
-    /// Builds the popup state. `fuzzy` is reused for its cached matcher; its
-    /// kind order is replaced by this set's position-resolved order.
+    /// Builds the popup state for the typed `prefix`. `fuzzy` is reused for
+    /// its cached matcher; its kind order is replaced by this set's
+    /// position-resolved order.
+    ///
+    /// The filter starts at the candidates' common prefix only when
+    /// `auto_insert_unambiguous` is on and no files were collected. Otherwise
+    /// it stays at the typed prefix, so cancel and passthrough never return
+    /// more than the user typed.
     pub fn into_app(
         self,
         prefix: String,
@@ -191,9 +238,9 @@ impl CompletionSet {
         term_rows: u16,
         fuzzy: FuzzyMatcher,
     ) -> App {
-        App::new_with_matcher(
+        App::new_with_initial_filter(
             self.candidates,
-            prefix,
+            InitialFilter::for_completion(prefix, self.expand_common_prefix, self.collected_files),
             cursor_row,
             cursor_col,
             term_cols,
@@ -283,19 +330,49 @@ impl App {
         term_rows: u16,
         fuzzy: FuzzyMatcher,
     ) -> Self {
+        Self::new_with_initial_filter(
+            candidates,
+            InitialFilter::CommonPrefix(prefix),
+            cursor_row,
+            cursor_col,
+            term_cols,
+            term_rows,
+            fuzzy,
+        )
+    }
+
+    pub(crate) fn new_with_initial_filter(
+        candidates: Vec<Candidate>,
+        initial_filter: InitialFilter,
+        cursor_row: u16,
+        cursor_col: u16,
+        term_cols: u16,
+        term_rows: u16,
+        fuzzy: FuzzyMatcher,
+    ) -> Self {
         let term_cols = term_cols.max(1);
         let term_rows = term_rows.max(1);
         let cursor_row = cursor_row.min(term_rows.saturating_sub(1));
         let cursor_col = cursor_col.min(term_cols.saturating_sub(1));
 
-        let lcp = compute_common_prefix(&candidates, &prefix);
+        let collected_files = matches!(initial_filter, InitialFilter::CollectedFiles(_));
+        let (prefix, filter_text) = match initial_filter {
+            InitialFilter::TypedPrefix(prefix) | InitialFilter::CollectedFiles(prefix) => {
+                let filter_text = prefix.clone();
+                (prefix, filter_text)
+            }
+            InitialFilter::CommonPrefix(prefix) => {
+                let filter_text = compute_common_prefix(&candidates, &prefix);
+                (prefix, filter_text)
+            }
+        };
         let shared_dir = shared_parent_dir(&candidates);
         let mut app = App {
             all_candidates: candidates,
             filtered_indices: Vec::new(),
             cached_filters: HashMap::new(),
             match_mode: MatchMode::default(),
-            filter_text: lcp,
+            filter_text,
             viewport: Viewport::default(),
             max_visible: DEFAULT_MAX_VISIBLE,
             cursor_row,
@@ -307,18 +384,22 @@ impl App {
             shared_dir,
         };
         app.sync_max_visible();
-        app.update_filter();
+        app.update_filter_with_scope(None, collected_files);
         app
     }
 
     pub fn update_filter(&mut self) {
-        self.update_filter_with_scope(None);
+        self.update_filter_with_scope(None, false);
     }
 
-    fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>) {
-        let result =
+    fn update_filter_with_scope(&mut self, fuzzy_scope: Option<&[usize]>, collected_files: bool) {
+        let mut result =
             self.fuzzy
                 .filter_with_mode(&self.all_candidates, &self.filter_text, fuzzy_scope);
+        if collected_files {
+            self.fuzzy
+                .include_collected_files(&self.all_candidates, &mut result.matches);
+        }
         self.filtered_indices = result
             .matches
             .into_iter()
@@ -379,7 +460,7 @@ impl App {
             return;
         }
         let previous = std::mem::take(&mut self.filtered_indices);
-        self.update_filter_with_scope(Some(&previous));
+        self.update_filter_with_scope(Some(&previous), false);
     }
 
     pub fn backspace(&mut self) -> bool {
@@ -498,21 +579,12 @@ impl App {
     }
 
     /// Returns the extended common prefix if it is longer than the original prefix, else `None`.
-    /// `filter_text` is initialized to the common prefix of all candidates at construction time.
+    /// Completion may initialize `filter_text` to the common prefix of all candidates.
     pub fn unambiguous_prefix(&self) -> Option<&str> {
         if self.filter_text.len() > self.prefix.len() {
             Some(&self.filter_text)
         } else {
             None
-        }
-    }
-
-    /// Resets `filter_text` to the original typed prefix and re-runs filtering.
-    /// No-op if `filter_text` already equals `prefix`.
-    pub fn reset_filter_to_prefix(&mut self) {
-        if self.filter_text != self.prefix {
-            self.filter_text = self.prefix.clone();
-            self.update_filter();
         }
     }
 }
@@ -637,10 +709,48 @@ mod tests {
         assert!(CompletionSet::new(&Config::default(), "", false, None).is_empty());
     }
 
+    #[test]
+    fn completion_set_chooses_the_initial_filter() {
+        let app_for = |auto_insert_unambiguous: bool, files: Vec<Candidate>| {
+            let mut config = Config::default();
+            config.auto_insert_unambiguous = auto_insert_unambiguous;
+            CompletionSet::with_files(&config, files, "status\t\t\nstash\t\t\n", false, None)
+                .into_app("s".to_string(), 5, 0, 80, 24, FuzzyMatcher::new())
+        };
+        // A name the typed "s" does not match by itself. The provider already
+        // matched it against the path, so it must stay listed.
+        let file = || {
+            let mut file = Candidate::parse_line("Xy\t\tfile");
+            file.literal_path = Some(crate::candidate::LiteralPath {
+                path: "Xy".into(),
+                ignore_case: false,
+            });
+            vec![file]
+        };
+        let lists_file = |app: &App| {
+            app.filtered_indices()
+                .iter()
+                .any(|&i| app.all_candidates[i].text == "Xy")
+        };
+
+        // The common prefix "sta" is offered only when asked for.
+        assert_eq!(app_for(true, Vec::new()).filter_text, "sta");
+        assert_eq!(app_for(false, Vec::new()).filter_text, "s");
+        // With collected files the filter stays at what was typed and the
+        // files stay listed, whatever the setting.
+        for auto_insert_unambiguous in [true, false] {
+            let app = app_for(auto_insert_unambiguous, file());
+            assert_eq!(app.filter_text, "s", "{auto_insert_unambiguous}");
+            assert_eq!(app.prefix, "s", "{auto_insert_unambiguous}");
+            assert!(lists_file(&app), "{auto_insert_unambiguous}");
+        }
+    }
+
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {
         items
             .iter()
             .map(|s| Candidate {
+                literal_path: None,
                 text: s.to_string(),
                 description: String::new(),
                 kind: String::new(),
@@ -1282,32 +1392,6 @@ mod tests {
     fn unambiguous_prefix_returns_some_for_single_candidate_longer_than_prefix() {
         let app = make_test_app("gi", &["git-log"]);
         assert_eq!(app.unambiguous_prefix(), Some("git-log"));
-    }
-
-    // --- reset_filter_to_prefix ---
-
-    #[test]
-    fn reset_filter_to_prefix_noop_when_already_equal() {
-        let mut app = make_test_app("abc", &["abcx", "abcy"]);
-        // filter_text == prefix ("abc"), so reset is a no-op
-        let before = app.filtered_indices.clone();
-        app.reset_filter_to_prefix();
-        assert_eq!(app.filter_text, "abc");
-        assert_eq!(app.filtered_indices, before);
-    }
-
-    #[test]
-    fn reset_filter_to_prefix_restores_and_refilters() {
-        // prefix "g"; "grep" prevents common prefix from extending past "g".
-        // type_char('i') narrows to 2 matches ("git-log", "gist").
-        // reset_filter_to_prefix() must restore filter_text to "g" and re-expand to 3 matches.
-        let mut app = make_test_app("g", &["git-log", "gist", "grep"]);
-        app.type_char('i');
-        assert_eq!(app.filter_text, "gi");
-        assert_eq!(app.filtered_indices.len(), 2); // git-log, gist
-        app.reset_filter_to_prefix();
-        assert_eq!(app.filter_text, "g");
-        assert_eq!(app.filtered_indices.len(), 3); // git-log, gist, grep
     }
 
     // Kani checks every `usize`. The randomized run draws small values so

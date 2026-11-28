@@ -68,7 +68,9 @@ impl FuzzyMatcher {
         }
         let max_typos = mode.max_typos;
         let normalize = normalize_for_matching(query) == query;
-        let fold_case = !(max_typos == 0 && query.chars().any(char::is_uppercase));
+        let file_ignores_case = candidate.filesystem_ignores_case();
+        let fold_case =
+            file_ignores_case || !(max_typos == 0 && query.chars().any(char::is_uppercase));
         let match_query = normalize_case_for_matching(query, fold_case);
         let mut graphemes = Vec::new();
         let normalized = if candidate.text.is_ascii() {
@@ -86,7 +88,7 @@ impl FuzzyMatcher {
         } else {
             UnicodeMatching::Ignore
         };
-        self.ensure_matcher(&match_query, max_typos, unicode);
+        self.ensure_matcher(&match_query, max_typos, unicode, file_ignores_case);
         let mut indices = match self.matcher.match_one_indices(normalized.as_ref(), 0) {
             Some(matched) => matched.indices,
             None if !match_query.is_ascii() => Vec::new(),
@@ -167,8 +169,23 @@ impl FuzzyMatcher {
         self.kind_order
     }
 
-    fn ensure_matcher(&mut self, query: &str, max_typos: u16, unicode: UnicodeMatching) {
-        if self.last_max_typos != max_typos || self.config.unicode != unicode {
+    fn ensure_matcher(
+        &mut self,
+        query: &str,
+        max_typos: u16,
+        unicode: UnicodeMatching,
+        ignore_case: bool,
+    ) {
+        let casing = if ignore_case {
+            CaseMatching::Ignore
+        } else {
+            CaseMatching::Smart
+        };
+        if self.last_max_typos != max_typos
+            || self.config.unicode != unicode
+            || self.config.casing != casing
+        {
+            self.config.casing = casing;
             self.config.max_typos = Some(max_typos);
             self.config.unicode = unicode;
             self.matcher.set_config(self.config.clone());
@@ -283,6 +300,37 @@ impl FuzzyMatcher {
             })
             .collect()
     }
+
+    /// The provider already checked the initial literal prefix. Keep those
+    /// matches even if smart case or display escaping obscures the prefix.
+    pub(crate) fn include_collected_files(
+        &self,
+        candidates: &[Candidate],
+        matches: &mut Vec<ScoredMatch>,
+    ) {
+        if matches.len() == candidates.len() {
+            return;
+        }
+        let mut matched = vec![false; candidates.len()];
+        for row in matches.iter() {
+            matched[row.candidate_idx] = true;
+        }
+        let previous_len = matches.len();
+        matches.extend(
+            candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.literal_path.is_some() && !matched[index]).then_some(ScoredMatch {
+                        candidate_idx: index,
+                        score: 0,
+                    })
+                }),
+        );
+        if matches.len() != previous_len {
+            sort_scored_matches(matches, candidates, &self.kind_order);
+        }
+    }
 }
 
 fn has_typo_rescue_candidates(candidates: &[Candidate], fuzzy_scope: Option<&[usize]>) -> bool {
@@ -308,17 +356,30 @@ impl FuzzyMatcher {
     ) -> Vec<ScoredMatch> {
         let normalize_candidates = normalize_for_matching(query) == query;
         let smart_case = max_typos == 0 && query.chars().any(char::is_uppercase);
-        let fold_case = !smart_case;
-        let match_query = normalize_case_for_matching(query, fold_case);
-        let query_len = match_query.chars().count();
-        let mut candidate_indices = Vec::new();
-        let mut haystacks = Vec::new();
-        let rescue_only = max_typos > 0;
-        let max_typos_usize = usize::from(max_typos);
-
-        if let Some(scope) = fuzzy_scope {
-            for &candidate_idx in scope {
+        let scope_len = fuzzy_scope.map_or(candidates.len(), <[usize]>::len);
+        let indices = (0..scope_len).map(|i| fuzzy_scope.map_or(i, |scope| scope[i]));
+        let mut results = Vec::new();
+        // An uppercase query normally uses smart case. Case-insensitive
+        // filesystem rows use a second batch with the folded query.
+        let mut has_folded_files = false;
+        for folded_files in [false, true] {
+            if folded_files && !has_folded_files {
+                break;
+            }
+            let fold_case = !smart_case || folded_files;
+            let match_query = normalize_case_for_matching(query, fold_case);
+            let query_len = match_query.chars().count();
+            let mut candidate_indices = Vec::new();
+            let mut haystacks = Vec::new();
+            for candidate_idx in indices.clone() {
                 let candidate = &candidates[candidate_idx];
+                if smart_case {
+                    let ignore_case = candidate.filesystem_ignores_case();
+                    has_folded_files |= ignore_case;
+                    if ignore_case != folded_files {
+                        continue;
+                    }
+                }
                 let normalized_text = normalize_candidate_for_matching(
                     &candidate.text,
                     normalize_candidates,
@@ -329,45 +390,24 @@ impl FuzzyMatcher {
                     &normalized_text,
                     &match_query,
                     query_len,
-                    rescue_only,
-                    max_typos_usize,
-                    smart_case,
+                    max_typos > 0,
+                    usize::from(max_typos),
+                    !fold_case,
                 ) {
                     candidate_indices.push(candidate_idx);
                     haystacks.push(normalized_text);
                 }
             }
-        } else {
-            for (candidate_idx, candidate) in candidates.iter().enumerate() {
-                let normalized_text = normalize_candidate_for_matching(
-                    &candidate.text,
-                    normalize_candidates,
-                    fold_case,
-                );
-                if should_match_candidate(
-                    candidate,
-                    &normalized_text,
-                    &match_query,
-                    query_len,
-                    rescue_only,
-                    max_typos_usize,
-                    smart_case,
-                ) {
-                    candidate_indices.push(candidate_idx);
-                    haystacks.push(normalized_text);
-                }
+            if haystacks.is_empty() {
+                continue;
             }
-        }
-
-        if haystacks.is_empty() {
-            return Vec::new();
-        }
-
-        self.ensure_matcher(&match_query, max_typos, UnicodeMatching::Ignore);
-        let mut results: Vec<ScoredMatch> = self
-            .matcher
-            .match_iter(&haystacks)
-            .filter_map(|m| {
+            self.ensure_matcher(
+                &match_query,
+                max_typos,
+                UnicodeMatching::Ignore,
+                folded_files,
+            );
+            results.extend(self.matcher.match_iter(&haystacks).filter_map(|m| {
                 candidate_indices
                     .get(m.index as usize)
                     .copied()
@@ -375,8 +415,8 @@ impl FuzzyMatcher {
                         candidate_idx,
                         score: u32::from(m.score),
                     })
-            })
-            .collect();
+            }));
+        }
 
         sort_scored_matches(&mut results, candidates, &self.kind_order);
         results
@@ -795,6 +835,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn folded_files_and_smart_case_rows_keep_separate_matching_rules() {
+        let mut file = Candidate::parse_line("Report\t\tfile");
+        file.literal_path = Some(crate::candidate::LiteralPath {
+            path: "Report".into(),
+            ignore_case: true,
+        });
+        let candidates = [
+            file,
+            Candidate::parse_line("report\t\tabbreviation"),
+            Candidate::parse_line("rEPo\t\tabbreviation"),
+        ];
+        let mut matcher = FuzzyMatcher::new();
+        let result = matcher.filter_with_mode(&candidates, "rEPo", Some(&[0, 1, 2]));
+        assert_eq!(result.matches.len(), 2);
+        assert!(result.matches.iter().any(|row| row.candidate_idx == 0));
+        assert!(result.matches.iter().any(|row| row.candidate_idx == 2));
+        assert_eq!(
+            matcher.highlight_ranges(&candidates[0], "rEPo", result.mode),
+            [0..1, 1..2, 2..3, 3..4]
+        );
+    }
+
+    #[test]
     fn query_typed_past_names_lists_them_longest_first_without_highlight() {
         let candidates = vec![
             Candidate::parse_line("READ\t\tfile"),
@@ -977,6 +1040,7 @@ mod tests {
         items
             .iter()
             .map(|s| Candidate {
+                literal_path: None,
                 text: s.to_string(),
                 description: String::new(),
                 kind: String::new(),
@@ -1442,6 +1506,7 @@ mod tests {
         items
             .iter()
             .map(|(text, kind)| Candidate {
+                literal_path: None,
                 text: text.to_string(),
                 description: String::new(),
                 kind: kind.to_string(),

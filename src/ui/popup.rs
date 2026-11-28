@@ -179,6 +179,7 @@ mod tests {
         let candidates: Vec<Candidate> = items
             .iter()
             .map(|s| Candidate {
+                literal_path: None,
                 text: s.to_string(),
                 description: String::new(),
                 kind: String::new(),

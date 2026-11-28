@@ -392,7 +392,7 @@ fn zsh_failed_frame_reads_clear_the_popup_on_screen() {
 
 #[test]
 fn zsh_popup_sessions_redraw_the_word_where_it_is_on_screen() {
-    for case in ["moved", "silent"] {
+    for case in ["moved", "silent", "continuation"] {
         for daemon in ["1", "0"] {
             run_popup_script(
                 include_str!("support/popup_tab_cursor.zsh"),
@@ -432,6 +432,39 @@ fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
 }
 
 #[test]
+fn oversized_candidate_sets_leave_tab_to_the_shell() {
+    let runtime = tempfile::Builder::new()
+        .prefix("zacrs-oversized.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let candidates = tempfile::NamedTempFile::new().unwrap();
+    // 1 MiB is the limit; a set one row under it is covered by the unit tests.
+    let rows: String = (0..30_000)
+        .map(|i| format!("ls-candidate-with-some-padding-{i}\tcommand\n"))
+        .collect();
+    assert!(rows.len() > 1_048_576);
+    fs::write(candidates.path(), rows).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"))
+            .args(args)
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .stdin(fs::File::open(candidates.path()).unwrap())
+            .output()
+            .unwrap()
+    };
+
+    for args in [
+        ["complete", "--prefix", "ls"].as_slice(),
+        ["complete", "--daemon", "--prefix", "ls"].as_slice(),
+    ] {
+        let output = run(args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.starts_with("DONE 4"), "{args:?}: {stdout:?}");
+    }
+}
+
+#[test]
 fn zsh_file_name_typed_past_is_offered_from_the_previous_candidates() {
     for daemon in ["1", "0"] {
         run_popup_script(
@@ -439,6 +472,11 @@ fn zsh_file_name_typed_past_is_offered_from_the_previous_candidates() {
             &[("ZACRS_TEST_DAEMON", daemon)],
         );
     }
+}
+
+#[test]
+fn zsh_cached_candidates_are_not_served_for_a_word_that_starts_elsewhere() {
+    run_popup_script(include_str!("support/popup_cache_word_start.zsh"), &[]);
 }
 
 #[test]
@@ -470,4 +508,52 @@ fn shell_exit_cleans_up_delayed_disowned_jobs() {
     assert!(!output.status.success());
     thread::sleep(Duration::from_secs(1));
     assert!(!marker.exists(), "delayed job survived shell cleanup");
+}
+
+#[test]
+fn zsh_filesystem_provider_quotes_literal_selections_and_rejects_unknown_context() {
+    for daemon in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = tempfile::Builder::new()
+            .prefix("zacrs-files.")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let plugin = support::install_zsh_plugin(root.path(), false);
+        let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+        let (output, timed_out) = run_shell(
+            Command::new("zsh")
+                .args(["-df", "-c", include_str!("support/filesystem_provider.zsh")])
+                .env_clear()
+                .env("PATH", env::var_os("PATH").unwrap_or_default())
+                .env("HOME", root.path())
+                .env("ZDOTDIR", root.path())
+                .env("XDG_CONFIG_HOME", root.path().join("config"))
+                .env("XDG_RUNTIME_DIR", runtime.path())
+                .env("ZACRS_BIN", binary)
+                .env("ZACRS_PLUGIN", plugin)
+                .env("ZACRS_TEST_DAEMON", if daemon { "1" } else { "0" })
+                .env("TERM", "xterm-256color")
+                .env(
+                    "LC_ALL",
+                    if cfg!(target_os = "macos") {
+                        "en_US.UTF-8"
+                    } else {
+                        "C.UTF-8"
+                    },
+                )
+                .current_dir(root.path()),
+            Duration::from_secs(20),
+        );
+        let _ = Command::new(binary)
+            .args(["daemon", "stop"])
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .output();
+        assert!(!timed_out, "{output:?}");
+        assert!(
+            output.status.success(),
+            "daemon={daemon}\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

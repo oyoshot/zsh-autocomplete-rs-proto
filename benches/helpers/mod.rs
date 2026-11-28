@@ -140,6 +140,7 @@ pub fn generate_candidates(count: usize) -> Vec<Candidate> {
             )
         };
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description,
             kind,
@@ -170,6 +171,7 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
             )
         };
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description,
             kind,
@@ -184,6 +186,7 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
 pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<Candidate> {
     let mut candidates = vec![
         Candidate {
+            literal_path: None,
             text: "claude".to_string(),
             description: "claude command".to_string(),
             kind: command_kind(rescue),
@@ -192,6 +195,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             source_group: Default::default(),
         },
         Candidate {
+            literal_path: None,
             text: "clang-include-fixer".to_string(),
             description: "clang include fixer".to_string(),
             kind: command_kind(rescue),
@@ -200,6 +204,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             source_group: Default::default(),
         },
         Candidate {
+            literal_path: None,
             text: "clang-include-cleaner".to_string(),
             description: "clang include cleaner".to_string(),
             kind: command_kind(rescue),
@@ -208,6 +213,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             source_group: Default::default(),
         },
         Candidate {
+            literal_path: None,
             text: "cargo-install-update".to_string(),
             description: "cargo install update".to_string(),
             kind: command_kind(rescue),
@@ -225,6 +231,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             format!("{}-{}", base, i / COMMAND_NAMES.len())
         };
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description: format!("{} command", base),
             kind: command_kind(rescue),
@@ -261,6 +268,7 @@ pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate
         let base = COMMAND_NAMES[i % COMMAND_NAMES.len()];
         let text = format!("{}{}-{}", prefix, base, i);
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description: String::new(),
             kind: "command".to_string(),
@@ -314,6 +322,7 @@ pub fn generate_cjk_candidates(count: usize) -> Vec<Candidate> {
             )
         };
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description,
             kind,
@@ -335,6 +344,7 @@ pub fn generate_no_description_candidates(count: usize) -> Vec<Candidate> {
             format!("{}-{}", base, i / COMMAND_NAMES.len())
         };
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description: String::new(),
             kind: "command".to_string(),
@@ -362,6 +372,7 @@ pub fn generate_long_description_candidates(count: usize) -> Vec<Candidate> {
             base, i,
         );
         candidates.push(Candidate {
+            literal_path: None,
             text,
             description,
             kind: "command".to_string(),

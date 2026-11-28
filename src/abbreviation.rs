@@ -131,6 +131,8 @@ pub fn expand_command_abbreviation(
         return None;
     }
     Some(TextCompleteResult {
+        literal_path: None,
+        literal_suffix: String::new(),
         insert_trigger: false,
         code: 0,
         text,

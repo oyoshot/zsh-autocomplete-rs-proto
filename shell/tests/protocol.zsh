@@ -61,4 +61,47 @@ assert_equal 0 "$selection_applied" 'missing selection flag defaults to false wi
 _zacrs_parse_apply_line 'APPLY chain=1 execute=0 selection_applied=0 restore_hex='
 assert_equal 0 "$selection_applied" 'unselected Space dismissal is parsed'
 
+for malformed in \
+    'APPLY chain=1 execute=1' \
+    'APPLY chain=1 path_hex=61 suffix_hex=0 restore_hex=' \
+    'APPLY chain=1 path_hex=61 restore_hex=' \
+    'APPLY text_hex=GG restore_hex=' \
+    'APPLY restore_hex=GG' \
+    'APPLY path_hex=61 suffix_hex=20 path_hex=62 restore_hex='; do
+    if _zacrs_parse_apply_line "$malformed"; then
+        print -u2 -r -- "not ok: accepted malformed APPLY ${(qqq)malformed}"
+        (( ++failures ))
+    else
+        print -r -- 'ok: malformed APPLY is rejected'
+    fi
+done
+
+# The encoder must give the bytes `od` gives under options a user may have
+# set, on both sides of the length where it hands over to `od`, and the decoder
+# must read them back.
+typeset every_byte='' at_limit=${(l:2048::abc :):-} past_limit=${(l:2049::x y:):-} wide=${(l:400::日本:):-}
+# With MULTIBYTE on, values from 128 would become two-byte characters.
+() {
+    setopt localoptions nomultibyte
+    local -i byte
+    for (( byte = 0; byte < 256; byte++ )); do
+        every_byte+=${(#)byte}
+    done
+    assert_equal 256 ${#every_byte} 'the every-byte sample holds 256 bytes'
+}
+for encoder_options in multibyte nomultibyte ksharrays shwordsplit; do
+    for sample in '' 'git ch' '-n' $'tab\there\nline\x01\x7f' '日本語 ñ é' '%s\n' \
+        $'\xff\xfe raw' $'\e[Z' $'a\0b' "$every_byte" "$wide" "$at_limit" "$past_limit"; do
+        expected=$(print -rn -- "$sample" | od -An -tx1 -v | tr -d ' \n')
+        () {
+            setopt localoptions $encoder_options
+            _zacrs_encode_hex_to_REPLY "$sample"
+        }
+        encoded=$REPLY
+        assert_equal "$expected" "$encoded" "hex of ${(q+)sample[1,16]} (${#sample}) matches od with $encoder_options"
+        _zacrs_decode_hex_to_REPLY "$encoded"
+        assert_equal "$sample" "$REPLY" "hex of ${(q+)sample[1,16]} (${#sample}) decodes back with $encoder_options"
+    done
+done
+
 (( failures == 0 ))

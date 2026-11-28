@@ -433,7 +433,10 @@ pub struct SuffixConfig {
 impl Default for SuffixConfig {
     fn default() -> Self {
         let mut by_kind = HashMap::new();
-        by_kind.insert("directory".to_string(), "/".to_string());
+        by_kind.insert(
+            "directory".to_string(),
+            std::path::MAIN_SEPARATOR_STR.to_string(),
+        );
         by_kind.insert("command".to_string(), " ".to_string());
         by_kind.insert("alias".to_string(), " ".to_string());
         by_kind.insert("builtin".to_string(), " ".to_string());
@@ -1279,7 +1282,10 @@ when.command = "["
     #[test]
     fn suffix_defaults_match_current_behavior() {
         let suffixes = SuffixConfig::default();
-        assert_eq!(suffixes.suffix_for_kind("directory"), Some("/"));
+        assert_eq!(
+            suffixes.suffix_for_kind("directory"),
+            Some(std::path::MAIN_SEPARATOR_STR)
+        );
         assert_eq!(suffixes.suffix_for_kind("command"), Some(" "));
         assert_eq!(suffixes.suffix_for_kind("alias"), Some(" "));
         assert_eq!(suffixes.suffix_for_kind("builtin"), Some(" "));

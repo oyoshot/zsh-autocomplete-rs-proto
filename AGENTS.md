@@ -7,6 +7,7 @@ This project began after experience with zsh-autosuggestions exposed unwanted sh
 Rust is intentional: implementing everything in Zsh is difficult to maintain within its language and plugin ecosystem. Keep reusable behavior in a testable Rust engine, with thin adapters for shell-specific integration. Zsh is the current adapter; the project name does not limit future shell support.
 
 - Keep completion, ranking, configuration, UI, and reusable editing policy in Rust. Keep shared models and protocols independent of Zsh syntax and APIs.
+- The adapter reports facts and carries out instructions; the engine decides and remembers. Check where new behavior belongs against `docs/adapter-contract.md` before adding it.
 - Let each adapter establish syntax and editing context through its shell's native facilities. Moving a handwritten Zsh parser into Rust does not make it portable. If context cannot be verified, preserve the input. See `docs/shell-adapters.md`.
 - Minimize shell side effects, not just shell code size. Prefer predictable behavior and explicit state. Reuse existing integration where practical; justify additional hooks, widgets, option changes, and buffer or cursor manipulation by the behavior they enable.
 - Scope shell option changes and restore borrowed state. Handle cancellation, reloads, and failures without leaking changes to buffers, cursors, widgets, or other plugins. Preserve explicit user choices.
@@ -15,7 +16,7 @@ Rust is intentional: implementing everything in Zsh is difficult to maintain wit
 
 ## Repository Map
 
-`src/` contains the Rust engine, CLI, daemon, and protocol; `shell/` contains the Zsh adapter. Tests live in `tests/` and `shell/tests/`, benchmarks in `benches/`, and disposable sessions in `dev/`. Treat `tmp/` as scratch, not primary source. See `docs/shell-adapters.md` for adapter boundaries, `docs/configuration.md` for behavior, and `docs/development.md` for native and container verification.
+`src/` contains the Rust engine, CLI, daemon, and protocol; `shell/` contains the Zsh adapter. Tests live in `tests/` and `shell/tests/`, benchmarks in `benches/`, and disposable sessions in `dev/`. Treat `tmp/` as scratch, not primary source. See `docs/adapter-contract.md` for what belongs in the adapter and what in the engine, `docs/shell-adapters.md` for how existing adapter features were built, `docs/configuration.md` for behavior, and `docs/development.md` for native and container verification.
 
 ## Agent Workflow
 

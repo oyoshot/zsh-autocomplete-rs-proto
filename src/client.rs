@@ -104,7 +104,16 @@ pub fn try_daemon_complete(
     reuse_token: Option<&str>,
     context_key: Option<&str>,
     popup_key: Option<&str>,
+    filesystem: Option<&crate::filesystem::FilesystemQuery>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
+    if prefix.contains(['\r', '\n']) {
+        // The filter is a line in this protocol version. Never leak the rest
+        // into the following candidate payload.
+        return Ok(CompleteSessionOutcome::Done(
+            TextCompleteResult::rejected_edit(),
+            stale_bytes,
+        ));
+    }
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let stream = connect_stream()?;
     stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
@@ -115,6 +124,9 @@ pub fn try_daemon_complete(
     let mut reader = BufReader::new(stream);
 
     let request = TextCompleteRequest {
+        literal_paths: true,
+        filesystem: filesystem.is_some(),
+        filesystem_options: filesystem.map(|query| query.options).unwrap_or_default(),
         cursor_row,
         cursor_col,
         term_cols,
@@ -130,6 +142,10 @@ pub fn try_daemon_complete(
         popup_key: popup_key.map(str::to_string),
     };
     writeln!(writer, "{}", request.header_line()).map_err(|_| DaemonUnavailable::NotRunning)?;
+    if let Some(query) = filesystem {
+        protocol::write_filesystem_query(&mut writer, query)
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
+    }
     writeln!(writer, "{prefix}").map_err(|_| DaemonUnavailable::NotRunning)?;
     if !candidates_tsv.trim().is_empty() {
         writeln!(writer, "{candidates_tsv}").map_err(|_| DaemonUnavailable::NotRunning)?;
@@ -175,9 +191,7 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
         return Err(DaemonUnavailable::EmptyResult);
     }
     if initial_header.starts_with("DONE ") {
-        return TextCompleteResult::read_from(reader, initial_header)
-            .map(|result| (result, stale_bytes))
-            .map_err(|_| DaemonUnavailable::NotRunning);
+        return read_complete_result(reader, initial_header).map(|result| (result, stale_bytes));
     }
 
     let mut tty = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
@@ -236,6 +250,20 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
                 }
             }
         }
+    }
+}
+
+fn read_complete_result(
+    reader: &mut impl BufRead,
+    header: &str,
+) -> Result<TextCompleteResult, DaemonUnavailable> {
+    match TextCompleteResult::read_from(reader, header) {
+        Ok(result) => Ok(result),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            // Never rewrite malformed metadata into a valid-looking shell edit.
+            Ok(TextCompleteResult::rejected_edit())
+        }
+        Err(_) => Err(DaemonUnavailable::NotRunning),
     }
 }
 
@@ -329,9 +357,7 @@ impl SessionState {
                 if clear_on_done {
                     self.clear_popup(tty_writer)?;
                 }
-                TextCompleteResult::read_from(reader, value)
-                    .map(Some)
-                    .map_err(|_| DaemonUnavailable::NotRunning)
+                read_complete_result(reader, value).map(Some)
             }
             "NONE" => Ok(None),
             _ => Err(DaemonUnavailable::NotRunning),
@@ -793,6 +819,63 @@ mod tests {
         assert!(result.chain);
         assert!(!result.execute);
         assert_eq!(result.restore_text, "cargo ");
+    }
+
+    #[test]
+    fn malformed_literal_reply_is_rejected_without_rewriting_display_text() {
+        for apply in [
+            "APPLY execute=1 path_hex=61 restore_hex=\n",
+            "APPLY chain=0 execute=0",
+            "APPLY chain=1 execute=1\n",
+            "APPLY chain=0 execute=0 path_hex=61 suffix_hex=a€ restore_hex=\n",
+        ] {
+            let (result, unread) = run_text_popup_session(
+                &mut apply.as_bytes(),
+                &mut Vec::new(),
+                "DONE 0 display with spaces",
+                b"x".to_vec(),
+                None,
+                0,
+                0,
+            )
+            .unwrap();
+            assert_eq!(result, TextCompleteResult::rejected_edit(), "{apply}");
+            // No session ran, so the typed-ahead key goes back to the shell.
+            assert_eq!(unread, b"x", "{apply}");
+        }
+    }
+
+    #[test]
+    fn multiline_filesystem_filter_is_rejected_before_connecting() {
+        let directory = tempfile::tempdir().unwrap();
+        let query = crate::filesystem::FilesystemQuery {
+            cwd: directory.path().into(),
+            path_prefix: "line\nname".into(),
+            insertion_prefix: "line\nname".into(),
+            options: Default::default(),
+        };
+        let result = try_daemon_complete(
+            "line\nname",
+            2,
+            1,
+            "",
+            false,
+            None,
+            true,
+            true,
+            None,
+            b"x".to_vec(),
+            None,
+            None,
+            None,
+            None,
+            Some(&query),
+        );
+        // No session ran, so the typed-ahead key goes back to the shell.
+        assert!(
+            matches!(result, Ok(CompleteSessionOutcome::Done(result, unread))
+            if result == TextCompleteResult::rejected_edit() && unread == b"x")
+        );
     }
 
     #[test]
