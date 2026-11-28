@@ -113,15 +113,18 @@ fn print_candidate(
     Ok(())
 }
 
-/// Moves to the start of a popup row and clears the rest of the line, which
-/// erases what an earlier, wider frame left there. Clearing before drawing
-/// matters at the right edge: a row that ends in the last column leaves the
-/// cursor on its border, waiting to wrap, and clearing then would erase it.
+/// Moves to the start of a popup row and clears the whole line, which erases
+/// what an earlier frame left on either side. Near the right edge a narrower
+/// frame starts further right, so the left part of a wider one would remain.
+/// Rows a popup stops using are cleared whole as well (see
+/// `queue_clear_rows`). Clearing before drawing matters at the right edge: a
+/// row that ends in the last column leaves the cursor on its border, waiting
+/// to wrap, and clearing then would erase it.
 fn start_popup_row(buf: &mut impl Write, col: u16, row: u16) -> std::io::Result<()> {
     crossterm::queue!(
         buf,
         cursor::MoveTo(col, row),
-        terminal::Clear(terminal::ClearType::UntilNewLine)
+        terminal::Clear(terminal::ClearType::CurrentLine)
     )
 }
 
@@ -877,6 +880,9 @@ mod tests {
             Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine))) => {
                 screen[at.y][at.x..].fill(' ');
             }
+            Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseLine))) => {
+                screen[at.y].fill(' ');
+            }
             _ => {}
         });
     }
@@ -926,27 +932,39 @@ mod tests {
     }
 
     #[test]
-    fn popup_clears_stale_cells_to_its_right() {
+    fn popup_rows_clear_stale_cells_on_both_sides() {
         let (cols, rows) = (40, 10);
-        let app = App::new_with_term_size(
-            vec![Candidate::parse_line("alpha\t\tcommand")],
-            "al".into(),
-            0,
-            2,
-            cols,
-            rows,
-        );
-        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
-        assert!(popup.col + popup.width < cols);
+        // Near the right edge a narrower popup starts further right than the
+        // wider one before it, so that one's left part is left behind; away
+        // from the edge a narrower one leaves the wider one's right part.
+        for cursor_col in [2, 38] {
+            let app = App::new_with_term_size(
+                vec![Candidate::parse_line("alpha\t\tcommand")],
+                "al".into(),
+                0,
+                cursor_col,
+                cols,
+                rows,
+            );
+            let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+            if cursor_col == 38 {
+                assert!(popup.col > 0 && popup.col + popup.width == cols);
+            } else {
+                assert!(popup.col > 0 && popup.col + popup.width < cols);
+            }
 
-        // A wider popup drawn earlier left its rows behind.
-        let mut screen = vec![vec!['Z'; usize::from(cols)]; usize::from(rows)];
-        replay_on_screen(&bytes, &mut screen);
-        for row in popup.row..popup.row + popup.height {
-            let past: String = screen[usize::from(row)][usize::from(popup.col + popup.width)..]
-                .iter()
-                .collect();
-            assert!(past.trim().is_empty(), "row {row}: {past:?}");
+            // An earlier, wider frame filled the rows.
+            let mut screen = vec![vec!['Z'; usize::from(cols)]; usize::from(rows)];
+            replay_on_screen(&bytes, &mut screen);
+            let (left, right) = (usize::from(popup.col), usize::from(popup.col + popup.width));
+            for row in popup.row..popup.row + popup.height {
+                let line = &screen[usize::from(row)];
+                let outside: String = line[..left].iter().chain(&line[right..]).collect();
+                assert!(
+                    outside.trim().is_empty(),
+                    "cursor_col={cursor_col} row {row}: {outside:?}"
+                );
+            }
         }
     }
 
