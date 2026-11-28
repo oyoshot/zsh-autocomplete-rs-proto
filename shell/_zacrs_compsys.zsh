@@ -91,63 +91,6 @@ _zacrs_compadd_has_array_output_flag() {
     return 1
 }
 
-# Compsys sorts the matches of each compadd call unless the call adds them to
-# an unsorted group (-V) or asks for no sorting (-o nosort). Capturing with
-# -O bypasses that sort, so reproduce it. Sets REPLY to the parameter
-# expansion flags for the sort, or to an empty string for none.
-_zacrs_compadd_sort_flags() {
-    local _arg _chars _char _order=""
-    local -i _idx _expect_value=0 _expect_order=0 _unsorted=0
-
-    for _arg in "$@"; do
-        if (( _expect_order )); then
-            _expect_order=0
-            if [[ "$_arg" != -* ]]; then
-                _order+=",$_arg"
-                continue
-            fi
-        fi
-        if (( _expect_value )); then
-            _expect_value=0
-            continue
-        fi
-        [[ "$_arg" == "-" || "$_arg" == "--" ]] && break
-        [[ "$_arg" == -?* ]] || continue
-
-        _chars="${_arg[2,-1]}"
-        for (( _idx = 1; _idx <= ${#_chars}; _idx++ )); do
-            _char="${_chars[_idx]}"
-            case "$_char" in
-                V) _unsorted=1 ;|
-                [diIOADVJXxPSpsWFMrRE])
-                    (( _idx == ${#_chars} )) && _expect_value=1
-                    break
-                    ;;
-                o)
-                    if (( _idx == ${#_chars} )); then
-                        _expect_order=1
-                    else
-                        _order+=",${_chars[_idx+1,-1]}"
-                    fi
-                    break
-                    ;;
-                [akqQenUfl12C]) ;;
-                *) break ;;
-            esac
-        done
-    done
-
-    local -a _orders=( ${(s:,:)_order} )
-    if (( _unsorted || ${_orders[(I)nosort]} )); then
-        REPLY=""
-        return
-    fi
-    REPLY="o"
-    (( ${_orders[(I)numeric]} )) && REPLY+="n"
-    (( ${_orders[(I)reverse]} )) && REPLY="O${REPLY#o}"
-    return 0
-}
-
 _zacrs_compsys_func() {
     # Reuse the native completion widget without running candidate providers,
     # initializing compsys, or mutating its captured-candidate state.
@@ -216,16 +159,6 @@ _zacrs_compsys_func() {
 
             local -a _zacrs_cap=()
             builtin compadd -O _zacrs_cap "$@" 2>/dev/null
-            if (( ${#_zacrs_cap} > 1 )); then
-                local REPLY
-                _zacrs_compadd_sort_flags "$@"
-                case "$REPLY" in
-                    o) _zacrs_cap=( "${(@o)_zacrs_cap}" ) ;;
-                    on) _zacrs_cap=( "${(@on)_zacrs_cap}" ) ;;
-                    O) _zacrs_cap=( "${(@O)_zacrs_cap}" ) ;;
-                    On) _zacrs_cap=( "${(@On)_zacrs_cap}" ) ;;
-                esac
-            fi
 
             [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
 

@@ -62,33 +62,6 @@ assert_array_output_flag 0 'output flag after option terminator is a candidate' 
 assert_array_output_flag 0 'option value containing O is not an output flag' -P -Output candidate
 assert_array_output_flag 0 'option value containing A is not an output flag' -P -Array candidate
 
-assert_sort_flags() {
-    local expected=$1 description=$2
-    shift 2
-
-    local REPLY
-    _zacrs_compadd_sort_flags "$@"
-    if [[ "$REPLY" != "$expected" ]]; then
-        print -u2 -r -- "not ok: ${description} (expected=${(qqq)expected}, actual=${(qqq)REPLY})"
-        (( ++failures ))
-    else
-        print -r -- "ok: ${description}"
-    fi
-}
-
-assert_sort_flags o 'plain matches are sorted' -J commands - b a
-assert_sort_flags '' 'unsorted group' -V commands - b a
-assert_sort_flags '' 'unsorted group in a flag cluster' -QV commands - b a
-assert_sort_flags '' 'nosort order' -o nosort - b a
-assert_sort_flags '' 'nosort among several orders' -o match,nosort - b a
-assert_sort_flags '' 'attached nosort order' -onosort - b a
-assert_sort_flags on 'numeric order' -o numeric - 10 9
-assert_sort_flags O 'reverse order' -o reverse - a b
-assert_sort_flags On 'reverse numeric order' -o numeric,reverse - 9 10
-assert_sort_flags o 'option value containing V is not a group flag' -P -V - b a
-assert_sort_flags o 'candidate after option terminator is not a flag' - -V b a
-assert_sort_flags o 'order flag without an order' -o - b a
-
 assert_render_gate() {
     local expected=$1 candidates=$2 buffer=$3 prefix=$4 description=$5
     local actual=0

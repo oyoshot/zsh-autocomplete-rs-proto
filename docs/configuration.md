@@ -91,11 +91,9 @@ The available actions are `move-down`, `move-up`, `page-down`, `page-up`,
 
 With a nonempty query, candidates are ordered by matching score, shorter
 candidate text, kind priority, then text. With an empty query, candidates are
-ordered by kind priority alone. Within a kind they follow Zsh's completion
-system: each set of matches a completion function adds is sorted as Zsh would
-sort it, unless the function asks for no sorting, and the sets keep the order
-in which they were added. `git <Tab>` therefore shows the main commands first.
-Abbreviations keep the order of the configuration file.
+ordered by kind priority alone. Within a kind they keep the order in which
+Zsh's completion system listed them, so `git <Tab>` shows the main commands
+first, and abbreviations keep the order of the configuration file.
 
 Customize kind priority in `[completion]`. The default order depends on the
 cursor position. At command position, it is:
