@@ -12,7 +12,9 @@ only the shell can know: the edit buffer and cursor, the shell's own lexing of
 the line, what native completion offers, the working directory and options, and
 what the terminal is doing. Carrying out means applying an edit the engine
 returned, writing the bytes it rendered, and running native completion when
-told to.
+told to. Writing an edit in the shell's own syntax, quoting included, is part
+of carrying it out: the engine says which literal text or path goes in, and the
+adapter spells it for its shell.
 
 **The engine decides and remembers.** It chooses which candidates to offer and
 from which source, whether a stored set may be reused, how they are filtered and
@@ -31,7 +33,7 @@ could have, the decision belongs in the engine and the adapter sends the inputs.
 | Candidates | yes | Native completion, shell tables | Text, and description and kind where the shell has them |
 | Lookup environment | yes | `PWD`, `HOME`, the options that change completion | Sent as values, not folded into a key the engine cannot read |
 | Command context | no | Native lexer | Command words through the cursor, and whether the cursor is on the command word |
-| How candidates were produced | no | The intercepted `compadd` calls | See "First use" |
+| How candidates were produced | no | The intercepted `compadd` calls | An observation the engine may use as evidence; see "First use" |
 | Terminal cursor position | no | A terminal query | The engine asks the terminal itself when the adapter cannot |
 | Pending input | no | `PENDING` | So the engine's answer can be skipped, not so the adapter decides |
 | A call on every key | no | The `line-pre-redraw` hook | Without it the adapter serves Tab only |
@@ -50,7 +52,7 @@ Each request gets exactly one of these, on every path:
 | Draw | Write the given bytes; remember the reported popup position |
 | Clear | Remove the popup |
 | Gather | Run native completion for this position and send the result |
-| Edit | Replace the stated range with the stated text; optionally accept the line |
+| Edit | Put the stated literal text or path in the stated range, written in the shell's syntax; optionally accept the line |
 | Use native | Hand the key to the shell's own widget |
 | Nothing | Leave everything as it is |
 
@@ -75,53 +77,99 @@ each reason.
    which replies it understands. The handshake names capabilities.
 7. **No shell code crosses the boundary.** The engine never returns text for the
    adapter to evaluate, and the adapter never evaluates candidate text.
-8. **Every request carries the whole snapshot, and the engine binds what it
-   stores to it.** The snapshot is the edit state, the word being completed and
-   the lookup environment. The engine serves a stored candidate set or a drawn
-   popup only for the snapshot it came from, or for one the reuse rule allows.
-   The adapter keeps no copy of the snapshot to compare.
+8. **Results are tied to the snapshot they were computed for.** The snapshot is
+   the edit state, the word being completed and the lookup environment.
+   1. Every request carries it. The engine serves a stored candidate set or a
+      drawn popup only for the snapshot it came from, or for one the reuse rule
+      allows.
+   2. A gather result carries the snapshot observed after the gather as well.
+      The engine discards a result whose two snapshots differ, because a
+      completer may change the working directory or an option.
+   3. The adapter applies an edit only if its snapshot still equals the one the
+      request was made with. This is a comparison of two values it already
+      holds, not a judgement about the edit.
+
+   The adapter may also remember the last snapshot it sent, in order not to
+   send the same request twice. It does not use a remembered snapshot to decide
+   whether a popup or a cached set is still good; that is 8.1.
 
 ## Not protected
 
 A change made outside the shell while the shell is busy, such as a directory
 replaced at the same path during a gather or while the picker is open. Comparing
 values cannot detect a change that is undone before the comparison, and the
-specification below finds that case even with every check enabled.
+specification below finds a failure even with all of rule 8 in force.
 
 ## Budgets on the input path
 
 | Situation | Daemon round trips | Processes started |
 |---|---|---|
-| Buffer unchanged | 0 | 0 |
-| Buffer changed, engine can answer | 1 | 0 |
-| Buffer changed, gather needed | 2 | 0, apart from what native completion starts |
+| Snapshot unchanged since the last request | 0 | 0 |
+| Snapshot changed, engine can answer | 1 | 0 |
+| Snapshot changed, gather needed | 2 | 0, apart from what native completion starts |
+
+"Unchanged" means the whole snapshot. A `cd` leaves the buffer alone and still
+changes it.
 
 Without a daemon the adapter starts one process per render or completion. That
 path keeps behavior, not speed.
+
+## Not yet specified
+
+The contract says who decides. It does not yet give numbers or rules for:
+
+- **Latency.** No target for key-to-popup time, such as a 95th or 99th
+  percentile. The round-trip budget above bounds the count, not the duration.
+- **Memory.** The daemon keeps 8 candidate sets, 16 popups and 128 abbreviation
+  sessions, each set at most 1 MiB. There is no stated total and no per-shell
+  share.
+- **Cancellation.** What happens to a request, or a slow gather, once the
+  snapshot has moved on. Rule 8 makes a late answer harmless; it does not stop
+  the work.
+- **Isolation between shells.** Several shells share one daemon and one cache.
+  One shell's slow request can delay another's: from a read of the code, the
+  daemon accepts requests on a single thread and collects file candidates
+  there.
+- **Failure.** A daemon restart, a timeout or a reply cut short must leave the
+  edit buffer and pending keys untouched. This is the intent of the current
+  code and is not written as a rule.
 
 ## Checked against a model
 
 [`design/adapter-contract-spec/AdapterContract.tla`](design/adapter-contract-spec/AdapterContract.tla)
 is a TLA+ specification of the exchange. TLC explores every interleaving of
-keys, in-shell environment changes, slow gathers, Tab and daemon restarts for
-two word positions, two environments and prefixes up to two characters. The
-invariant is that a drawn popup and an applied edit always come from candidates
-gathered for the current word and environment.
+typing, erasing, other edits, environment changes, slow gathers, Tab and daemon
+restarts for two word positions, two environments and prefixes of up to two
+characters over two letters. A violation is a popup drawn, or an edit applied,
+from candidates that belong to another word, prefix or environment, or that
+lack candidates.
 
-| Configuration | Distinct states | Result |
+| Configuration | Environment may change | Result |
 |---|---|---|
-| `WordAndPrefixOnly`: popup reuse matched on word and prefix | — | Violated: an edit from before a `cd` is applied after it |
-| `Rule8`: the engine compares the whole snapshot | 18,364 | Holds |
-| `Rule8AdapterRechecks`: the adapter also re-checks | 18,364 | Holds; the re-check adds nothing |
-| `Rule8ExternalChanges`: changes from outside the shell | — | Violated, as "Not protected" says |
+| `Rule8Quiet` | Only by a widget, which the redraw hook follows | Holds (72,385 states). A popup on screen also always matches the snapshot while the shell waits for a key |
+| `Rule8` | Also with no hook following: a trap while idle, a completer during a gather, a trap before an edit is applied | Holds (860,940 states) |
+| `WithoutEngineCompare` | As `Rule8`, without 8.1 for popups | Violated: a trap changes the directory, then Tab selects from the popup drawn before |
+| `WithoutPostGather` | As `Rule8`, without 8.2 | Violated: a completer changes the directory and the result is drawn as if it had not |
+| `WithoutEditCheck` | As `Rule8`, without 8.3 | Violated: the directory changes after the picker closes and the edit is still applied |
+| `OutsideChanges` | Also from outside the shell | Violated, as "Not protected" says |
+| `WrongEstimate` | As `Rule8`, and a set may be wrongly taken as independent of the prefix | Violated: a reused set lacks candidates |
 
-```sh
-cd docs/design/adapter-contract-spec
-tlc -config Rule8.cfg AdapterContract.tla
-```
+Each part of rule 8 is therefore needed, and together they are enough, within
+the model. `sh docs/design/adapter-contract-spec/check.sh` runs all seven and
+compares them with this table. It needs `tlc`; CI does not run it.
 
-TLC is not run in CI. The specification checks the design, not the code: nothing
-ties its actions to the Rust or Zsh sources.
+What the results rest on:
+
+- The shell handles no key while a hook, a gather or the picker runs. Keys
+  typed meanwhile are queued. This holds for Zsh widgets and hooks.
+- Code that changes the environment and restores it counts as not having
+  changed it.
+- The word position stands for everything else in the edit state: the other
+  words, the cursor and the text after it. The model does not look inside it.
+- Whether a set depends on the typed prefix is given to the model, not derived.
+  `WrongEstimate` shows what follows when it is given wrongly.
+- Nothing ties the specification's actions to the Rust or Zsh sources. It checks
+  the design, not the code.
 
 ## Other shells
 
@@ -170,19 +218,50 @@ The last row is a defect, not a design gap.
 ## First use: reusing a gathered set for longer prefixes
 
 Today the cache serves a stored set only for the identical prefix, so every new
-character runs native completion again. Under this contract:
+character runs native completion again. Two separate things change.
 
-- **Fact (adapter).** For each native `compadd` call, whether more words were
-  passed than matched. The adapter already intercepts these calls.
-- **Decision (engine).** A set gathered with a non-empty prefix, in which every
-  call passed more words than matched, may serve any longer prefix in the same
-  context. The engine filters it. Otherwise it answers "Gather", as now.
+**The mechanism.** The engine may serve a stored set for a longer prefix in an
+otherwise equal snapshot, filtering it itself. This is correct exactly when
+gathering with the longer prefix would return the stored set filtered by that
+prefix.
+
+**The estimate.** Nothing the adapter can observe proves that. The engine uses
+this evidence: the set was gathered with a non-empty prefix, and in every
+native `compadd` call more words were passed than matched. A completer that
+passes words which do not match the typed prefix is usually listing everything
+and letting `compadd` filter.
+
+The estimate can be wrong. A completer may choose its list from the prefix and
+still pass words that do not match:
+
+```zsh
+_example() {
+    if [[ $PREFIX == ab* ]]; then
+        compadd abc abcd xyz
+    else
+        compadd apple apricot xyz
+    fi
+}
+```
+
+At `a` three words are passed and two match, so the set looks independent of
+the prefix. At `ab` native completion offers `abc` and `abcd`; the stored set
+has neither. The estimate is therefore engine policy with a way to turn it off,
+not a guarantee, and a wrong estimate costs missing candidates until the next
+gather.
 
 Measured on one machine over the 468 installed commands that have a completer
-(about 20,000 inputs, 35,799 prefix pairs): this rule would reuse 4,041 pairs.
-Three of them missed a candidate, each because the system changed between the
-two runs (a process appeared; another completer defined a function). The 251
-pairs where a longer prefix produced new candidates, including `chmod a` to
-`chmod ag` and `tar A` to `tar Af`, all fell on the "Gather" side. The rule
-applies to about a quarter of typed-prefix gathers; file-name completion is not
-among them.
+(about 20,000 inputs, 35,799 pairs of a prefix and a longer one):
+
+- The estimate would reuse 4,041 pairs, 11% of all pairs. Counted by input,
+  3,703 of the 16,278 typed-prefix gathers that returned candidates qualify,
+  23%. File-name completion is not among them.
+- Three reused pairs missed a candidate, each because the system changed
+  between the two runs (a process appeared; another completer defined a
+  function).
+- The 251 pairs where a longer prefix produced new candidates, including
+  `chmod a` to `chmod ag` and `tar A` to `tar Af`, all fell on the "Gather"
+  side.
+
+No completer of the `_example` kind was among the 468. That is an observation
+about one machine, not a bound.
