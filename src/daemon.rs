@@ -1181,15 +1181,11 @@ impl DaemonServer {
         }
     }
 
-    /// Writes `extra_prefix`, then clears what `prev_popup` (row, height)
-    /// leaves outside the new popup, then draws. `prev_popup` must be in the
-    /// rows `extra_prefix` leaves, such as after it scrolls.
     fn send_frame<W: Write>(
         &self,
         writer: &mut W,
         app: &App,
-        extra_prefix: &[u8],
-        prev_popup: Option<(u16, u16)>,
+        before: FramePrefix<'_>,
         popup_only: bool,
         common_prefix: Option<&str>,
     ) -> io::Result<()> {
@@ -1198,10 +1194,23 @@ impl DaemonServer {
         } else {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
-        let stale_clear_bytes = prev_popup
-            .map(|(row, height)| ui::render::clear_stale_rows_to_bytes(row, height, &popup))
-            .transpose()?
-            .unwrap_or_default();
+        let (extra_prefix, stale_clear_bytes) = match before {
+            FramePrefix::Clear(bytes) => (bytes, Vec::new()),
+            FramePrefix::Scroll {
+                bytes,
+                rows,
+                prev_popup,
+            } => {
+                let stale_clear_bytes = match prev_popup {
+                    Some(prev) => {
+                        let (row, height) = rows_after_scroll(prev, rows);
+                        ui::render::clear_stale_rows_to_bytes(row, height, &popup)?
+                    }
+                    None => Vec::new(),
+                };
+                (bytes, stale_clear_bytes)
+            }
+        };
         let total_len = stale_clear_bytes.len() + extra_prefix.len() + tty_bytes.len();
         TextFrameHeader {
             popup_row: popup.row,
@@ -1452,15 +1461,15 @@ impl DaemonServer {
 
         let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
         let reuse_fast_path = reuse_popup && scrolled == 0;
-        let prev_popup = prev_popup_row
-            .zip(prev_popup_height)
-            .map(|rows| rows_after_scroll(rows, scrolled));
         if self
             .send_frame(
                 writer,
                 &app,
-                &scroll_bytes,
-                prev_popup,
+                FramePrefix::Scroll {
+                    bytes: &scroll_bytes,
+                    rows: scrolled,
+                    prev_popup: prev_popup_row.zip(prev_popup_height),
+                },
                 reuse_fast_path,
                 initial_common_prefix.as_deref(),
             )
@@ -1519,7 +1528,7 @@ impl DaemonServer {
                         Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
                             apply_navigation(&mut app, action);
                             if self
-                                .send_frame(writer, &app, &[], None, false, None)
+                                .send_frame(writer, &app, FramePrefix::Clear(&[]), false, None)
                                 .is_err()
                             {
                                 break;
@@ -1540,7 +1549,13 @@ impl DaemonServer {
                                 break;
                             }
                             if self
-                                .send_frame(writer, &app, &clear_bytes, None, false, None)
+                                .send_frame(
+                                    writer,
+                                    &app,
+                                    FramePrefix::Clear(&clear_bytes),
+                                    false,
+                                    None,
+                                )
                                 .is_err()
                             {
                                 break;
@@ -1563,7 +1578,13 @@ impl DaemonServer {
                                 break;
                             }
                             if self
-                                .send_frame(writer, &app, &clear_bytes, None, false, None)
+                                .send_frame(
+                                    writer,
+                                    &app,
+                                    FramePrefix::Clear(&clear_bytes),
+                                    false,
+                                    None,
+                                )
                                 .is_err()
                             {
                                 break;
@@ -1668,32 +1689,14 @@ impl DaemonServer {
                         break;
                     }
                     let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
-                    let new_popup = crate::ui::popup::Popup::compute(&app);
-                    let (extra_prefix, prev_popup) =
-                        if resize_requires_full_popup_clear(&previous_popup, &new_popup) {
-                            let mut clear_bytes = match ui::render::clear_rect_to_bytes(
-                                previous_popup.row,
-                                previous_popup.height,
-                                app.cursor_row,
-                            ) {
-                                Ok(bytes) => bytes,
-                                Err(_) => break,
-                            };
-                            clear_bytes.extend_from_slice(&scroll_bytes);
-                            (clear_bytes, None)
-                        } else {
-                            (
-                                scroll_bytes,
-                                Some(rows_after_scroll(
-                                    (previous_popup.row, previous_popup.height),
-                                    scrolled,
-                                )),
-                            )
-                        };
-                    if self
-                        .send_frame(writer, &app, &extra_prefix, prev_popup, false, None)
-                        .is_err()
-                    {
+                    // The new popup's rows erase whole lines, so clearing the
+                    // rest of the previous popup also covers a move or resize.
+                    let before = FramePrefix::Scroll {
+                        bytes: &scroll_bytes,
+                        rows: scrolled,
+                        prev_popup: Some((previous_popup.row, previous_popup.height)),
+                    };
+                    if self.send_frame(writer, &app, before, false, None).is_err() {
                         break;
                     }
                 }
@@ -1836,11 +1839,18 @@ fn apply_navigation(app: &mut App, action: Action) {
     }
 }
 
-fn resize_requires_full_popup_clear(
-    previous_popup: &crate::ui::popup::Popup,
-    new_popup: &crate::ui::popup::Popup,
-) -> bool {
-    previous_popup.col != new_popup.col || previous_popup.width != new_popup.width
+/// What a frame writes before it draws.
+enum FramePrefix<'a> {
+    /// Bytes written as they are, such as clearing the previous popup.
+    Clear(&'a [u8]),
+    /// Scroll bytes for `rows` rows, then a clear of what the previous popup
+    /// `(row, height)`, given in rows before the scroll, leaves outside the
+    /// new popup.
+    Scroll {
+        bytes: &'a [u8],
+        rows: u16,
+        prev_popup: Option<(u16, u16)>,
+    },
 }
 
 /// Text a cancelled session leaves in the buffer: the filter the user
@@ -1940,13 +1950,12 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompleteParams, DaemonServer, RenderParams, read_prefix_and_candidates, read_text_line,
-        rows_after_scroll,
+        CompleteParams, DaemonServer, FramePrefix, RenderParams, read_prefix_and_candidates,
+        read_text_line, rows_after_scroll,
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
     use crate::protocol::{TextCompleteRequest, TextCompleteResult, TextFrameHeader};
-    use crate::ui;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Cursor, Read, Write};
     use std::net::Shutdown;
@@ -2651,7 +2660,13 @@ mod tests {
             let prefix = format!("git{ctrl}log");
             let mut output = Vec::new();
             server
-                .send_frame(&mut output, &app, &[], None, true, Some(&prefix))
+                .send_frame(
+                    &mut output,
+                    &app,
+                    FramePrefix::Clear(&[]),
+                    true,
+                    Some(&prefix),
+                )
                 .unwrap();
             let header = String::from_utf8_lossy(&output);
             assert!(
@@ -2999,17 +3014,22 @@ mod tests {
             }],
         );
 
-        let (first_header, _) = read_frame_bytes(&mut reader);
+        let (first_header, _) = read_frame(&mut reader);
         let first_frame = TextFrameHeader::parse(first_header.trim_end()).unwrap();
-        let expected_clear =
-            ui::render::clear_rect_to_bytes(first_frame.popup_row, first_frame.popup_height, 0)
-                .unwrap();
+        let (_, tty) = read_frame(&mut reader);
 
-        let (_, second_tty_bytes) = read_frame_bytes(&mut reader);
-        assert!(
-            second_tty_bytes.starts_with(&expected_clear),
-            "resize redraw must clear the old popup before drawing at the new column"
-        );
+        // Every row of the old popup is erased whole, by the stale-row clear
+        // or by the new popup drawing over it, so nothing is left at the old
+        // column.
+        for row in first_frame.popup_row..first_frame.popup_row + first_frame.popup_height {
+            let start = format!("\u{1b}[{};", row + 1);
+            let erased = tty.match_indices(&start).any(|(at, _)| {
+                let rest = &tty[at + start.len()..];
+                let col_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+                rest[col_len..].starts_with("H\u{1b}[2K")
+            });
+            assert!(erased, "row {row} not erased whole in {tty:?}");
+        }
     }
 
     #[test]
