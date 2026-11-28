@@ -30,43 +30,55 @@ PROMPT='> '
 RPROMPT=''
 ZSH
 
-# Run a widget that leaves the buffer alone, and wait for the redraw after it.
+# wait_redraw <buffer:cursor>: wait until the hook after ours has seen this
+# state. Our hook has then returned, so its cursor query is no longer reading
+# the terminal and the next keys cannot be taken for the reply.
+wait_redraw() {
+    local attempt
+    for attempt in {1..300}; do
+        drain_pty
+        [[ "$(tail -n 1 "$HOME/after")" == "$1" ]] && return 0
+        sleep 0.01
+    done
+    fail "the hook after ours did not see $1: before=${(qqq)$(<"$HOME/before")} after=${(qqq)$(<"$HOME/after")}"
+}
+# Run a widget that leaves the buffer alone.
 probe() {
-    : > "$HOME/probe"
-    send_keys $'\x19'
-    wait_file probe "$1"
     : > "$HOME/probe"
     send_keys $'\x19'
     wait_file probe "$1"
 }
 assert_later_hook_ran() {
-    [[ -s "$HOME/before" ]] || fail "no redraw was observed $1"
-    # The redraw after the last probe may still be between the two hooks. A
+    # The redraw after the probe may still be between the two hooks. A
     # skipped redraw never catches up, so waiting cannot hide one.
     local attempt before after
     for attempt in {1..300}; do
         drain_pty
         before="$(<"$HOME/before")" after="$(<"$HOME/after")"
-        [[ "$after" == "$before" ]] && return 0
+        [[ -n "$before" && "$after" == "$before" ]] && return 0
         sleep 0.01
     done
     fail "the hook after ours missed a redraw $1: before=${(qqq)before} after=${(qqq)after}"
 }
 
+: > "$HOME/before"
+: > "$HOME/after"
 start_shell
 
-# A burst of type-ahead: the popup is drawn from the last key's widget, so
-# the redraw that follows finds the buffer unchanged.
+# Keys sent together: when they arrive as type-ahead, the popup is drawn from
+# the last key's widget and the redraw that follows finds the buffer unchanged.
 send_keys ls
+wait_redraw ls:2
 probe ls
-assert_later_hook_ran 'after type-ahead'
+assert_later_hook_ran 'after typing'
 
-# Moving the cursor back and deleting forward changes only the text after
-# the cursor, which our hook does not react to.
+# Deleting forward changes only the text behind the cursor, which our hook
+# does not react to.
 send_keys $'\C-b'
+wait_redraw ls:1
 send_keys $'\C-d'
+wait_redraw l:1
 probe l
 assert_later_hook_ran 'after an edit behind the cursor'
-[[ "$(tail -n 1 "$HOME/after")" == 'l:1' ]] || fail "last redraw seen: $(tail -n 1 "$HOME/after")"
 
 print -r -- 'ok: redraw hooks registered after ours run on every redraw'

@@ -1142,6 +1142,7 @@ typeset -gi _zacrs_widgets_initialized=1
 # Register fixed callbacks once. Re-registering a wrapped standard dispatcher
 # can capture that same dispatcher into its own callback list and create a cycle.
 # Reload only updates our functions, never dispatcher bodies or foreign aliases.
+# Callbacks must return 0: the dispatcher stops at the first one that fails.
 autoload -Uz add-zle-hook-widget
 _zacrs_add_zle_hook() {
     local hook="zle-$1" fn="$2"
