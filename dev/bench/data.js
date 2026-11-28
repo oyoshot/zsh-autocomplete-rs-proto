@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795871511201,
+  "lastUpdate": 1795872417416,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -27251,6 +27251,282 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 789,
             "range": "± 7",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6d537851a205709ea11041d9e041f1f53dae6fa",
+          "message": "fix(shell): give command names their kind after a separator (#217)\n\n* fix(shell): give command names their kind after a separator\n\nCapture decided command position with _zacrs_is_cmd_pos, which misses an\nempty word after a separator: after `ls | `, command names got no kind\nand sorted together with parameters and reserved words. Names now take\ntheir kind where compsys completes command names (the -command- context,\nwhich _main_complete and the _normal entry both set) and the line is in\ncommand position as the engine is told (_zacrs_command_context).\nPrecommands such as sudo, command or nohup also reach -command-, but run\nexternal programs, so names after them keep no kind, as before.\n\nGiving each name its kind called a function per name: about 100 ms for\nthe 3,700 names after a pipe. Calls with 32 names or more now split\nnames into aliases, functions, builtins and commands with one set\noperation per kind, against name lists built on first use; fewer names\nare still looked up one by one. Kinds are ranked before source order,\nso splitting by kind does not change the popup. Calls with a group\ndescription (-X, added by the format style) take the one-expansion\nroutes too, for command names and plain argument matches alike.\n\nCapture time, 15 inputs per round, alternating with main:\n- `ls | ` (about 3,700 names): median 12.2-15.8 ms on main,\n  18-23 ms here, for kinds main did not assign.\n- `ls | ` with a descriptions format style: 37.4-37.8 ms on main,\n  20.6-22.7 ms here.\n- `g` (about 220 names): median 13.6-16.8 ms on main, 10.6-12.7 ms here.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* test(shell): cover command-name kinds after a real sudo\n\nThe fake sudo case was removed with the word-index check, so no\nregression covered real sudo completion, which reaches names through\n_command_names -e. Run it against a PATH with one external command that\nis also a function, and check that the captured name gets no kind.\nWithout the command-position check of the line, it gets `function`.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* test(shell): check every kind captured after sudo, on the bulk route\n\nReview of the sudo regression: it filtered the capture down to the test\ncommand, so a wrong kind on the environment variable names sudo also\noffers would pass, and its single command only took the per-name route.\nOffer 33 commands so the call takes the bulk route, record every kind\ncaptured, and say that names after sudo take no kind at all.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-28T22:18:01+09:00",
+          "tree_id": "7cbdfda63ee2e9afb775c44dc31a9e019b1d74ca",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/a6d537851a205709ea11041d9e041f1f53dae6fa"
+        },
+        "date": 1795872417021,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 5758,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 63897,
+            "range": "± 298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 803163,
+            "range": "± 2399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 210851,
+            "range": "± 1370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 93575,
+            "range": "± 414",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 63937,
+            "range": "± 296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 22527,
+            "range": "± 93",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 22970,
+            "range": "± 104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 26144,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 176272,
+            "range": "± 858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 175831,
+            "range": "± 1243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 177689,
+            "range": "± 766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 182262,
+            "range": "± 918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 16298,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 177260,
+            "range": "± 1107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 1925921,
+            "range": "± 17385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 134664,
+            "range": "± 1212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 101107,
+            "range": "± 300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 640344,
+            "range": "± 3947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 250111,
+            "range": "± 914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 253261,
+            "range": "± 1227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 78251,
+            "range": "± 13184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 130366,
+            "range": "± 25109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 564289,
+            "range": "± 10896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 339806,
+            "range": "± 2933",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 414,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 23,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 94,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 19,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 73,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 24,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 67,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 19,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 37,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 303237,
+            "range": "± 1040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 209132,
+            "range": "± 805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 666,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 5984,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 481,
+            "range": "± 2",
             "unit": "ns/iter"
           }
         ]
