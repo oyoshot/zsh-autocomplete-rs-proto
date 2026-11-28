@@ -8,6 +8,18 @@ Zsh configuration:
 source /path/to/zsh-autocomplete-rs.plugin.zsh
 ```
 
+If your configuration never runs `compinit`, the adapter runs `compinit -u` the
+first time it completes. The dump file is `$ZSH_COMPDUMP`, or
+`${XDG_CACHE_HOME:-$HOME/.cache}/zsh/compdump` when that is unset or empty, and
+is written only if its directory exists and is writable. Each shell regenerates
+the dump when the number of completion files in `$fpath` or the Zsh version
+changes; after swapping one function for another or changing a `#compdef` line
+without changing that number, delete the dump. Shells with different `$fpath`
+need separate `ZSH_COMPDUMP` values: with a shared dump they rebuild it whenever
+they alternate, or load each other's dump when their numbers match. `-u` turns
+off `compaudit`'s checks, so insecure directories stay in `$fpath` and their
+functions load. To audit them, run `compinit` in your configuration.
+
 The adapter reads its four `_zacrs_*.zsh` helpers from the same directory. Keep
 all five files together. The `init zsh` command has been removed; replace
 `source <(zsh-autocomplete-rs init zsh)` or its `eval` equivalent with the source
