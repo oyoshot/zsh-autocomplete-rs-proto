@@ -113,6 +113,18 @@ fn print_candidate(
     Ok(())
 }
 
+/// Moves to the start of a popup row and clears the rest of the line, which
+/// erases what an earlier, wider frame left there. Clearing before drawing
+/// matters at the right edge: a row that ends in the last column leaves the
+/// cursor on its border, waiting to wrap, and clearing then would erase it.
+fn start_popup_row(buf: &mut impl Write, col: u16, row: u16) -> std::io::Result<()> {
+    crossterm::queue!(
+        buf,
+        cursor::MoveTo(col, row),
+        terminal::Clear(terminal::ClearType::UntilNewLine)
+    )
+}
+
 fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
     let popup = Popup::compute(app);
     let inner = popup.width.saturating_sub(2) as usize;
@@ -129,7 +141,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
-    crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row))?;
+    start_popup_row(buf, popup.col, popup.row)?;
     print_colored(buf, "┌", theme.border)?;
     print_colored(buf, &filter_label, theme.filter)?;
     print_colored(
@@ -137,7 +149,6 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         format_args!("{}┐", &dashes[..remaining * dash_byte_len]),
         theme.border,
     )?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     // Candidate rows
     let visible = app.visible_candidate_indices();
@@ -159,7 +170,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             .map(|r| r.start.max(hidden) - hidden..r.end - hidden)
             .collect();
 
-        crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        start_popup_row(buf, popup.col, popup.row + 1 + i as u16)?;
 
         if Some(i) == highlight_idx {
             print_colored(buf, "│", theme.border)?;
@@ -212,14 +223,10 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             crossterm::queue!(buf, Print(&spaces[..padding]))?;
             print_colored(buf, "│", theme.border)?;
         }
-        crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
 
     // Bottom border
-    crossterm::queue!(
-        buf,
-        cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
-    )?;
+    start_popup_row(buf, popup.col, popup.row + 1 + visible.len() as u16)?;
     let range_label = Popup::range_label(app);
     let range_width = UnicodeWidthStr::width(range_label.as_str());
     let range_label = if range_width <= inner {
@@ -235,7 +242,6 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     )?;
     print_colored(buf, range_label, Some(theme.description))?;
     print_colored(buf, "┘", theme.border)?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     Ok(popup)
 }
@@ -818,6 +824,65 @@ mod tests {
         assert!(!bytes.is_empty());
         assert!(popup.height > 0);
         assert!(popup.width > 0);
+    }
+
+    #[test]
+    fn popup_at_the_right_edge_keeps_its_right_border() {
+        let candidates: Vec<Candidate> = ["dev", "Music", "01_A4_format.xlsx"]
+            .iter()
+            .map(|text| Candidate {
+                text: text.to_string(),
+                description: String::new(),
+                kind: "file".to_string(),
+                insert_text: None,
+                cursor_offset: None,
+                source_group: Default::default(),
+            })
+            .collect();
+        let width = Popup::compute(&App::new_with_term_size(
+            candidates.clone(),
+            String::new(),
+            2,
+            0,
+            40,
+            24,
+        ))
+        .width;
+
+        // A row that ends in the last column leaves the cursor on its border,
+        // so each row must clear the line before drawing, never after. Cover
+        // a popup moved left to the edge, one that ends there as placed, and
+        // one with room to its right.
+        for cursor_col in [38, 40 - width, 2] {
+            let app =
+                App::new_with_term_size(candidates.clone(), String::new(), 2, cursor_col, 40, 24);
+            let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+            let bytes = String::from_utf8(bytes).unwrap();
+            assert_eq!(popup.col, cursor_col.min(40 - width));
+
+            // Rows are drawn in order, and the cursor returns to the command
+            // line after the last one.
+            let move_to = |row: u16, col: u16| format!("\x1b[{};{}H", row + 1, col + 1);
+            let last_row = popup.row + popup.height - 1;
+            for row in popup.row..=last_row {
+                let next = if row == last_row {
+                    move_to(app.cursor_row, app.cursor_col)
+                } else {
+                    move_to(row + 1, popup.col)
+                };
+                let row_bytes = bytes
+                    .split_once(move_to(row, popup.col).as_str())
+                    .and_then(|(_, rest)| rest.split_once(next.as_str()))
+                    .map(|(row_bytes, _)| row_bytes)
+                    .unwrap_or_else(|| panic!("row {row} not drawn at the popup column"));
+                let clear = row_bytes.rfind("\x1b[K");
+                let border = row_bytes.rfind(['┐', '│', '┘']);
+                assert!(
+                    clear.is_some() && border.is_some() && clear < border,
+                    "cursor_col={cursor_col} row={row}: {row_bytes:?}"
+                );
+            }
+        }
     }
 
     #[test]
