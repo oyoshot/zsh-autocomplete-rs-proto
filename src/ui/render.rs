@@ -88,8 +88,16 @@ fn print_candidate(
         text.strip_suffix('…').unwrap_or(text).len()
     };
     let mut offset = 0;
-    for range in ranges.iter().filter(|r| r.end <= original_end) {
-        crossterm::queue!(buf, Print(&text[offset..range.start]))?;
+    let mut shown = ranges.iter().filter(|r| r.end <= original_end).peekable();
+    while let Some(run) = shown.next() {
+        // Emphasize adjacent matches as one run: a typed prefix matches
+        // character by character, and the escape sequences around each one
+        // would multiply the frame size.
+        let mut end = run.end;
+        while let Some(next) = shown.next_if(|r| r.start == end) {
+            end = next.end;
+        }
+        crossterm::queue!(buf, Print(&text[offset..run.start]))?;
         if !selected {
             crossterm::queue!(buf, SetForegroundColor(theme.match_fg))?;
         }
@@ -98,19 +106,34 @@ fn print_candidate(
             // NO_COLOR makes crossterm's color commands reset all attributes.
             // Set bold after the foreground so non-color emphasis survives.
             SetAttribute(Attribute::Bold),
-            Print(&text[range.clone()]),
+            Print(&text[run.start..end]),
             SetAttribute(Attribute::NormalIntensity)
         )?;
         if !selected {
             crossterm::queue!(buf, SetForegroundColor(base))?;
         }
-        offset = range.end;
+        offset = end;
     }
     crossterm::queue!(buf, Print(&text[offset..]))?;
     if !selected {
         crossterm::queue!(buf, ResetColor)?;
     }
     Ok(())
+}
+
+/// Moves to the start of a popup row and clears the whole line, which erases
+/// what an earlier frame left on either side. Near the right edge a narrower
+/// frame starts further right, so the left part of a wider one would remain.
+/// Rows a popup stops using are cleared whole as well (see
+/// `queue_clear_rows`). Clearing before drawing matters at the right edge: a
+/// row that ends in the last column leaves the cursor on its border, waiting
+/// to wrap, and clearing then would erase it.
+fn start_popup_row(buf: &mut impl Write, col: u16, row: u16) -> std::io::Result<()> {
+    crossterm::queue!(
+        buf,
+        cursor::MoveTo(col, row),
+        terminal::Clear(terminal::ClearType::CurrentLine)
+    )
 }
 
 fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
@@ -129,7 +152,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let filter_w = UnicodeWidthStr::width(filter_label.as_str());
     let remaining = inner.saturating_sub(filter_w);
 
-    crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row))?;
+    start_popup_row(buf, popup.col, popup.row)?;
     print_colored(buf, "┌", theme.border)?;
     print_colored(buf, &filter_label, theme.filter)?;
     print_colored(
@@ -137,7 +160,6 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         format_args!("{}┐", &dashes[..remaining * dash_byte_len]),
         theme.border,
     )?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     // Candidate rows
     let visible = app.visible_candidate_indices();
@@ -159,7 +181,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             .map(|r| r.start.max(hidden) - hidden..r.end - hidden)
             .collect();
 
-        crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
+        start_popup_row(buf, popup.col, popup.row + 1 + i as u16)?;
 
         if Some(i) == highlight_idx {
             print_colored(buf, "│", theme.border)?;
@@ -212,14 +234,10 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             crossterm::queue!(buf, Print(&spaces[..padding]))?;
             print_colored(buf, "│", theme.border)?;
         }
-        crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
 
     // Bottom border
-    crossterm::queue!(
-        buf,
-        cursor::MoveTo(popup.col, popup.row + 1 + visible.len() as u16),
-    )?;
+    start_popup_row(buf, popup.col, popup.row + 1 + visible.len() as u16)?;
     let range_label = Popup::range_label(app);
     let range_width = UnicodeWidthStr::width(range_label.as_str());
     let range_label = if range_width <= inner {
@@ -235,7 +253,6 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     )?;
     print_colored(buf, range_label, Some(theme.description))?;
     print_colored(buf, "┘", theme.border)?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
 
     Ok(popup)
 }
@@ -399,11 +416,13 @@ pub fn clear_rect_to_bytes(
     Ok(buf)
 }
 
+/// Clears what a previous popup leaves outside the new popup: rows the new
+/// popup does not cover, and on rows it does cover, the cells left of it, in
+/// case the popup moved right. Its own frame clears the cells right of it.
 pub fn clear_stale_rows_to_bytes(
     prev_popup_row: u16,
     prev_popup_height: u16,
-    new_popup_row: u16,
-    new_popup_height: u16,
+    new_popup: &Popup,
 ) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(128);
 
@@ -412,21 +431,24 @@ pub fn clear_stale_rows_to_bytes(
     }
 
     let prev_end = prev_popup_row.saturating_add(prev_popup_height);
-    let new_end = new_popup_row.saturating_add(new_popup_height);
+    let new_end = new_popup.row.saturating_add(new_popup.height);
     let mut wrote_any = false;
 
     for row in prev_popup_row..prev_end {
-        if row < new_popup_row || row >= new_end {
-            if !wrote_any {
-                crossterm::queue!(&mut buf, cursor::SavePosition)?;
-                wrote_any = true;
-            }
-            crossterm::queue!(
-                &mut buf,
-                cursor::MoveTo(0, row),
-                terminal::Clear(terminal::ClearType::CurrentLine),
-            )?;
+        // Erase the whole line, or on a covered row, from its start through
+        // the cell left of the popup (crossterm has no command for that).
+        let (col, erase) = if !(new_popup.row..new_end).contains(&row) {
+            (0, "\x1b[2K")
+        } else if let Some(left) = new_popup.col.checked_sub(1) {
+            (left, "\x1b[1K")
+        } else {
+            continue;
+        };
+        if !wrote_any {
+            crossterm::queue!(&mut buf, cursor::SavePosition)?;
+            wrote_any = true;
         }
+        crossterm::queue!(&mut buf, cursor::MoveTo(col, row), Print(erase))?;
     }
 
     if wrote_any {
@@ -658,6 +680,65 @@ mod tests {
         }
     }
 
+    /// The text of each bold run, in order.
+    fn bold_runs(bytes: &[u8]) -> Vec<String> {
+        String::from_utf8_lossy(bytes)
+            .split("\u{1b}[1m")
+            .skip(1)
+            .map(|rest| rest.split("\u{1b}[22m").next().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn adjacent_matches_are_emphasized_as_one_run() {
+        for (text, ranges, expected) in [
+            ("lsblk", &[0..1, 1..2, 2..3, 4..5][..], &["lsb", "k"][..]),
+            ("日本語", &[0..3, 3..6], &["日本"]),
+        ] {
+            for selected in [false, true] {
+                let mut buf = Vec::new();
+                print_candidate(&mut buf, text, text, ranges, &Theme::default(), selected).unwrap();
+                assert_eq!(bold_runs(&buf), expected, "{text} selected={selected}");
+            }
+        }
+    }
+
+    #[test]
+    fn matches_after_a_hidden_directory_are_one_run() {
+        // "dir/" is hidden, so the matches of "ab" start the shown text.
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("dir/abc\t\tfile"),
+                Candidate::parse_line("dir/abd\t\tfile"),
+            ],
+            "dir/ab".into(),
+            1,
+            0,
+            80,
+            24,
+        );
+        let (bytes, _) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        assert_eq!(bold_runs(&bytes), ["ab", "ab"]);
+    }
+
+    #[test]
+    fn a_match_run_cut_by_the_ellipsis_keeps_its_shown_characters() {
+        let mut buf = Vec::new();
+        // "abcdef" shortened to "abcd…": the matches past "d" are not shown.
+        let ranges: Vec<_> = (0..6).map(|i| i..i + 1).collect();
+        print_candidate(
+            &mut buf,
+            "abcd…",
+            "abcdef",
+            &ranges,
+            &Theme::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(bold_runs(&buf), ["abcd"]);
+        assert_eq!(printed_text(&buf), "abcd…");
+    }
+
     #[test]
     fn no_color_preserves_bold_matches() {
         // Crossterm caches NO_COLOR globally. Use a fresh process instead of
@@ -826,6 +907,140 @@ mod tests {
         assert!(popup.width > 0);
     }
 
+    /// Replays popup output on a grid with the terminal behavior that matters
+    /// at the right margin (xterm, Windows Terminal; tmux differs): after a
+    /// character in the last column, the cursor stays there with a wrap
+    /// pending. Erasing to the end of the line then erases that character,
+    /// and the next character goes to the start of the next row.
+    fn replay_on_screen(bytes: &[u8], screen: &mut [Vec<char>]) {
+        use termwiz::escape::{
+            Action,
+            csi::{CSI, Cursor, Edit, EraseInLine},
+            parser::Parser,
+        };
+        struct Cell {
+            x: usize,
+            y: usize,
+            wrap_pending: bool,
+        }
+        let (cols, rows) = (screen[0].len(), screen.len());
+        let mut at = Cell {
+            x: 0,
+            y: 0,
+            wrap_pending: false,
+        };
+        let put = |c: char, at: &mut Cell, screen: &mut [Vec<char>]| {
+            if at.wrap_pending {
+                (at.x, at.y, at.wrap_pending) = (0, (at.y + 1).min(rows - 1), false);
+            }
+            screen[at.y][at.x] = c;
+            if at.x + 1 == cols {
+                at.wrap_pending = true;
+            } else {
+                at.x += 1;
+            }
+        };
+        Parser::new().parse(bytes, |action| match action {
+            Action::Print(c) => put(c, &mut at, screen),
+            Action::PrintString(s) => s.chars().for_each(|c| put(c, &mut at, screen)),
+            Action::CSI(CSI::Cursor(Cursor::Position { line, col })) => {
+                at = Cell {
+                    x: col.as_zero_based() as usize,
+                    y: line.as_zero_based() as usize,
+                    wrap_pending: false,
+                };
+            }
+            Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine))) => {
+                screen[at.y][at.x..].fill(' ');
+            }
+            Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseLine))) => {
+                screen[at.y].fill(' ');
+            }
+            _ => {}
+        });
+    }
+
+    #[test]
+    fn screen_replay_wraps_after_the_last_column_and_erases_at_it() {
+        let mut screen = vec![vec![' '; 4]; 2];
+        // "abcd" fills the row; "\x1b[K" erases the "d" under the cursor;
+        // "e" then wraps to the next row.
+        replay_on_screen(b"abcd\x1b[Ke", &mut screen);
+        assert_eq!(screen[0].iter().collect::<String>(), "abc ");
+        assert_eq!(screen[1].iter().collect::<String>(), "e   ");
+    }
+
+    #[test]
+    fn popup_flush_with_the_right_edge_keeps_its_right_border() {
+        let (cols, rows) = (40, 10);
+        let candidates = vec![
+            Candidate::parse_line("alpha\tdesc\tcommand"),
+            Candidate::parse_line("alphabet\t\tcommand"),
+        ];
+        let width = Popup::compute(&App::new_with_term_size(
+            candidates.clone(),
+            "al".into(),
+            0,
+            0,
+            cols,
+            rows,
+        ))
+        .width;
+        // A cursor near the right edge pushes the popup against it; one at
+        // the right distance places it there without moving it.
+        for cursor_col in [38, cols - width] {
+            let app =
+                App::new_with_term_size(candidates.clone(), "al".into(), 0, cursor_col, cols, rows);
+            let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+            assert_eq!(popup.col + popup.width, cols);
+
+            let mut screen = vec![vec![' '; usize::from(cols)]; usize::from(rows)];
+            replay_on_screen(&bytes, &mut screen);
+            let right = usize::from(cols) - 1;
+            let edge: String = (popup.row..popup.row + popup.height)
+                .map(|row| screen[usize::from(row)][right])
+                .collect();
+            assert_eq!(edge, "┐││┘", "cursor_col={cursor_col}");
+        }
+    }
+
+    #[test]
+    fn popup_rows_clear_stale_cells_on_both_sides() {
+        let (cols, rows) = (40, 10);
+        // Near the right edge a narrower popup starts further right than the
+        // wider one before it, so that one's left part is left behind; away
+        // from the edge a narrower one leaves the wider one's right part.
+        for cursor_col in [2, 38] {
+            let app = App::new_with_term_size(
+                vec![Candidate::parse_line("alpha\t\tcommand")],
+                "al".into(),
+                0,
+                cursor_col,
+                cols,
+                rows,
+            );
+            let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+            if cursor_col == 38 {
+                assert!(popup.col > 0 && popup.col + popup.width == cols);
+            } else {
+                assert!(popup.col > 0 && popup.col + popup.width < cols);
+            }
+
+            // An earlier, wider frame filled the rows.
+            let mut screen = vec![vec!['Z'; usize::from(cols)]; usize::from(rows)];
+            replay_on_screen(&bytes, &mut screen);
+            let (left, right) = (usize::from(popup.col), usize::from(popup.col + popup.width));
+            for row in popup.row..popup.row + popup.height {
+                let line = &screen[usize::from(row)];
+                let outside: String = line[..left].iter().chain(&line[right..]).collect();
+                assert!(
+                    outside.trim().is_empty(),
+                    "cursor_col={cursor_col} row {row}: {outside:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn clear_to_bytes_produces_output() {
         let candidates = vec![Candidate {
@@ -865,19 +1080,40 @@ mod tests {
         assert_eq!(popup.col, 0);
     }
 
+    fn popup_at(row: u16, col: u16, height: u16) -> Popup {
+        Popup {
+            row,
+            col,
+            width: 20,
+            height,
+        }
+    }
+
     #[test]
     fn clear_stale_rows_to_bytes_is_empty_when_ranges_match() {
-        let bytes = clear_stale_rows_to_bytes(6, 4, 6, 4).unwrap();
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(6, 0, 4)).unwrap();
         assert!(bytes.is_empty());
     }
 
     #[test]
     fn clear_stale_rows_to_bytes_clears_non_overlapping_rows() {
-        let bytes = clear_stale_rows_to_bytes(6, 4, 7, 2).unwrap();
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(7, 0, 2)).unwrap();
         let ansi = String::from_utf8_lossy(&bytes);
         assert!(ansi.contains("\u{1b}7") || ansi.contains("\u{1b}[s"));
         assert!(ansi.contains("[7;1H"));
         assert!(ansi.contains("[10;1H"));
+    }
+
+    #[test]
+    fn clear_stale_rows_to_bytes_clears_left_of_a_popup_that_moved_right() {
+        let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(6, 5, 2)).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        // Covered rows keep the popup's cells and lose the ones left of it.
+        assert!(ansi.contains("[7;5H\u{1b}[1K"), "{ansi:?}");
+        assert!(ansi.contains("[8;5H\u{1b}[1K"), "{ansi:?}");
+        // Uncovered rows are cleared whole.
+        assert!(ansi.contains("[9;1H\u{1b}[2K"), "{ansi:?}");
+        assert!(ansi.contains("[10;1H\u{1b}[2K"), "{ansi:?}");
     }
 
     #[test]

@@ -17,6 +17,14 @@ _bench_idle() { :; }
 _bench_idle_done() { [[ $LASTWIDGET != _bench_idle ]] || print idle > "$HOME/idle-$BENCH_MODE"; }
 zle -N _bench_idle
 bindkey '^]' _bench_idle
+# One key each to leave for another word position and to come back. Coming
+# back is a key the daemon answers from its cache.
+_bench_away() { _bench_saved=$BUFFER; BUFFER="${BUFFER%% *} away "; CURSOR=${#BUFFER}; }
+_bench_back() { BUFFER=$_bench_saved; CURSOR=${#BUFFER}; }
+zle -N _bench_away
+zle -N _bench_back
+bindkey '^O' _bench_away
+bindkey '^P' _bench_back
 add-zle-hook-widget line-pre-redraw _bench_idle_done
 add-zle-hook-widget line-init _bench_ready
 PROMPT='B> '

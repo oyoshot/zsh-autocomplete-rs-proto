@@ -296,7 +296,9 @@ _test_run() {
         functions[_test_actual_redraw]="$_test_production_redraw"
         BUFFER='probe f'; CURSOR=${#BUFFER}
         _test_actual_redraw
-        BUFFER='probe fo'; CURSOR=${#BUFFER}
+        # Another word position has its own cache entry, so returning to the
+        # first is a cache hit that leaves this lookup behind in the shell.
+        BUFFER='probe other fo'; CURSOR=${#BUFFER}
         _test_actual_redraw
         BUFFER='probe f'; CURSOR=${#BUFFER}
         _test_actual_redraw

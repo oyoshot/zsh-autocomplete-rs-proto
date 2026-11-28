@@ -13,6 +13,9 @@ typeset pty_output='' dsr_pending=''
 # Keys the user types after the next cursor position query and before the
 # terminal's reply to it.
 typeset dsr_typeahead=''
+# The 1-based column the terminal reports for the cursor, and whether it
+# leaves cursor position queries unanswered.
+typeset -i dsr_col=5 dsr_silent=0
 # Collect terminal output and answer each cursor position query.
 drain_pty() {
     local chunk=''
@@ -20,7 +23,8 @@ drain_pty() {
         pty_output+="$chunk"
         dsr_pending+="$chunk"
         while [[ "$dsr_pending" == *$'\e[6n'* ]]; do
-            zpty -w -n zacrs_popup "$dsr_typeahead"$'\e[2;5R'
+            (( dsr_silent )) ||
+                zpty -w -n zacrs_popup "$dsr_typeahead"$'\e[2;'"$dsr_col"'R'
             dsr_typeahead=''
             dsr_pending="${dsr_pending#*$'\e[6n'}"
         done

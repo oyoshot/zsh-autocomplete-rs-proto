@@ -348,6 +348,20 @@ fn keys(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) ->
     Ok(results)
 }
 
+/// Milliseconds from writing `key` to a fully drawn popup, starting from an
+/// idle shell. A popup is on screen before the hook that drew it returns;
+/// waiting for the shell keeps that hook's tail out of the next interval.
+fn timed_key(shell: &mut pty::Shell, idle: &Path, key: &[u8]) -> Result<f64> {
+    if idle.exists() {
+        fs::remove_file(idle)?;
+    }
+    shell.send(b"\x1d")?;
+    shell.probe(idle, "idle\n")?;
+    let start = Instant::now();
+    shell.send_until_popup(key)?;
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
 /// Time from a key to a fully drawn popup, with a daemon, for a key that
 /// gathers candidates and a key the daemon answers from its cache.
 fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -> Result<Results> {
@@ -379,27 +393,15 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
             for (size, command) in [(100, "bench-small"), (10_000, "bench-large")] {
                 // A new word before the one completed makes a new cache entry.
                 shell.send_until_popup(format!("\x15{command} x{rep} ").as_bytes())?;
-                for (kind, key) in [
-                    // A prefix the cache has not seen for this line.
-                    ("gather", &b"w"[..]),
-                    // Erasing it returns to the prefix the cache holds.
-                    ("cached", b"\x7f"),
-                ] {
-                    // A popup is on screen before the hook that drew it
-                    // returns. Wait for the shell, so that hook's tail is not
-                    // charged to this key.
-                    if idle.exists() {
-                        fs::remove_file(&idle)?;
-                    }
-                    shell.send(b"\x1d")?;
-                    shell.probe(&idle, "idle\n")?;
-                    let start = Instant::now();
-                    shell.send_until_popup(key)?;
-                    measured.insert(
-                        format!("{kind}_{size}_ms"),
-                        start.elapsed().as_secs_f64() * 1000.0,
-                    );
-                }
+                // A prefix the cache has not seen for this word: gather.
+                measured.insert(format!("gather_{size}_ms"), timed_key(shell, &idle, b"w")?);
+                // Leave for another word and come back with one key each. The
+                // daemon still holds the set gathered for this word and prefix.
+                shell.send_until_popup(b"\x0f")?;
+                measured.insert(
+                    format!("cached_{size}_ms"),
+                    timed_key(shell, &idle, b"\x10")?,
+                );
             }
             if rep >= u64::from(args.warmups) {
                 samples.entry(name.clone()).or_default().push(measured);

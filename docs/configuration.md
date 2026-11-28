@@ -145,6 +145,32 @@ trigger still ranks it by matching score. To list argument abbreviations
 earlier, name `abbreviation` in `kind_order`; putting it first prioritizes them
 everywhere.
 
+## Names typed past
+
+When nothing matches, candidates that the query starts with are listed
+instead, longest first and without match emphasis: `README.mdx` lists
+`README.md`, and `claudecode` at command position lists `claude`. Case and
+Latin folding follow ordinary matching. Only a name followed by more name
+characters (letters, digits, `.`, `-`, `_`, `+`) counts as typed past. A
+separator or shell syntax after the name, as in `src/new.rs`, `of=file`,
+`log*` or `file{,.bak}`, lists nothing, so Tab still falls back to Zsh's own
+expansion. Choosing a name replaces the typed word, so the extra text is
+removed.
+
+For paths and other arguments, Zsh returns nothing for a word typed past an
+existing name. The daemon then uses the candidates it gathered earlier for a
+shorter word in the same argument position and directory, usually while that
+word was being typed, and keeps only the names the current word extends. They
+can be stale until the next command line. Without the daemon or such an
+earlier gather, as for a pasted word, the popup closes and the typed text is
+kept.
+
+These candidates are never applied without an explicit choice. Tab opens the
+popup with nothing selected, even for a single candidate; Enter and Space then
+keep the typed text, and moving to a candidate first applies it. Typing in an
+open popup until nothing matches still closes it and keeps the typed text, so
+`README.md` followed by `.bak` is not replaced by `README.md`.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are
