@@ -27,9 +27,9 @@ _zacrs_ensure_compinit() {
 
     # compinit hasn't run at all — initialize it. Without -C, compinit
     # regenerates the dump when the number of files in $fpath or the Zsh
-    # version changes. -u skips compaudit, which would prompt or remove
-    # insecure directories from the user's $fpath; users who want the audit
-    # run compinit themselves.
+    # version changes. -u turns off compaudit's checks, which would prompt or
+    # remove insecure directories from the user's $fpath; users who want the
+    # audit run compinit themselves.
     _zacrs_dbg "compinit: initializing (was not called yet)"
     autoload -Uz compinit 2>/dev/null && compinit -u -d "${ZSH_COMPDUMP:-${XDG_CACHE_HOME:-$HOME/.cache}/zsh/compdump}" 2>/dev/null
 

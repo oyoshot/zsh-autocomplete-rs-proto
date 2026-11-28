@@ -16,14 +16,12 @@ export ZACRS_FALLBACK_COMPSYS="${test_dir:h}/_zacrs_compsys.zsh"
 export ZACRS_FALLBACK_MARKER="$tmp_dir/marker"
 export ZACRS_FALLBACK_FUNCTIONS="$tmp_dir/functions"
 export ZACRS_FALLBACK_UNSAFE="$tmp_dir/unsafe"
-export ZACRS_FALLBACK_WORK="$tmp_dir/work"
 # The adapter's default dump path, not one the user chose.
 export XDG_CACHE_HOME="$tmp_dir/cache"
 unset ZSH_COMPDUMP
 typeset dump="$XDG_CACHE_HOME/zsh/compdump"
 
-mkdir -p "$tmp_dir/zdotdir" "$ZACRS_FALLBACK_FUNCTIONS" "$ZACRS_FALLBACK_WORK" \
-    "$XDG_CACHE_HOME/zsh"
+mkdir -p "$tmp_dir/zdotdir" "$ZACRS_FALLBACK_FUNCTIONS" "$XDG_CACHE_HOME/zsh"
 
 add_completion() {
     local dir=$1 command=$2
@@ -33,7 +31,6 @@ add_completion() {
 cat > "$tmp_dir/zdotdir/.zshrc" <<'EOF'
 fpath=("$ZACRS_FALLBACK_UNSAFE" "$ZACRS_FALLBACK_FUNCTIONS" $fpath)
 typeset -g fallback_fpath="${(j.:.)fpath}"
-cd "$ZACRS_FALLBACK_WORK"
 source "$ZACRS_FALLBACK_UTIL"
 source "$ZACRS_FALLBACK_COMPSYS"
 
@@ -104,9 +101,11 @@ mkdir -m 777 "$ZACRS_FALLBACK_UNSAFE"
 add_completion "$ZACRS_FALLBACK_UNSAFE" zacrsunsafe
 run_session zacrsunsafe zacrsunsafe-candidate 'a world-writable directory stays in $fpath without a prompt'
 
-# An up-to-date dump is loaded, not rewritten.
 touch -t 200001010000 "$dump"
 run_session zacrsold zacrsold-candidate 'a later shell loads an up-to-date dump'
-typeset -a old_dump=($dump(Nmd+1))
-(( ${#old_dump} )) || { print -u2 -r -- 'not ok: an up-to-date dump is not rewritten'; exit 1 }
-print -r -- 'ok: an up-to-date dump is not rewritten'
+old_dump=($dump(Nmd+1))
+(( $#old_dump )) || { print -u2 -r -- 'not ok: an up-to-date dump was rewritten'; exit 1 }
+
+rm -rf -- "$XDG_CACHE_HOME/zsh"
+run_session zacrsold zacrsold-candidate 'completion works without a dump directory'
+[[ ! -e "$XDG_CACHE_HOME/zsh" ]] || { print -u2 -r -- 'not ok: the adapter created the dump directory'; exit 1 }
