@@ -156,7 +156,8 @@ lack candidates.
 
 Each part of rule 8 is therefore needed, and together they are enough, within
 the model. `sh docs/design/adapter-contract-spec/check.sh` runs all seven and
-compares them with this table. It needs `tlc`; CI does not run it.
+compares them with this table. It needs `tlc`. CI runs it with the latest TLC
+release when the specification or this page changes.
 
 What the results rest on:
 
