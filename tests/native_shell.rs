@@ -298,6 +298,50 @@ fn oversized_candidate_sets_leave_tab_to_the_shell() {
 }
 
 #[test]
+fn zsh_slow_command_context_waits_for_tab_until_a_fast_gather() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tempfile::Builder::new()
+        .prefix("zacrs-slow.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let plugin = support::install_zsh_plugin(root.path(), false);
+    let config = root.path().join("config/zacrs");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("config.toml"),
+        "[completion]\nslow_context_ms = 100\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_zsh-autocomplete-rs");
+    let (output, timed_out) = run_shell(
+        Command::new("zsh")
+            .args(["-df", "-c", include_str!("support/slow_context.zsh")])
+            .env_clear()
+            .env("PATH", env::var_os("PATH").unwrap_or_default())
+            .env("HOME", root.path())
+            .env("ZDOTDIR", root.path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("ZACRS_BIN", binary)
+            .env("ZACRS_PLUGIN", plugin)
+            .env("TERM", "xterm-256color")
+            .current_dir(root.path()),
+        Duration::from_secs(30),
+    );
+    let _ = Command::new(binary)
+        .args(["daemon", "stop"])
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .output();
+    assert!(!timed_out, "{output:?}");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();
     let (_, timed_out) = run_shell(

@@ -147,6 +147,9 @@ pub struct Config {
     pub auto_insert_unambiguous: bool,
     pub expand_abbreviation_on_enter: bool,
     pub expand_abbreviation_on_space: bool,
+    /// Native completion this slow, twice in a row for one command context,
+    /// stops automatic popups there. Zero keeps every context automatic.
+    pub slow_context_ms: u32,
     pub kind_order: KindOrder,
     pub suffixes: SuffixConfig,
     pub keybindings: KeybindingsRaw,
@@ -161,6 +164,7 @@ impl Default for Config {
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
             expand_abbreviation_on_space: false,
+            slow_context_ms: DEFAULT_SLOW_CONTEXT_MS,
             kind_order: KindOrder::default(),
             suffixes: SuffixConfig::default(),
             keybindings: KeybindingsRaw::default(),
@@ -174,6 +178,12 @@ fn default_true() -> bool {
     true
 }
 
+const DEFAULT_SLOW_CONTEXT_MS: u32 = 300;
+
+fn default_slow_context_ms() -> u32 {
+    DEFAULT_SLOW_CONTEXT_MS
+}
+
 // Manual Default impl required: bool::default() is false, but this option defaults to true.
 #[derive(Debug, Deserialize)]
 struct CompletionRaw {
@@ -183,6 +193,8 @@ struct CompletionRaw {
     expand_abbreviation_on_enter: bool,
     #[serde(default)]
     expand_abbreviation_on_space: bool,
+    #[serde(default = "default_slow_context_ms")]
+    slow_context_ms: u32,
     #[serde(default)]
     kind_order: KindOrder,
 }
@@ -193,6 +205,7 @@ impl Default for CompletionRaw {
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
             expand_abbreviation_on_space: false,
+            slow_context_ms: DEFAULT_SLOW_CONTEXT_MS,
             kind_order: KindOrder::default(),
         }
     }
@@ -598,6 +611,7 @@ impl Config {
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
             expand_abbreviation_on_space: file.completion.expand_abbreviation_on_space,
+            slow_context_ms: file.completion.slow_context_ms,
             kind_order: file.completion.kind_order,
             suffixes: SuffixConfig::from_raw(file.suffix),
             keybindings: file.keybindings,
@@ -1100,6 +1114,17 @@ mod tests {
         assert!(
             toml::from_str::<ConfigFile>("[completion]\nexpand_abbreviation_on_enter = 1").is_err()
         );
+    }
+
+    #[test]
+    fn slow_context_ms_defaults_to_300_and_accepts_zero() {
+        let file: ConfigFile = toml::from_str("").unwrap();
+        assert_eq!(file.completion.slow_context_ms, 300);
+        let file: ConfigFile = toml::from_str("[completion]\n").unwrap();
+        assert_eq!(file.completion.slow_context_ms, 300);
+        let file: ConfigFile = toml::from_str("[completion]\nslow_context_ms = 0\n").unwrap();
+        assert_eq!(file.completion.slow_context_ms, 0);
+        assert_eq!(Config::default().slow_context_ms, 300);
     }
 
     #[test]

@@ -104,6 +104,7 @@ pub fn try_daemon_complete(
     context_key: Option<&str>,
     popup_key: Option<&str>,
     filesystem: Option<&crate::filesystem::FilesystemQuery>,
+    gather_ms: Option<u32>,
 ) -> Result<CompleteSessionOutcome, DaemonUnavailable> {
     if prefix.contains(['\r', '\n']) {
         // The filter is a line in this protocol version. Never leak the rest
@@ -138,6 +139,7 @@ pub fn try_daemon_complete(
         shift_tab_sequence,
         context_key: context_key.map(str::to_string),
         popup_key: popup_key.map(str::to_string),
+        gather_ms,
     };
     writeln!(writer, "{}", request.header_line()).map_err(|_| DaemonUnavailable::NotRunning)?;
     if let Some(query) = filesystem {
@@ -862,6 +864,7 @@ mod tests {
             None,
             None,
             Some(&query),
+            None,
         );
         assert!(matches!(result, Ok(CompleteSessionOutcome::Done(result))
             if result == TextCompleteResult::rejected_edit()));

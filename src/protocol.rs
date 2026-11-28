@@ -63,6 +63,10 @@ pub struct TextRenderRequest {
     pub command_position: bool,
     pub command_context: Option<String>,
     pub candidates_present: bool,
+    /// How long the shell took to gather the candidates it sends.
+    pub gather_ms: Option<u32>,
+    /// The sender understands a `SLOW` reply to a cache-only request.
+    pub slow_reply: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +87,8 @@ pub struct TextCompleteRequest {
     pub shift_tab_sequence: Option<Vec<u8>>,
     pub context_key: Option<String>,
     pub popup_key: Option<String>,
+    /// How long the shell took to gather the candidates it sends.
+    pub gather_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +169,13 @@ fn read_u16(stream: &mut impl Read) -> io::Result<u16> {
     let mut buf = [0u8; 2];
     stream.read_exact(&mut buf)?;
     Ok(u16::from_be_bytes(buf))
+}
+
+fn gather_ms_from_header(tokens: &[&str]) -> Option<u32> {
+    tokens
+        .iter()
+        .find_map(|token| token.strip_prefix("gather_ms="))
+        .and_then(|value| value.parse().ok())
 }
 
 fn trim_line_end(line: &str) -> &str {
@@ -618,6 +631,8 @@ impl TextRequest {
                     }
                 }
                 Some(Self::Render(TextRenderRequest {
+                    gather_ms: gather_ms_from_header(rest),
+                    slow_reply: rest.contains(&"slow_reply=1"),
                     filesystem: rest.contains(&"filesystem=1"),
                     filesystem_options: filesystem_options_from_header(rest),
                     cursor_row: parse_u16_token(cursor_row)?,
@@ -675,6 +690,7 @@ impl TextRequest {
                     }
                 }
                 Some(Self::Complete(TextCompleteRequest {
+                    gather_ms: gather_ms_from_header(rest),
                     literal_paths: rest.contains(&"literal_paths=1"),
                     filesystem: rest.contains(&"filesystem=1"),
                     filesystem_options: filesystem_options_from_header(rest),
@@ -793,6 +809,9 @@ impl TextCompleteRequest {
         }
         if self.candidates_present {
             line.push_str(" candidates_present=1");
+        }
+        if let Some(gather_ms) = self.gather_ms {
+            line.push_str(&format!(" gather_ms={gather_ms}"));
         }
         if let Some(token) = &self.reuse_token {
             line.push_str(&format!(" reuse_token={token}"));
@@ -1706,6 +1725,7 @@ mod tests {
             shift_tab_sequence: Some(b"\x1b[Z".to_vec()),
             context_key: Some("ctx".to_string()),
             popup_key: Some("popup".to_string()),
+            gather_ms: Some(412),
         };
 
         let parsed = TextRequest::parse_header(&request.header_line()).unwrap();
@@ -1715,7 +1735,7 @@ mod tests {
     #[test]
     fn text_render_request_header_parses_popup_key() {
         let parsed = TextRequest::parse_header(
-            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup command_position=1 candidates_present=1",
+            "render 5 2 80 24 selected=1 context_key=ctx popup_key=popup command_position=1 candidates_present=1 gather_ms=412 slow_reply=1",
         )
         .unwrap();
         assert_eq!(
@@ -1733,6 +1753,8 @@ mod tests {
                 command_position: true,
                 command_context: None,
                 candidates_present: true,
+                gather_ms: Some(412),
+                slow_reply: true,
             })
         );
     }

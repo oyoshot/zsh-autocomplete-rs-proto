@@ -109,6 +109,24 @@ The adapter does not hold the limit. It sends the candidates and follows the
 reply: the daemon's `ERROR payload too large` means no popup for that request
 and leaves the daemon in use.
 
+## Slow command contexts
+
+Whether a command context is too slow for automatic popups is engine policy
+(`src/slow_contexts.rs`). The adapter supplies one measurement and follows one
+reply:
+
+- A request that carries gathered candidates adds `gather_ms=N`, the time the
+  adapter spent in native completion and its fallbacks. `complete` takes the
+  same value as `--gather-ms`.
+- A cache-only render request adds `slow_reply=1`. The daemon may then answer
+  `SLOW` instead of `CACHE_MISS`; the adapter clears the popup and does not
+  gather on that key.
+
+A daemon that predates this ignores both tokens, and a daemon never answers
+`SLOW` to an adapter that did not send `slow_reply=1`. The adapter loads
+`zsh/datetime` on the first gather for `EPOCHREALTIME`; if that fails, it sends
+no measurement and every context stays automatic.
+
 ## Filesystem fallback provider
 
 The shared filesystem logic delegates path construction and separator handling

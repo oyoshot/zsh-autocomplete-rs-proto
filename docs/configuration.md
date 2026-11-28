@@ -71,6 +71,28 @@ current context. The default keeps paths first at empty argument positions such
 as `nvim <Tab>` and `mv <Tab>`; explicitly putting `abbreviation` first also
 prioritizes eligible argument abbreviations there.
 
+## Slow command contexts
+
+Native completion runs inside Zsh and blocks typing while it gathers. Some
+commands take long enough for that to be felt on every key: `yay -S ` lists
+about 140,000 packages and takes seconds.
+
+The engine therefore stops automatic popups for a command context whose
+gathering reaches the threshold twice in a row. The context is the words before
+the one being completed, so `yay -S ` covers `yay -S a` and `yay -S zsh-`.
+Tab still completes there. A gather that finishes under the threshold, which
+Tab can trigger, makes the context automatic again.
+
+```toml
+[completion]
+slow_context_ms = 300
+```
+
+The default is 300 milliseconds. `slow_context_ms = 0` keeps every context
+automatic. The engine remembers up to 64 contexts until the daemon stops, and
+nothing is written to disk. Without a daemon no context is remembered, so
+popups stay automatic everywhere. The command word itself is always automatic.
+
 ## Abbreviations
 
 Static abbreviations are portable completion candidates. By default they are

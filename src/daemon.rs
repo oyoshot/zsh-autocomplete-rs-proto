@@ -228,6 +228,7 @@ struct DaemonServer {
     /// Most recent auto-popup payload per shell session.
     active_popups: HashMap<String, ActivePopupEntry>,
     active_popup_order: Vec<String>,
+    slow_contexts: crate::slow_contexts::SlowContexts,
     abbreviation_sessions: HashMap<String, crate::abbreviation::EditingSession>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
@@ -248,6 +249,7 @@ impl DaemonServer {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            slow_contexts: Default::default(),
             abbreviation_sessions: HashMap::new(),
             workers: Vec::new(),
         };
@@ -292,6 +294,7 @@ pub fn run_stdio_complete<R: BufRead, W: Write>(
         candidate_cache_order: Vec::new(),
         active_popups: HashMap::new(),
         active_popup_order: Vec::new(),
+        slow_contexts: Default::default(),
         abbreviation_sessions: HashMap::new(),
         workers: Vec::new(),
     };
@@ -764,7 +767,16 @@ impl DaemonServer {
                 command_position,
                 command_context,
                 candidates_present,
+                gather_ms,
+                slow_reply,
             }) => {
+                if let Some(gather_ms) = gather_ms {
+                    self.slow_contexts.record(
+                        command_context.as_deref(),
+                        gather_ms,
+                        self.config.slow_context_ms,
+                    );
+                }
                 let filesystem_query = if filesystem {
                     match protocol::read_filesystem_query(reader, filesystem_options) {
                         Ok(query) => Some(query),
@@ -967,7 +979,14 @@ impl DaemonServer {
                             }
                         } else {
                             debug!(context_key = key.as_str(), "render cache miss");
-                            let _ = writeln!(writer, "CACHE_MISS");
+                            // Gathering here would block the next key. Tab still gathers.
+                            let slow = slow_reply
+                                && self.slow_contexts.is_slow(
+                                    command_context.as_deref(),
+                                    self.config.slow_context_ms,
+                                );
+                            let _ =
+                                writeln!(writer, "{}", if slow { "SLOW" } else { "CACHE_MISS" });
                             let _ = writer.flush();
                         }
                     } else {
@@ -1056,7 +1075,15 @@ impl DaemonServer {
                 shift_tab_sequence,
                 context_key,
                 popup_key,
+                gather_ms,
             }) => {
+                if let Some(gather_ms) = gather_ms {
+                    self.slow_contexts.record(
+                        command_context.as_deref(),
+                        gather_ms,
+                        self.config.slow_context_ms,
+                    );
+                }
                 let filesystem_query = if filesystem {
                     match protocol::read_filesystem_query(reader, filesystem_options) {
                         Ok(query) => Some(query),
@@ -1200,6 +1227,7 @@ impl DaemonServer {
                     candidate_cache_order: Vec::new(),
                     active_popups: HashMap::new(),
                     active_popup_order: Vec::new(),
+                    slow_contexts: Default::default(),
                     abbreviation_sessions: HashMap::new(),
                     workers: Vec::new(),
                 };
@@ -2507,6 +2535,51 @@ mod tests {
         TextCompleteResult::read_from(&mut reader, done.trim_end_matches(['\r', '\n'])).unwrap()
     }
 
+    #[test]
+    fn slow_context_answers_slow_only_to_callers_that_ask_for_it() {
+        let mut server = test_server();
+        let context = "796179202d5320"; // "yay -S "
+        let gathered = |gather_ms: u32, key: &str| {
+            format!(
+                "render 5 2 80 24 context_key={key} command_context_hex={context} candidates_present=1 gather_ms={gather_ms}"
+            )
+        };
+        let cache_only = |extra: &str| {
+            let header =
+                format!("render 5 2 80 24 context_key=other command_context_hex={context}{extra}");
+            text_request_input(&header, "a", None)
+        };
+        let reply = |server: &mut DaemonServer, input| {
+            String::from_utf8(run_text_request(server, input)).unwrap()
+        };
+        let tsv = Some("zsh\tpackage\n");
+
+        run_text_request(
+            &mut server,
+            text_request_input(&gathered(2500, "first"), "", tsv),
+        );
+        assert_eq!(
+            reply(&mut server, cache_only(" slow_reply=1")),
+            "CACHE_MISS\n"
+        );
+
+        run_text_request(
+            &mut server,
+            text_request_input(&gathered(400, "second"), "", tsv),
+        );
+        assert_eq!(reply(&mut server, cache_only(" slow_reply=1")), "SLOW\n");
+        assert_eq!(reply(&mut server, cache_only("")), "CACHE_MISS\n");
+
+        run_text_request(
+            &mut server,
+            text_request_input(&gathered(20, "third"), "", tsv),
+        );
+        assert_eq!(
+            reply(&mut server, cache_only(" slow_reply=1")),
+            "CACHE_MISS\n"
+        );
+    }
+
     fn test_server() -> DaemonServer {
         let config = Config::default();
         let theme = config.theme();
@@ -2522,6 +2595,7 @@ mod tests {
             candidate_cache_order: Vec::new(),
             active_popups: HashMap::new(),
             active_popup_order: Vec::new(),
+            slow_contexts: Default::default(),
             abbreviation_sessions: HashMap::new(),
             workers: Vec::new(),
         }
@@ -4369,6 +4443,7 @@ mod tests {
             shift_tab_sequence: None,
             context_key: Some("ctx-1".to_string()),
             popup_key: Some("popup-1".to_string()),
+            gather_ms: None,
         };
         let output = run_text_request(
             &mut server,
@@ -4411,6 +4486,7 @@ mod tests {
             shift_tab_sequence: None,
             context_key: None,
             popup_key: Some("popup-1".to_string()),
+            gather_ms: None,
         };
         let output = run_text_request(
             &mut server,

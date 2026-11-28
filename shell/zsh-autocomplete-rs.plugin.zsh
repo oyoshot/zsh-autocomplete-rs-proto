@@ -344,16 +344,34 @@ _zacrs_daemon_filter() {
     [[ "$1" != *[$'\r\n']* ]]
 }
 
+# Time candidate gathering for the engine, which decides whether a command
+# context is too slow for automatic popups. The adapter only measures.
+typeset -gi _zacrs_gather_ms=-1
+typeset -gF _zacrs_gather_started=0
+_zacrs_gather_timer_start() {
+    _zacrs_gather_ms=-1
+    _zacrs_gather_started=0
+    (( ${+EPOCHREALTIME} )) || zmodload zsh/datetime 2>/dev/null || return 0
+    _zacrs_gather_started=$EPOCHREALTIME
+}
+_zacrs_gather_timer_stop() {
+    (( _zacrs_gather_started > 0 )) || return 0
+    _zacrs_gather_ms=$(( (EPOCHREALTIME - _zacrs_gather_started) * 1000 ))
+    _zacrs_gather_started=0
+}
+
 # Connect to daemon, send a render request, and parse the response header.
 # Args: $1=cursor_row $2=cursor_col $3=prefix $4=candidates $5=selected (optional) $6=context_key (optional) $7=command-position (0|1) $8=candidates-present (0|1) $9=command-context (optional)
 # When candidates are empty, $8 distinguishes an explicit empty candidate set
 # from a cache-only request. Cache-first and resize callers leave $8 unset.
+# $10=1 lets a cache-only request be answered SLOW.
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
 # On EMPTY or a candidate set over the limit (return 1): fd already closed; no popup.
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
+# On SLOW      (return 4): fd already closed; the engine asks not to gather on this key.
 # On transport failure or an unsupported filter (return 2): caller can use the subprocess.
 _zacrs_daemon_send_render() {
-    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}" _command_context="${9:-}"
+    local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}" _command_context="${9:-}" _slow_reply="${10:-0}"
     [[ "$_pfx" != *[$'\r\n']* ]] || return 2
     local fd
     if ! zsocket "$_zacrs_socket_path" 2>/dev/null; then
@@ -366,6 +384,11 @@ _zacrs_daemon_send_render() {
     (( _cmd_pos )) && render_cmd+=" command_position=1"
     [[ -n "$_command_context" ]] && render_cmd+=" command_context_hex=$(_zacrs_encode_hex_input "$_command_context")"
     (( _cands_present )) && render_cmd+=" candidates_present=1"
+    if (( _cands_present && _zacrs_gather_ms >= 0 )); then
+        render_cmd+=" gather_ms=$_zacrs_gather_ms"
+        _zacrs_gather_ms=-1
+    fi
+    (( _slow_reply )) && render_cmd+=" slow_reply=1"
     render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
     if (( _cands_present && _zacrs_filesystem_requested )); then
@@ -398,6 +421,9 @@ _zacrs_daemon_send_render() {
     elif [[ "$header" == CACHE_MISS ]]; then
         exec {fd}<&-
         return 3
+    elif [[ "$header" == SLOW ]]; then
+        exec {fd}<&-
+        return 4
     elif [[ "$header" == 'ERROR payload too large' ]]; then
         # The daemon refused this candidate set, not the session. No path
         # selects from a set this large, so there is no popup to draw.
@@ -732,6 +758,10 @@ _zacrs_invoke_daemon() {
     [[ -n "$command_context" ]] && complete_args+=(--command-context "$command_context")
     (( accept_single )) && complete_args+=(--accept-single)
     (( candidates_present )) && complete_args+=(--candidates-present)
+    if (( candidates_present && _zacrs_gather_ms >= 0 )); then
+        complete_args+=(--gather-ms "$_zacrs_gather_ms")
+        _zacrs_gather_ms=-1
+    fi
     [[ -n "$shift_tab_hex" ]] && complete_args+=(--shift-tab-hex "$shift_tab_hex")
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
@@ -882,6 +912,7 @@ _zacrs_fallback_candidates() {
 # Caller must declare: local prefix prefix_len candidates_str
 # (zsh dynamic scoping lets us write to these from here)
 _zacrs_collect_candidates() {
+    _zacrs_gather_timer_start
     candidates_str=""
     _zacrs_filesystem_requested=0
     _zacrs_filesystem_valid=0
@@ -907,6 +938,7 @@ _zacrs_collect_candidates() {
         && _zacrs_is_cmd_pos "$LBUFFER" "$prefix"; then
         candidates_str="$(_zacrs_gather_command_rescue "$prefix")"
     fi
+    _zacrs_gather_timer_stop
 }
 
 # === Popup completion widget ===
@@ -1080,7 +1112,7 @@ _zacrs_line_pre_redraw() {
         fi
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
         # candidates 引数を空にして送信 → デーモンがキャッシュを探す
-        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key" "$is_cmd_pos" 0 "$command_context"
+        _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key" "$is_cmd_pos" 0 "$command_context" 1
         local _cache_rc=$?
         if (( _cache_rc == 0 )); then
             # キャッシュヒット: 描画完了
@@ -1099,6 +1131,10 @@ _zacrs_line_pre_redraw() {
             fi
             exec {fd}<&-
             return
+        elif (( _cache_rc == 4 )); then
+            # SLOW: gathering here blocks typing. Tab still gathers.
+            _zacrs_clear_popup
+            return
         elif (( _cache_rc == 1 )); then
             # EMPTY: 現在のキャッシュでは候補なし。
             # 外部状態変化でキャッシュが古い可能性があるため、
@@ -1115,6 +1151,7 @@ _zacrs_line_pre_redraw() {
     # Heavy path: compsys + gather (no cache available). The PENDING guards
     # above and below are the debounce: unlike a timestamp-only delay, they
     # guarantee that the final keypress still gets a render pass.
+    _zacrs_gather_timer_start
     _zacrs_captured=()
     local _zacrs_fd2
     exec {_zacrs_fd2}>&2
@@ -1154,6 +1191,7 @@ _zacrs_line_pre_redraw() {
         candidates_str="$(_zacrs_gather_command_rescue "$prefix")"
         from_gather=1
     fi
+    _zacrs_gather_timer_stop
 
     _zacrs_should_render_candidates "$candidates_str" "$LBUFFER" "$prefix" \
         || { _zacrs_clear_popup; return }

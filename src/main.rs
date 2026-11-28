@@ -38,6 +38,7 @@ struct CompleteCommand {
     popup_key: Option<String>,
     prev_popup_row: Option<u16>,
     prev_popup_height: Option<u16>,
+    gather_ms: Option<u32>,
 }
 
 fn run_complete(command: CompleteCommand) -> io::Result<()> {
@@ -60,6 +61,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         popup_key,
         prev_popup_row,
         prev_popup_height,
+        gather_ms,
     } = command;
 
     let stdin = io::stdin();
@@ -88,6 +90,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             context_key.as_deref(),
             popup_key.as_deref(),
             filesystem.as_ref(),
+            gather_ms,
         ) {
             Ok(client::CompleteSessionOutcome::Done(result)) => {
                 write_done_result(&mut writer, &result)?
@@ -327,6 +330,7 @@ fn main() {
             popup_key,
             prev_popup_row,
             prev_popup_height,
+            gather_ms,
             cols,
             rows,
         } => match run_complete(CompleteCommand {
@@ -356,6 +360,7 @@ fn main() {
             popup_key,
             prev_popup_row,
             prev_popup_height,
+            gather_ms,
         }) {
             Ok(()) => process::exit(0),
             Err(e) => {

@@ -59,6 +59,10 @@ pub enum Command {
         #[arg(long)]
         prev_popup_height: Option<u16>,
 
+        /// Milliseconds the shell spent gathering the candidates on stdin
+        #[arg(long)]
+        gather_ms: Option<u32>,
+
         #[arg(long, default_value_t = 80)]
         cols: u16,
 

@@ -11,5 +11,6 @@ pub mod handoff;
 pub mod input;
 pub mod lifecycle;
 pub mod protocol;
+pub mod slow_contexts;
 pub mod tty;
 pub mod ui;
