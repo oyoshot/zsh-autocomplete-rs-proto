@@ -1053,6 +1053,30 @@ mod tests {
     }
 
     #[test]
+    fn render_frames_leave_the_saved_cursor_to_the_shell() {
+        // The shell saves the cursor before a frame and restores it after.
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("ls\t\tcommand"),
+                Candidate::parse_line("lsblk\t\tcommand"),
+            ],
+            "ls".into(),
+            1,
+            2,
+            80,
+            24,
+        );
+        let (bytes, _) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        for save_or_restore in ["\u{1b}7", "\u{1b}8", "\u{1b}[s", "\u{1b}[u"] {
+            assert!(
+                !ansi.contains(save_or_restore),
+                "{save_or_restore:?} in {ansi:?}"
+            );
+        }
+    }
+
+    #[test]
     fn render_popup_to_bytes_handles_zero_sized_terminal_input() {
         let candidates = vec![Candidate {
             text: "git".to_string(),

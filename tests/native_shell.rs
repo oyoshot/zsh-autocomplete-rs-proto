@@ -403,6 +403,16 @@ fn zsh_popup_sessions_redraw_the_word_where_it_is_on_screen() {
 }
 
 #[test]
+fn zsh_resize_redraws_keep_the_cursor_where_zsh_left_it() {
+    for case in ["grow", "shrink"] {
+        run_popup_script(
+            include_str!("support/popup_resize_redraw.zsh"),
+            &[("ZACRS_TEST_CASE", case)],
+        );
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.
