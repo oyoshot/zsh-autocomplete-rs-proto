@@ -578,6 +578,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }

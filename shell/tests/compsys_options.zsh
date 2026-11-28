@@ -62,6 +62,36 @@ assert_array_output_flag 0 'output flag after option terminator is a candidate' 
 assert_array_output_flag 0 'option value containing O is not an output flag' -P -Output candidate
 assert_array_output_flag 0 'option value containing A is not an output flag' -P -Array candidate
 
+assert_group() {
+    local expected=$1 description=$2
+    shift 2
+
+    local REPLY
+    local -a reply
+    _zacrs_compadd_group "$@"
+    local actual="$REPLY ${reply[1]}"
+    if [[ "$actual" != "$expected" ]]; then
+        print -u2 -r -- "not ok: ${description} (expected=${(qqq)expected}, actual=${(qqq)actual})"
+        (( ++failures ))
+    else
+        print -r -- "ok: ${description}"
+    fi
+}
+
+assert_group 'J: 0' 'no group is the default sorted group' - b a
+assert_group 'J:commands 0' 'sorted group' -J commands - b a
+assert_group 'V:commands 1' 'unsorted group' -V commands - b a
+assert_group 'V:commands 1' 'unsorted group in a flag cluster' -QV commands - b a
+assert_group 'J:files 0' 'attached group name' -Jfiles - b a
+assert_group 'J:commands 1' 'nosort order' -J commands -o nosort - b a
+assert_group 'J: 1' 'nosort among several orders' -o match,nosort - b a
+assert_group 'J: 1' 'attached nosort order' -onosort - b a
+assert_group 'J: 0' 'only the first order applies' -o numeric -o nosort - 10 9
+assert_group 'J: 0' 'a word that is not an order list is a match' -o nosorted b a
+assert_group 'J: 0' 'option value containing V is not a group flag' -P -V - b a
+assert_group 'J: 0' 'options end at the first match' foo -V bar
+assert_group 'J: 0' 'candidate after option terminator is not a flag' - -V b a
+
 assert_render_gate() {
     local expected=$1 candidates=$2 buffer=$3 prefix=$4 description=$5
     local actual=0

@@ -563,14 +563,37 @@ fn compare_scored_candidates(
         .then_with(|| a.text.cmp(&b.text))
 }
 
-/// Orders by kind only. The sort is stable, so candidates of the same kind
-/// keep the order the source gave them, such as compsys groups.
+/// Orders by kind, then by source group, then by text within groups that
+/// are sorted. The sort is stable, so groups that keep their order list
+/// candidates as the source gave them.
+fn compare_empty_candidates(a: &Candidate, b: &Candidate, order: &KindOrder) -> Ordering {
+    let (ag, bg) = (a.source_group, b.source_group);
+    order
+        .priority(a.kind_priority())
+        .cmp(&order.priority(b.kind_priority()))
+        .then(ag.index.cmp(&bg.index))
+        .then(ag.keep_order.cmp(&bg.keep_order))
+        .then_with(|| {
+            if ag.keep_order {
+                Ordering::Equal
+            } else {
+                a.text.cmp(&b.text)
+            }
+        })
+}
+
 fn sort_empty_query_matches(
     results: &mut [ScoredMatch],
     candidates: &[Candidate],
     order: &KindOrder,
 ) {
-    results.sort_by_key(|m| order.priority(candidates[m.candidate_idx].kind_priority()));
+    results.sort_by(|a, b| {
+        compare_empty_candidates(
+            &candidates[a.candidate_idx],
+            &candidates[b.candidate_idx],
+            order,
+        )
+    });
 }
 
 fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate], order: &KindOrder) {
@@ -638,6 +661,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }
@@ -1095,6 +1119,7 @@ mod tests {
                 kind: kind.to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }
@@ -1254,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_sorts_by_kind_and_keeps_source_order_within_a_kind() {
+    fn empty_query_sorts_ungrouped_candidates_by_kind_then_text() {
         let mut m = FuzzyMatcher::new();
         let candidates = make_candidates_with_kind(&[
             ("longcmd", "command"),
@@ -1264,8 +1289,40 @@ mod tests {
         ]);
         let results = m.filter(&candidates, "");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        // Files before commands; commands as given, not by length or text.
-        assert_eq!(texts, ["z", "longcmd", "ab", "abc"]);
+        // Files before commands, then by text rather than length.
+        assert_eq!(texts, ["z", "ab", "abc", "longcmd"]);
+    }
+
+    #[test]
+    fn empty_query_lists_source_groups_in_order_and_sorts_within_them() {
+        use crate::candidate::SourceGroup;
+        let mut m = FuzzyMatcher::new();
+        let group = |index, keep_order| SourceGroup { index, keep_order };
+        let mut candidates = make_candidates(&[
+            "commit", "stash", "add", "zip", "HEAD~2", "HEAD~10", "bisect",
+        ]);
+        let groups = [
+            group(1, false),
+            group(2, false),
+            group(1, false),
+            group(0, false),
+            group(3, true),
+            group(3, true),
+            group(1, false),
+        ];
+        for (candidate, group) in candidates.iter_mut().zip(groups) {
+            candidate.source_group = group;
+        }
+        let results = m.filter(&candidates, "");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        // Groups split across sources merge, sort, and keep the group order;
+        // a group that keeps its order is listed as given.
+        assert_eq!(
+            texts,
+            [
+                "zip", "add", "bisect", "commit", "stash", "HEAD~2", "HEAD~10"
+            ]
+        );
     }
 
     #[test]
