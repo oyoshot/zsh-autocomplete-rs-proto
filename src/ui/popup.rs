@@ -5,8 +5,13 @@ const MAX_POPUP_WIDTH: u16 = 60;
 const PADDING: usize = 3; // Two cells for the selection gutter, one on the right.
 /// Rows a popup needs: the cursor line, the frame and one candidate.
 const MIN_TERM_ROWS: u16 = 4;
-/// Columns a popup needs: the frame and one content cell.
-const MIN_TERM_COLS: u16 = 3;
+/// Columns a popup needs to show a readable candidate: the frame (2), the
+/// row padding (3) and two candidate cells. Narrower popups show only
+/// blanks or an ellipsis.
+const MIN_TERM_COLS: u16 = 7;
+/// Columns of the narrowest popup that can be drawn: the frame and one cell.
+#[cfg(test)]
+const MIN_POPUP_WIDTH: u16 = 3;
 
 /// Returns `true` if `s` is safe to embed as a space-delimited header token.
 /// Rejects empty strings, spaces, and ASCII control characters.
@@ -392,10 +397,10 @@ mod tests {
     }
 
     #[test]
-    fn fits_terminal_needs_room_for_the_frame_and_one_row() {
-        assert!(Popup::fits_terminal(3, 4));
-        assert!(!Popup::fits_terminal(2, 4));
-        assert!(!Popup::fits_terminal(3, 3));
+    fn fits_terminal_needs_room_for_one_readable_candidate() {
+        assert!(Popup::fits_terminal(7, 4));
+        assert!(!Popup::fits_terminal(6, 4));
+        assert!(!Popup::fits_terminal(7, 3));
         assert_eq!(Popup::rows_available(4), 1);
         assert_eq!(Popup::rows_available(3), 0);
         assert_eq!(Popup::rows_available(0), 0);
@@ -460,7 +465,7 @@ mod tests {
                     assert!(u32::from(popup.row) + u32::from(popup.height) <= u32::from(term_rows));
                     assert!(u32::from(popup.col) + u32::from(popup.width) <= u32::from(term_cols));
                     if inner_width >= 1 {
-                        assert!(popup.width >= MIN_TERM_COLS);
+                        assert!(popup.width >= MIN_POPUP_WIDTH);
                     }
                 },
             );

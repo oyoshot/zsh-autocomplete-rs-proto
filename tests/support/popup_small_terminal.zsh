@@ -3,8 +3,9 @@ zmodload zsh/zpty
 
 cat > "$HOME/.zshrc" <<'ZSH'
 unsetopt MONITOR
-# Three rows leave no room for the cursor line, the frame and a candidate.
-stty rows 3 cols 100
+# Too few rows for the cursor line, the frame and a candidate, or too few
+# columns for a readable one.
+stty rows "$ZACRS_TEST_ROWS" cols "$ZACRS_TEST_COLS"
 zmodload zsh/zle
 autoload -Uz add-zle-hook-widget
 if [[ "$ZACRS_TEST_DAEMON" == 0 ]]; then
@@ -81,25 +82,31 @@ assert_no_popup() {
     drain_pty
     [[ "$pty_output" != *'┌'* && "$pty_output" != *'└'* ]] || fail "drew a popup frame $1"
 }
+probe() {
+    : > "$HOME/probe"
+    zpty -w -n zacrs_small $'\x19'
+    wait_file probe "ls:2:0:$ZACRS_TEST_DAEMON"
+}
 
 zpty -b zacrs_small zsh -di
 wait_file ready ready
 
-# Typing triggers the automatic popup, which must stay hidden.
+# Typing must neither show the automatic popup nor do the work for one.
 zpty -w -n zacrs_small ls
-# The plugin asks for the cursor position right before it renders. ZLE runs
-# the probe only after that redraw hook returns.
-wait_cursor_query
-zpty -w -n zacrs_small $'\x19'
-wait_file probe "ls:2:0:$ZACRS_TEST_DAEMON"
+# The first probe may arrive as type-ahead, which defers the redraw hook. The
+# second one runs only after the hook has seen the final buffer.
+probe
+probe
 assert_no_popup 'while typing'
+[[ "$pty_output" != *$'\e[6n'* ]] || fail 'asked for the cursor position while typing'
 
 # Tab cannot show a popup either, so it hands over to native completion.
 zpty -w -n zacrs_small $'\t'
+# The engine decides this one: the plugin asks for the cursor position and
+# then gets "no candidates" back.
+wait_cursor_query
 wait_file native ls
-: > "$HOME/probe"
-zpty -w -n zacrs_small $'\x19'
-wait_file probe "ls:2:0:$ZACRS_TEST_DAEMON"
+probe
 assert_no_popup 'on Tab'
 
 print -r -- 'ok: a terminal too small for the popup falls back to native completion'

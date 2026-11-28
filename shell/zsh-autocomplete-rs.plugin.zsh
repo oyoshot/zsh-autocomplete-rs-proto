@@ -847,6 +847,11 @@ _zacrs_line_pre_redraw() {
 
     _zacrs_prev_lbuffer="$LBUFFER"
 
+    # No popup fits in a terminal this small, so skip the cursor query,
+    # candidate gathering and IPC. The engine makes the same check
+    # (Popup::fits_terminal) and stays authoritative if the limits diverge.
+    (( LINES < 4 || COLUMNS < 7 )) && { _zacrs_clear_popup; return }
+
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }
 
