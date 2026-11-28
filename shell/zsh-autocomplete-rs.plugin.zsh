@@ -179,20 +179,34 @@ _zacrs_end_popup_session() {
 }
 
 _zacrs_record_popup_snapshot() {
-    _zacrs_filesystem_editor || { _zacrs_reset_popup_snapshot; return 0; }
     local prefix_len="$1"
-    _zacrs_popup_snapshot_daemon=${2:-1}
-    _zacrs_popup_snapshot_cwd="$PWD"
-    _zacrs_popup_snapshot_home="${HOME:-}"
-    local _zacrs_file_option_key
-    _zacrs_file_options
-    _zacrs_popup_snapshot_file_options="$_zacrs_file_option_key"
-    _zacrs_popup_snapshot_buffer="$BUFFER"
-    _zacrs_popup_snapshot_cursor=$CURSOR
+    if _zacrs_filesystem_editor; then
+        _zacrs_popup_snapshot_daemon=${2:-1}
+        _zacrs_popup_snapshot_cwd="$PWD"
+        _zacrs_popup_snapshot_home="${HOME:-}"
+        local _zacrs_file_option_key
+        _zacrs_file_options
+        _zacrs_popup_snapshot_file_options="$_zacrs_file_option_key"
+        _zacrs_popup_snapshot_buffer="$BUFFER"
+        _zacrs_popup_snapshot_cursor=$CURSOR
+        _zacrs_popup_snapshot_prefix_len=$prefix_len
+    else
+        # No candidate reuse outside top-level command editing.
+        _zacrs_reset_popup_snapshot
+    fi
+    # Which text and terminal size the popup on screen was drawn for, in any
+    # editor: Tab redraws over it instead of clearing it first.
     _zacrs_popup_snapshot_lbuffer="$LBUFFER"
-    _zacrs_popup_snapshot_prefix_len=$prefix_len
     _zacrs_popup_snapshot_columns=$COLUMNS
     _zacrs_popup_snapshot_lines=$LINES
+}
+
+# A gathered set may be stored under the cache key only when its prefix is the
+# text after the last space. Later requests ask with that text, and when the
+# word really starts elsewhere (after ">", ";" or a quote) another line can end
+# in the same text.
+_zacrs_prefix_is_last_word() {
+    [[ "$1" == "${LBUFFER##* }" ]]
 }
 
 _zacrs_popup_snapshot_matches_editor() {
@@ -376,6 +390,7 @@ _zacrs_daemon_send_render() {
     fi
     fd=$REPLY
     local render_cmd="render $_cr $_cc $COLUMNS $LINES"
+    (( _cands_present )) && ! _zacrs_prefix_is_last_word "$_pfx" && _ctx_key=""
     [[ -n "$_ctx_key" ]] && render_cmd+=" context_key=$_ctx_key"
     (( _cmd_pos )) && render_cmd+=" command_position=1"
     if [[ -n "$_command_context" ]]; then
@@ -755,6 +770,7 @@ _zacrs_invoke_daemon() {
     [[ -n "$stale_hex" ]] && complete_args+=(--stale-hex "$stale_hex")
     (( _zacrs_popup_visible )) && complete_args+=(--prev-popup-row "$_zacrs_popup_row" --prev-popup-height "$_zacrs_popup_height")
     (( reuse_visible )) && complete_args+=(--reuse-token 1)
+    (( candidates_present )) && ! _zacrs_prefix_is_last_word "$prefix" && context_key=""
     [[ -n "$context_key" ]] && complete_args+=(--context-key "$context_key")
 
     local -a reply
@@ -968,7 +984,7 @@ _zacrs_complete_with_popup() {
     # The popup on screen belongs to this line, whoever drew it. The session
     # then replaces it in place; reusing its candidates is a separate matter.
     local -i popup_in_place=0
-    if (( _zacrs_popup_visible )) && _zacrs_popup_snapshot_matches_editor \
+    if (( _zacrs_popup_visible )) && [[ "$_zacrs_popup_snapshot_lbuffer" == "$LBUFFER" ]] \
         && (( _zacrs_popup_snapshot_columns == COLUMNS && _zacrs_popup_snapshot_lines == LINES )); then
         popup_in_place=1
     fi

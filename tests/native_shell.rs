@@ -392,7 +392,7 @@ fn zsh_failed_frame_reads_clear_the_popup_on_screen() {
 
 #[test]
 fn zsh_popup_sessions_redraw_the_word_where_it_is_on_screen() {
-    for case in ["moved", "silent"] {
+    for case in ["moved", "silent", "continuation"] {
         for daemon in ["1", "0"] {
             run_popup_script(
                 include_str!("support/popup_tab_cursor.zsh"),
@@ -462,6 +462,11 @@ fn zsh_file_name_typed_past_is_offered_from_the_previous_candidates() {
             &[("ZACRS_TEST_DAEMON", daemon)],
         );
     }
+}
+
+#[test]
+fn zsh_cached_candidates_are_not_served_for_a_word_that_starts_elsewhere() {
+    run_popup_script(include_str!("support/popup_cache_word_start.zsh"), &[]);
 }
 
 #[test]
