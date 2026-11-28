@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795715431670,
+  "lastUpdate": 1795832159129,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -23111,6 +23111,282 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 466,
             "range": "± 31",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "36d149541a70e547c92f15b90b44171c8cf82d53",
+          "message": "ci: check pull requests into any base branch (#188)\n\nThe workflows ran only for pull requests into main, so stacked pull\nrequests and those into an integration branch had no tests on Linux or\nmacOS and no Kani proofs. Benchmark results are still stored only from\npushes to main.\n\nCo-authored-by: Claude Fable 5.2 <noreply@anthropic.com>",
+          "timestamp": "2026-11-28T11:06:16+09:00",
+          "tree_id": "d16480de24af299d76f9901377363f2e56a57faa",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/36d149541a70e547c92f15b90b44171c8cf82d53"
+        },
+        "date": 1795832158256,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 5622,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 63369,
+            "range": "± 428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 797697,
+            "range": "± 3864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 175721,
+            "range": "± 970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 93784,
+            "range": "± 308",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 63651,
+            "range": "± 283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 22372,
+            "range": "± 228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 19868,
+            "range": "± 166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 18406,
+            "range": "± 137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 162666,
+            "range": "± 753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 163463,
+            "range": "± 3034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 166371,
+            "range": "± 1969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 154475,
+            "range": "± 541",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 15112,
+            "range": "± 75",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 163068,
+            "range": "± 2509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 1790835,
+            "range": "± 19891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 134807,
+            "range": "± 529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 99726,
+            "range": "± 505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 632012,
+            "range": "± 2784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 244883,
+            "range": "± 2452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 253301,
+            "range": "± 1335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 75641,
+            "range": "± 196298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 127749,
+            "range": "± 33525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 555067,
+            "range": "± 5273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 315972,
+            "range": "± 1384",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 413,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 21,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 88,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 20,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 67,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 23,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 63,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 16,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 24,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 32,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 29,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 295465,
+            "range": "± 1429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 195481,
+            "range": "± 954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 667,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 5961,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 533,
+            "range": "± 4",
             "unit": "ns/iter"
           }
         ]
