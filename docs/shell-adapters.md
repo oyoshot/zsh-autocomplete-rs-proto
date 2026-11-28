@@ -97,6 +97,18 @@ the current insertion widget. Querying completion context would consume that
 state even without an edit, so restoring only the buffer and cursor is
 insufficient. Removal and retention remain the native widget's responsibility.
 
+## Candidate set limit
+
+The engine offers a popup only for a candidate set of at most 1 MiB of TSV.
+For a larger set, a render request draws nothing and a completion request
+answers `DONE 4`, the result that sends Tab to the shell's own completion. The
+limit is the same on every path, so a popup that is drawn can always be
+selected from.
+
+The adapter does not hold the limit. It sends the candidates and follows the
+reply: the daemon's `ERROR payload too large` means no popup for that request
+and leaves the daemon in use.
+
 ## Filesystem fallback provider
 
 The shared filesystem logic delegates path construction and separator handling

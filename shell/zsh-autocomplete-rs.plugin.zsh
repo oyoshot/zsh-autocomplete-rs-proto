@@ -349,7 +349,7 @@ _zacrs_daemon_filter() {
 # When candidates are empty, $8 distinguishes an explicit empty candidate set
 # from a cache-only request. Cache-first and resize callers leave $8 unset.
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
-# On EMPTY     (return 1): fd already closed.
+# On EMPTY or a candidate set over the limit (return 1): fd already closed; no popup.
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
 # On transport failure or an unsupported filter (return 2): caller can use the subprocess.
 _zacrs_daemon_send_render() {
@@ -398,6 +398,11 @@ _zacrs_daemon_send_render() {
     elif [[ "$header" == CACHE_MISS ]]; then
         exec {fd}<&-
         return 3
+    elif [[ "$header" == 'ERROR payload too large' ]]; then
+        # The daemon refused this candidate set, not the session. No path
+        # selects from a set this large, so there is no popup to draw.
+        exec {fd}<&-
+        return 1
     else
         exec {fd}<&-
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable

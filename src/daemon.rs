@@ -191,6 +191,10 @@ struct CompleteParams {
 
 /// Maximum number of candidate-set cache entries retained across connections.
 /// When this limit is reached the oldest entry is evicted to bound memory use.
+/// Largest candidate set, in TSV bytes, that any path offers in a popup.
+/// A larger set gets no popup and Tab is left to the shell's own completion,
+/// so a popup that is drawn can always be selected from.
+pub const MAX_CANDIDATE_BYTES: usize = 1_048_576;
 const CANDIDATE_CACHE_MAX_ENTRIES: usize = 8;
 const ACTIVE_POPUP_MAX_ENTRIES: usize = 16;
 
@@ -1928,7 +1932,6 @@ fn read_prefix_and_candidates(
     writer: &mut impl Write,
     command: &str,
 ) -> Result<(String, Option<String>), ()> {
-    const MAX_TSV_BYTES: usize = 1_048_576;
     let prefix = match read_text_line(reader) {
         Ok(p) => p,
         Err(_) => {
@@ -1952,7 +1955,7 @@ fn read_prefix_and_candidates(
         return Ok((prefix, None));
     }
 
-    if first_line.len() > MAX_TSV_BYTES {
+    if first_line.len() > MAX_CANDIDATE_BYTES {
         loop {
             let mut drain = String::new();
             if reader.read_line(&mut drain).is_err()
@@ -1979,7 +1982,7 @@ fn read_prefix_and_candidates(
         if line.trim_end() == "END" {
             return Ok((prefix, Some(tsv)));
         }
-        if tsv.len() + line.len() > MAX_TSV_BYTES {
+        if tsv.len() + line.len() > MAX_CANDIDATE_BYTES {
             loop {
                 let mut drain = String::new();
                 if reader.read_line(&mut drain).is_err()
@@ -2057,7 +2060,6 @@ fn init_tracing() {
 }
 
 pub fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
-    const MAX_TSV_BYTES: usize = 1_048_576;
     let mut tsv = String::new();
     loop {
         let mut line = String::new();
@@ -2067,7 +2069,7 @@ pub fn read_tsv_payload(reader: &mut impl BufRead) -> Result<String, String> {
         if line.trim_end() == "END" {
             break;
         }
-        if tsv.len() + line.len() > MAX_TSV_BYTES {
+        if tsv.len() + line.len() > MAX_CANDIDATE_BYTES {
             // Drain remaining lines until END
             loop {
                 let mut drain = String::new();

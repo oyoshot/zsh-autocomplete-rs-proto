@@ -58,6 +58,23 @@ _test_accept() {
     BUFFER=''
     zle .accept-line
 }
+_test_oversize() {
+    # More than any path offers in a popup (1 MiB).
+    _zacrs_compsys() {
+        _zacrs_ctx_valid=0
+        _zacrs_captured=()
+        local padding=${(l:600::x:):-}
+        local -i i
+        for (( i = 1; i <= 1800; i++ )); do
+            _zacrs_captured+=("lsx-oversized-candidate-$i-$padding"$'\tcommand')
+        done
+    }
+    _test_native() { print -r -- native > "$HOME/native"; }
+    zle -N expand-or-complete _test_native
+    print -r -- oversized > "$HOME/oversized"
+}
+zle -N _test_oversize
+bindkey '^P' _test_oversize
 zle -N _test_probe
 zle -N _test_reload
 zle -N _test_defer
@@ -174,4 +191,33 @@ for abort_key in $'\x03' $'\x07' $'\x18' $'\x0f'; do
     [[ "$abort_key" != $'\x03' ]] || release_pending_interrupt "$next_line"
     assert_fresh_line "$next_line"
 done
+# A candidate set over the limit gets no popup, with or without a daemon:
+# the popup on screen is cleared, Tab runs the shell's own completion, and
+# the daemon stays in use.
+pty_output=''
+zpty -w -n zacrs_lifecycle ls
+wait_popup
+zpty -w -n zacrs_lifecycle $'\x10'
+wait_file oversized oversized
+pty_output=''
+zpty -w -n zacrs_lifecycle x
+typeset -i attempt
+for attempt in {1..500}; do
+    drain_pty
+    [[ "$pty_output" == *$'\e[2K'* ]] && break
+    sleep 0.01
+done
+[[ "$pty_output" == *$'\e[2K'* ]] || fail 'waiting for the popup to be cleared'
+: > "$HOME/probe"
+zpty -w -n zacrs_lifecycle $'\x19'
+wait_file probe "lsx:3:0:$ZACRS_TEST_ENTER:$ZACRS_TEST_DAEMON"
+() {
+    setopt localoptions extendedglob
+    [[ "${pty_output//$'\e'\[[0-9\;]#m/}" != *'lsx-oversized-candidate'* ]]
+} || fail 'drew a popup for an oversized set'
+zpty -w -n zacrs_lifecycle $'\t'
+wait_file native native
+: > "$HOME/probe"
+zpty -w -n zacrs_lifecycle $'\x19'
+wait_file probe "lsx:3:0:$ZACRS_TEST_ENTER:$ZACRS_TEST_DAEMON"
 print -r -- 'ok: new ZLE lines discard stale popup state without erasing the prompt'
