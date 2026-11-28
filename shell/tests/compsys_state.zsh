@@ -14,6 +14,10 @@ mkdir -p "$tmp_dir/home/space 日本語"
 : > "$tmp_dir/home/file"
 ln -s 'space 日本語' "$tmp_dir/home/link"
 export ZACRS_STATE_HOME="$tmp_dir/home"
+mkdir -p "$tmp_dir/bin"
+print -r -- '#!/bin/sh' > "$tmp_dir/bin/zacrs-cmd"
+chmod +x "$tmp_dir/bin/zacrs-cmd"
+export ZACRS_STATE_BIN="$tmp_dir/bin"
 export ZACRS_STATE_MARKER="$tmp_dir/marker"
 
 print -r -- '
@@ -87,6 +91,17 @@ compdef _zacrs_state_test_completion -command-
 alias zacrs-alias=true
 zacrs-fn() { : }
 _zacrs_private() { : }
+# Real sudo completion: its only external command is also a function here.
+# ^Y records what the completion captured for that name; sudo also offers
+# environment variable names.
+if [[ "$ZACRS_STATE_CASE" == command-after-sudo ]]; then
+    path=("$ZACRS_STATE_BIN")
+    rehash
+    zacrs-cmd() { : }
+    _zacrs_state_dump() { print -rl -- "${(M)_zacrs_captured[@]:#zacrs-*}" > "$ZACRS_STATE_MARKER" }
+    zle -N _zacrs_state_dump
+    bindkey -M emacs "^Y" _zacrs_state_dump
+fi
 bindkey -M emacs "^T" _zacrs_compsys
 bindkey -M viins "^T" _zacrs_compsys
 PROMPT="READY> "
@@ -119,7 +134,8 @@ run_case() {
         return 1
     fi
 
-    zpty -w -n zacrs_compsys_state "${ZACRS_STATE_INPUT:-zacrs-state-test x}"$'\x14'
+    local complete_key=$'\x14'
+    zpty -w -n zacrs_compsys_state "${ZACRS_STATE_INPUT:-zacrs-state-test x}${ZACRS_STATE_KEYS:-$complete_key}"
     for (( i = 0; i < 200; i++ )); do
         [[ "$(<"$ZACRS_STATE_MARKER")" == "$expected" ]] && break
         sleep 0.01
@@ -162,6 +178,10 @@ run_case command-paths $'zacrs-alias\t\talias\t1\t\n./local\t\t\t1\t\necho\t\tbu
 # first word in the -command- context again.
 export ZACRS_STATE_INPUT='nohup '
 run_case command-after-nohup $'zacrs-alias\t\t\t1\t\nzacrs-fn\t\t\t1\t\necho\t\t\t1\t\nls\t\t\t1\t\n_zacrs_private\t\t\t1\t\nCDPATH\t\t\t1\t'
+# Real sudo completion offers its external command without the function kind.
+export ZACRS_STATE_INPUT='sudo ' ZACRS_STATE_KEYS=$'\x14\x19'
+run_case command-after-sudo $'zacrs-cmd\t\t\t1\t'
+unset ZACRS_STATE_KEYS
 export ZACRS_STATE_INPUT='true | '
 # Names come out by kind, each kind in the order it was added.
 typeset -a many=( $'zacrs-alias\t\talias\t1\t' $'zacrs-fn\t\tfunction\t1\t' $'echo\t\tbuiltin\t1\t' $'ls\t\tcommand\t1\t' )
