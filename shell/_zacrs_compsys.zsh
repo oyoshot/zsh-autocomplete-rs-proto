@@ -3,7 +3,10 @@
 # Uses zle -C to register a completion widget that invokes the full zsh
 # completion system while capturing candidates via a compadd function
 # override with builtin compadd -O.
-# Format: text\tdescription\tkind
+# Format: text\tdescription\tkind\tgroup\torder
+# group numbers compsys groups in order of creation; order is "keep" for
+# groups listed in the order matches were added, or the group's "numeric"
+# and "reverse" sort orders.
 
 # Debug log file (only used when ZACRS_DEBUG=1)
 typeset -g ZACRS_LOG="${TMPDIR:-/tmp}/zacrs-debug.log"
@@ -91,6 +94,76 @@ _zacrs_compadd_has_array_output_flag() {
     return 1
 }
 
+# Identify the compsys group a compadd call adds to, for ordering empty
+# queries. Sets reply[1] to the order column: "keep" for a group that lists
+# matches in the order they were added (-V or -o nosort), otherwise the
+# "numeric" and "reverse" orders, comma-separated. Sets REPLY to the group's
+# key; like compsys, groups with the same name but other orders are distinct.
+# Sorting itself is left to the engine.
+_zacrs_compadd_group() {
+    setopt local_options extended_glob
+    local _arg _chars _char _group="J:" _order="" _value_flag=""
+    local -i _idx _expect_order=0 _order_seen=0
+
+    for _arg in "$@"; do
+        if (( _expect_order )); then
+            # A separate word is an order only if it is a valid order list.
+            # Only the first order applies, but later ones are still consumed.
+            if [[ "$_arg" == (match|nosort|numeric|reverse)(,(match|nosort|numeric|reverse))# ]]; then
+                (( _expect_order == 1 )) && _order="$_arg"
+                _expect_order=0
+                continue
+            fi
+            _expect_order=0
+        fi
+        if [[ -n "$_value_flag" ]]; then
+            [[ "$_value_flag" == [JV] ]] && _group="$_value_flag:$_arg"
+            _value_flag=""
+            continue
+        fi
+        # Options end at the first word that is not one.
+        [[ "$_arg" == -?* && "$_arg" != "--" ]] || break
+
+        _chars="${_arg[2,-1]}"
+        for (( _idx = 1; _idx <= ${#_chars}; _idx++ )); do
+            _char="${_chars[_idx]}"
+            case "$_char" in
+                [diIOADVJXxPSpsWFMrRE])
+                    if (( _idx == ${#_chars} )); then
+                        _value_flag="$_char"
+                    elif [[ "$_char" == [JV] ]]; then
+                        _group="$_char:${_chars[_idx+1,-1]}"
+                    fi
+                    break
+                    ;;
+                o)
+                    if (( _idx == ${#_chars} )); then
+                        # 1 records the order; 2 only consumes it.
+                        _expect_order=$(( _order_seen ? 2 : 1 ))
+                    elif (( ! _order_seen )); then
+                        _order="${_chars[_idx+1,-1]}"
+                    fi
+                    _order_seen=1
+                    break
+                    ;;
+                [akqQenUfl12C]) ;;
+                *) break ;;
+            esac
+        done
+    done
+
+    local -a _orders=( ${(s:,:)_order} ) _column=()
+    if [[ "$_group" == V:* ]] || (( ${_orders[(I)nosort]} )); then
+        _column=(keep)
+    else
+        (( ${_orders[(I)numeric]} )) && _column+=(numeric)
+        (( ${_orders[(I)reverse]} )) && _column+=(reverse)
+    fi
+    reply=( "${(j:,:)_column}" )
+    REPLY="$_group:${reply[1]}"
+    return 0
+}
+
 _zacrs_compsys_func() {
     # Reuse the native completion widget without running candidate providers,
     # initializing compsys, or mutating its captured-candidate state.
@@ -98,6 +171,8 @@ _zacrs_compsys_func() {
         _zacrs_abbreviation_context_func
         return 0
     fi
+    # Source groups for captured matches, numbered in order of creation.
+    local -A _zacrs_group_index=()
     typeset -ga _zacrs_captured=()
     typeset -gi _zacrs_compadd_calls=0
     typeset -gi _zacrs_ctx_valid=0
@@ -162,6 +237,18 @@ _zacrs_compsys_func() {
 
             [[ -n "$ZACRS_DEBUG" ]] && _zacrs_dbg "  compadd[$_zacrs_compadd_calls]: captured=${#_zacrs_cap} skip=0 args: ${(j: :)${(@q)@}}"
 
+            # Every match of this call shares its source group columns.
+            local _group_columns=""
+            if (( ${#_zacrs_cap} > 0 )); then
+                local REPLY
+                local -a reply
+                _zacrs_compadd_group "$@"
+                if (( ! ${+_zacrs_group_index[$REPLY]} )); then
+                    _zacrs_group_index[$REPLY]=$(( ${#_zacrs_group_index} + 1 ))
+                fi
+                _group_columns=$'\t'"${_zacrs_group_index[$REPLY]}"$'\t'"${reply[1]}"
+            fi
+
             local _full_prefix="${IPREFIX}${_hidden_prefix}${_vis_prefix}"
             # Plain argument matches share empty description/kind metadata.
             # Format them in one expansion rather than looping over large
@@ -169,7 +256,7 @@ _zacrs_compsys_func() {
             if (( ! _is_file && ! _zacrs_cmd_pos && ${#_desc_map} == 0 )) \
                 && [[ -z "${_full_prefix}${_vis_suffix}${_xdesc}" ]] \
                 && (( ${_zacrs_cap[(I)*/]} == 0 )); then
-                local _zacrs_plain_metadata=$'\t\t'
+                local _zacrs_plain_metadata=$'\t\t'"$_group_columns"
                 _zacrs_captured+=( "${(@)_zacrs_cap/%/$_zacrs_plain_metadata}" )
             else
                 local _m _path
@@ -194,7 +281,7 @@ _zacrs_compsys_func() {
                     elif (( _zacrs_cmd_pos )) && [[ "$_text" != */* ]] && _zacrs_command_kind "$_m"; then
                         _kind="$REPLY"
                     fi
-                    _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}" )
+                    _zacrs_captured+=( "${_text}"$'\t'"${_desc_map[$_m]:-$_xdesc}"$'\t'"${_kind}${_group_columns}" )
                 done
             fi
 

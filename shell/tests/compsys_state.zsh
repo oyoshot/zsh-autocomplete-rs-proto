@@ -50,8 +50,15 @@ _zacrs_state_test_completion() {
             compadd -U -d displays -- "alpha" "beta"
             ;;
         slash) compadd -U -- "alpha" "directory/" ;;
+        groups)
+            # A group may be filled by several calls; an unsorted group keeps
+            # the order in which matches were added.
+            compadd -U -J later -- "zeta"
+            compadd -U -V kept -- "beta" "alpha"
+            compadd -U -J later -- "eta"
+            ;;
     esac
-    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash) ]]; then
+    if [[ "$ZACRS_STATE_CASE" == (plain|plain-debug|affixes|description|mapped-description|slash|groups) ]]; then
         print -rl -- "${_zacrs_captured[@]}" > "$ZACRS_STATE_MARKER"
         return 0
     fi
@@ -114,14 +121,15 @@ run_case() {
 }
 
 run_case zero 'zero status=1 delta=0 captured=0 first='
-run_case one $'one status=0 delta=1 captured=1 first=xone\t\t'
-run_case many $'many status=0 delta=101 captured=200 first=x001\t\t'
+run_case one $'one status=0 delta=1 captured=1 first=xone\t\t\t1\t'
+run_case many $'many status=0 delta=101 captured=200 first=x001\t\t\t1\t'
 
-run_case kinds $'~\t\tdirectory\n~/\t\tdirectory\n~/file\t\tfile\n~/space 日本語\t\tdirectory\n~/link\t\tdirectory\n~/missing\t\tfile'
+run_case kinds $'~\t\tdirectory\t1\t\n~/\t\tdirectory\t1\t\n~/file\t\tfile\t1\t\n~/space 日本語\t\tdirectory\t1\t\n~/link\t\tdirectory\t1\t\n~/missing\t\tfile\t1\t'
 
-run_case plain $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
-run_case plain-debug $'alpha\t\t\n日本語 space\t\t\na*b&c\t\t\nrepo/package\t\t\n-option\t\t'
-run_case affixes $'pre&alpha*end\t\t\npre&beta*end\t\t'
-run_case description $'alpha\tpackage entries\t\nbeta\tpackage entries\t'
-run_case mapped-description $'alpha\tfirst entry\t\nbeta\tsecond entry\t'
-run_case slash $'alpha\t\t\ndirectory/\t\tdirectory'
+run_case plain $'alpha\t\t\t1\t\n日本語 space\t\t\t1\t\na*b&c\t\t\t1\t\nrepo/package\t\t\t1\t\n-option\t\t\t1\t'
+run_case plain-debug $'alpha\t\t\t1\t\n日本語 space\t\t\t1\t\na*b&c\t\t\t1\t\nrepo/package\t\t\t1\t\n-option\t\t\t1\t'
+run_case affixes $'pre&alpha*end\t\t\t1\t\npre&beta*end\t\t\t1\t'
+run_case description $'alpha\tpackage entries\t\t1\t\nbeta\tpackage entries\t\t1\t'
+run_case mapped-description $'alpha\tfirst entry\t\t1\t\nbeta\tsecond entry\t\t1\t'
+run_case slash $'alpha\t\t\t1\t\ndirectory/\t\tdirectory\t1\t'
+run_case groups $'zeta\t\t\t1\t\nbeta\t\t\t2\tkeep\nalpha\t\t\t2\tkeep\neta\t\t\t1\t'
