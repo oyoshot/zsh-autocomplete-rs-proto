@@ -122,6 +122,39 @@ impl Shell {
         .into())
     }
 
+    /// Forget captured output, so the next `popup_drawn` sees only what follows.
+    pub fn clear_output(&mut self) {
+        self.output.clear();
+    }
+
+    /// Wait until a popup frame has been written in full, answering the
+    /// adapter's cursor position queries as a terminal would.
+    pub fn popup_drawn(&mut self) -> Result<()> {
+        const QUERY: &[u8] = b"\x1b[6n";
+        const FRAME_END: &[u8] = b"\x1b[?25h\x1b[?2026l";
+        let find = |haystack: &[u8], needle: &[u8]| {
+            haystack
+                .windows(needle.len())
+                .position(|window| window == needle)
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut answered = 0;
+        while Instant::now() < deadline {
+            self.drain(1)?;
+            while let Some(at) = find(&self.output[answered..], QUERY) {
+                self.writer.write_all(b"\x1b[5;20R")?;
+                answered += at + QUERY.len();
+            }
+            // The box corner tells a drawn popup from a frame that only clears one.
+            if let Some(corner) = find(&self.output, "\u{250c}".as_bytes())
+                && find(&self.output[corner..], FRAME_END).is_some()
+            {
+                return Ok(());
+            }
+        }
+        Err(format!("popup timeout: {}", String::from_utf8_lossy(&self.output)).into())
+    }
+
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes)?;
         Ok(())
