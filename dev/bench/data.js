@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795832159129,
+  "lastUpdate": 1795833519664,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -23387,6 +23387,282 @@ window.BENCHMARK_DATA = {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 533,
             "range": "± 4",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8525a6c14dbf4864256e42287e612e0c5cafc50c",
+          "message": "fix(ui): show no popup when the terminal is too small for it (#181)\n\n* fix(ui): show no popup when the terminal is too small for it\n\nThe popup needs the cursor line, its frame and one candidate: 4 rows and 3 columns. In a smaller terminal the renderer drew the frame outside the terminal, and when the popup fit neither below nor above the cursor it was drawn from row 0, over the cursor line.\n\nApp::popup_fits now gates every path that draws. While typing, no popup is shown. On Tab the daemon still inserts a single candidate and otherwise answers no_candidates, so the shell runs native completion through its existing fallback. A resize that leaves no room ends the session as a cancel. This replaces four max_visible() == 0 checks that could never be true.\n\nThe scroll calculation duplicated in the daemon and ensure_space becomes Popup::scroll_to_fit. Kani proves that in any terminal a popup fits, scrolling by that amount places the popup directly below the cursor and inside the terminal. A PTY-driven test covers a 3-row terminal with real ZLE, with and without the daemon.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* fix(ui): require a readable popup width and skip work in small terminals\n\nRaise the minimum terminal width from 3 to 7 columns: narrower popups showed only blanks or an ellipsis instead of a candidate.\n\nReturn early from the redraw hook when no popup fits. The shell could not tell \"no room\" from \"no cached candidates\", so every keystroke at argument position repeated the cursor query, the daemon requests and candidate gathering for nothing. The engine check stays authoritative.\n\nAdd a PTY test that shrinks the terminal under an open popup session, and run the small-terminal test for a narrow terminal as well.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* fix(ui): require 8 columns and tighten the small-terminal tests\n\nAt 7 columns a shortened candidate could still show only an ellipsis when it started with a double-width character. Require 8 columns, derived from the frame, the row padding and three content cells.\n\nCheck the terminal size in the redraw hook before the type-ahead branch, so a paste in a too-small terminal no longer wraps self-insert for a popup that cannot appear.\n\nThe resize test waited a fixed time before shrinking and could pass without an open session. Wait for the session's first frame instead, and also shrink the width. Cover the smallest terminal that fits, where a popup must still appear. Make the proof assert that a row needing the minimum content width gets it.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n* refactor: scroll after the fit check and share the popup PTY driver\n\nsetup_session computed the scroll before handle_complete decided whether a popup would be drawn, so scroll_for_popup needed its own fit check. Scroll after that decision and drop the check.\n\nThe two new PTY tests repeated their launch code and their zsh driver. Move them to run_popup_script and tests/support/popup_pty.zsh.\n\nPin the size limit that the Zsh adapter repeats to the engine's constants, so the two cannot drift apart unnoticed.\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Fable 5.2 <noreply@anthropic.com>",
+          "timestamp": "2026-11-28T11:29:11+09:00",
+          "tree_id": "ec44d903f92bac6d7f220f2730fc90d80310a16a",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/8525a6c14dbf4864256e42287e612e0c5cafc50c"
+        },
+        "date": 1795833518707,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 8705,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 83414,
+            "range": "± 3292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 1030824,
+            "range": "± 21347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 193922,
+            "range": "± 1941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 117025,
+            "range": "± 1674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 85182,
+            "range": "± 344",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 34044,
+            "range": "± 135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 30713,
+            "range": "± 159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 27166,
+            "range": "± 380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 242964,
+            "range": "± 2086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 245216,
+            "range": "± 8377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 248098,
+            "range": "± 2835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 235548,
+            "range": "± 2370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 23249,
+            "range": "± 238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 244509,
+            "range": "± 2160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 2585019,
+            "range": "± 15416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 207026,
+            "range": "± 2488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 158601,
+            "range": "± 4140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 831172,
+            "range": "± 30333",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 321293,
+            "range": "± 2674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 317195,
+            "range": "± 4927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 76346,
+            "range": "± 308706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 145329,
+            "range": "± 68686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 718576,
+            "range": "± 12040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 469641,
+            "range": "± 4416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 628,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 30,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 96,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 28,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 85,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 32,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 80,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 21,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 32,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 43,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 357988,
+            "range": "± 2519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 245726,
+            "range": "± 1230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 131,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 849,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 7501,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 840,
+            "range": "± 3",
             "unit": "ns/iter"
           }
         ]
