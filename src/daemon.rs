@@ -1159,9 +1159,7 @@ impl DaemonServer {
             ui::render::draw_to_bytes(app, &self.theme)?
         };
         let stale_clear_bytes = prev_popup
-            .map(|(row, height)| {
-                ui::render::clear_stale_rows_to_bytes(row, height, popup.row, popup.height)
-            })
+            .map(|(row, height)| ui::render::clear_stale_rows_to_bytes(row, height, &popup))
             .transpose()?
             .unwrap_or_default();
         let total_len = stale_clear_bytes.len() + extra_prefix.len() + tty_bytes.len();

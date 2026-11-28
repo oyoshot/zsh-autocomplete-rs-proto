@@ -2,6 +2,7 @@
 
 # Get terminal cursor position (0-indexed row, col)
 # Sets: cursor_row, cursor_col
+# Returns 1 if the terminal did not reply; the position is then a fallback.
 _zacrs_get_cursor_pos() {
     local _buf="" _byte="" _found=0
     typeset -g _zacrs_cursor_stale=""
@@ -40,6 +41,7 @@ _zacrs_get_cursor_pos() {
     (( cursor_col >= COLUMNS )) && cursor_col=$(( COLUMNS - 1 ))
 
     _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
+    (( _found ))
 }
 
 # Build the daemon candidate-cache key for the current argument position.
