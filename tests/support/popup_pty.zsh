@@ -10,6 +10,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 typeset pty_output='' dsr_pending=''
+# Keys the user types after the next cursor position query and before the
+# terminal's reply to it.
+typeset dsr_typeahead=''
 # Collect terminal output and answer each cursor position query.
 drain_pty() {
     local chunk=''
@@ -17,7 +20,8 @@ drain_pty() {
         pty_output+="$chunk"
         dsr_pending+="$chunk"
         while [[ "$dsr_pending" == *$'\e[6n'* ]]; do
-            zpty -w -n zacrs_popup $'\e[2;5R'
+            zpty -w -n zacrs_popup "$dsr_typeahead"$'\e[2;5R'
+            dsr_typeahead=''
             dsr_pending="${dsr_pending#*$'\e[6n'}"
         done
         dsr_pending="${dsr_pending[-3,-1]}"
@@ -55,6 +59,16 @@ wait_output() {
         sleep 0.01
     done
     fail "waiting for $what"
+}
+# Wait until the terminal has answered a query, with `dsr_typeahead` first.
+wait_reply() {
+    local attempt
+    for attempt in {1..300}; do
+        drain_pty
+        [[ -z "$dsr_typeahead" ]] && return 0
+        sleep 0.01
+    done
+    fail 'waiting for the plugin to ask for the cursor position'
 }
 assert_no_popup() {
     drain_pty

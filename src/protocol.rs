@@ -798,6 +798,16 @@ impl TextFrameHeader {
     }
 }
 
+/// Tells the shell which typed-ahead bytes no popup session consumed, so it
+/// can queue them as input again. Writes nothing when there are none.
+pub fn write_unread_input(mut writer: impl Write, unread: &[u8]) -> io::Result<()> {
+    if unread.is_empty() {
+        return Ok(());
+    }
+    writeln!(writer, "UNREAD {}", encode_hex_bytes(unread))?;
+    writer.flush()
+}
+
 impl TextCompleteResult {
     pub fn write_to(&self, mut writer: impl Write) -> io::Result<()> {
         let encode_text = self.text.contains(['\r', '\n']);
@@ -1439,6 +1449,16 @@ mod tests {
         let header = String::from_utf8(buf).unwrap();
 
         assert_eq!(TextFrameHeader::parse(header.trim_end()), Some(frame));
+    }
+
+    #[test]
+    fn unread_input_is_written_as_hex_only_when_present() {
+        let mut out = Vec::new();
+        write_unread_input(&mut out, b"").unwrap();
+        assert!(out.is_empty());
+
+        write_unread_input(&mut out, b"x\x1b[D").unwrap();
+        assert_eq!(out, b"UNREAD 781b5b44\n");
     }
 
     #[test]

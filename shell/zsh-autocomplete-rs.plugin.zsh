@@ -413,7 +413,12 @@ _zacrs_render() {
         cursor_col=$_zacrs_last_render_cursor_col
     else
         _zacrs_get_cursor_pos
-        _zacrs_cursor_stale=""  # auto-trigger: PENDING guards prevent stale bytes
+        if _zacrs_requeue_stale; then
+            # Like type-ahead: the next redraw retries with the new buffer.
+            _zacrs_clear_popup
+            _zacrs_prev_lbuffer=""
+            return
+        fi
     fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
@@ -549,8 +554,10 @@ _zacrs_apply() {
                 new_lbuffer="${base}${restore_text}"
             fi
             _zacrs_suppressed=0
+            # The key that ended the session was typed before any unread
+            # keys. zle -U is a stack, so queue them as one string.
             _zacrs_decode_hex_to_REPLY "$result_text"
-            [[ -n "$REPLY" ]] && zle -U "$REPLY"
+            _zacrs_cursor_stale="$REPLY${_zacrs_cursor_stale:-}"
             ;;
     esac
 
@@ -593,7 +600,7 @@ _zacrs_invoke_daemon() {
     fi
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
-        _zacrs_get_cursor_pos
+        _zacrs_query_cursor_keeping_stale
     fi
 
     local stale_hex=""
@@ -626,12 +633,9 @@ _zacrs_invoke_daemon() {
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
         _zacrs_end_popup_session
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
-        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
-        _zacrs_cursor_stale=""
         return 1
     }
     _zacrs_end_popup_session
-    _zacrs_cursor_stale=""
 
     local -a lines
     lines=("${(@f)output}")
@@ -642,6 +646,7 @@ _zacrs_invoke_daemon() {
         (( ${+functions[_zacrs_mark_daemon_unavailable]} )) && _zacrs_mark_daemon_unavailable
         return 1
     fi
+    _zacrs_keep_unread_stale "${lines[3]:-}"
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
@@ -667,7 +672,7 @@ _zacrs_invoke() {
     fi
     if [[ -z "$cursor_row" || -z "$cursor_col" ]]; then
         cursor_row=0 cursor_col=0
-        _zacrs_get_cursor_pos
+        _zacrs_query_cursor_keeping_stale
     fi
     local stale_hex=""
     [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
@@ -696,18 +701,16 @@ _zacrs_invoke() {
     _zacrs_ignore_next_winch=1
     output=$(printf '%s\nEND\n' "$candidates_str" | "$ZACRS_BIN" "${complete_args[@]}" 2>/dev/null) || {
         _zacrs_end_popup_session
-        [[ -n "$_zacrs_cursor_stale" ]] && zle -U "$_zacrs_cursor_stale"
-        _zacrs_cursor_stale=""
         return 1
     }
     _zacrs_end_popup_session
-    _zacrs_cursor_stale=""
 
     local -a lines
     lines=("${(@f)output}")
     if [[ "${lines[1]}" != DONE* || "${lines[2]}" != APPLY* ]]; then
         return 1
     fi
+    _zacrs_keep_unread_stale "${lines[3]:-}"
 
     local result_code result_text chain=0 execute=0 restore_text="" cursor_offset="" selection_applied=0 insert_trigger=0
     _zacrs_parse_done_line "${lines[1]}"
@@ -716,6 +719,34 @@ _zacrs_invoke() {
     _zacrs_finish_popup_session
     _zacrs_apply "$prefix_len" "$result_code" "$result_text" "$chain" "$execute" "$restore_text" "$selection_applied"
     (( accept_single || result_code != 0 )) && zle reset-prompt
+}
+
+# Keys typed between a cursor position query and the terminal's reply are
+# read along with the reply and kept in _zacrs_cursor_stale. A popup session
+# takes them as its first input. Whatever is left when the widget is done
+# goes back to ZLE. Succeeds if there were keys to queue. PENDING does not
+# count queued keys, so callers that care must use this status.
+_zacrs_requeue_stale() {
+    [[ -n "${_zacrs_cursor_stale:-}" ]] || return 1
+    zle -U "$_zacrs_cursor_stale"
+    _zacrs_cursor_stale=""
+}
+
+# A second attempt in the same widget keeps the keys of the first in front.
+_zacrs_query_cursor_keeping_stale() {
+    local earlier="${_zacrs_cursor_stale:-}"
+    _zacrs_get_cursor_pos
+    _zacrs_cursor_stale="$earlier$_zacrs_cursor_stale"
+}
+
+# The client reports the keys its session did not consume as "UNREAD <hex>".
+_zacrs_keep_unread_stale() {
+    _zacrs_cursor_stale=""
+    if [[ "$1" == "UNREAD "* ]]; then
+        local REPLY
+        _zacrs_decode_hex_to_REPLY "${1#UNREAD }"
+        _zacrs_cursor_stale="$REPLY"
+    fi
 }
 
 _zacrs_encode_hex_input() {
@@ -763,6 +794,15 @@ _zacrs_collect_candidates() {
 # === Popup completion widget ===
 
 _zacrs_complete_popup() {
+    {
+        _zacrs_complete_with_popup
+    } always {
+        # Also on interrupt, so keys never leak into a later widget.
+        _zacrs_requeue_stale
+    }
+}
+
+_zacrs_complete_with_popup() {
     local prefix="" prefix_len=0 candidates_str=""
     local cursor_row="" cursor_col=""
     local reuse_visible=0
@@ -901,7 +941,12 @@ _zacrs_auto_popup() {
             cursor_col=$_zacrs_last_render_cursor_col
         else
             _zacrs_get_cursor_pos
-            _zacrs_cursor_stale=""
+            if _zacrs_requeue_stale; then
+                # Like type-ahead: the next redraw retries with the new buffer.
+                _zacrs_clear_popup
+                _zacrs_prev_lbuffer=""
+                return
+            fi
         fi
         local _prev_vis=$_zacrs_popup_visible _prev_row=$_zacrs_popup_row _prev_height=$_zacrs_popup_height
         # candidates 引数を空にして送信 → デーモンがキャッシュを探す

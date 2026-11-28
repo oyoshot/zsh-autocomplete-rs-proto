@@ -15,8 +15,13 @@ fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
 }
 
-fn write_done_result(writer: impl Write, result: &TextCompleteResult) -> io::Result<()> {
-    result.write_to(writer)
+fn write_done_result(
+    mut writer: impl Write,
+    result: &TextCompleteResult,
+    unread: &[u8],
+) -> io::Result<()> {
+    result.write_to(&mut writer)?;
+    protocol::write_unread_input(writer, unread)
 }
 
 struct CompleteCommand {
@@ -83,8 +88,8 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
             context_key.as_deref(),
             popup_key.as_deref(),
         ) {
-            Ok(client::CompleteSessionOutcome::Done(result)) => {
-                write_done_result(&mut writer, &result)?
+            Ok(client::CompleteSessionOutcome::Done(result, unread)) => {
+                write_done_result(&mut writer, &result, &unread)?
             }
             Ok(client::CompleteSessionOutcome::CacheMiss) => {
                 writeln!(writer, "CACHE_MISS")?;
@@ -129,7 +134,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
     let mut session_writer = client_stream;
     let mut initial_header = String::new();
     session_reader.read_line(&mut initial_header)?;
-    let result = client::run_text_popup_session(
+    let (result, unread) = client::run_text_popup_session(
         &mut session_reader,
         &mut session_writer,
         trim_line_end(&initial_header),
@@ -139,7 +144,7 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
         cursor_col,
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
-    write_done_result(&mut stdout_writer, &result)?;
+    write_done_result(&mut stdout_writer, &result, &unread)?;
     handle
         .join()
         .map_err(|_| io::Error::other("complete session thread panicked"))?;
