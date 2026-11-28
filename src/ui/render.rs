@@ -113,6 +113,13 @@ fn print_candidate(
     Ok(())
 }
 
+fn clear_rest_of_row(buf: &mut impl Write, erase: bool) -> std::io::Result<()> {
+    if erase {
+        crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
+    }
+    Ok(())
+}
+
 fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Result<Popup> {
     let popup = Popup::compute(app);
     let inner = popup.width.saturating_sub(2) as usize;
@@ -123,6 +130,12 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let dash_byte_len = '─'.len_utf8(); // 3
 
     crossterm::queue!(buf, cursor::Hide)?;
+
+    // Erasing to the end of the row clears cells that an earlier, wider popup
+    // left. A popup flush with the right edge has none, and after a character
+    // in the last column many terminals keep the cursor there, so the erase
+    // would remove the border itself.
+    let erase_rest_of_row = popup.col.saturating_add(popup.width) < app.term_cols;
 
     // Top border with filter text
     let filter_label = truncate_to_width(&format!(" {} ", app.filter_text), inner);
@@ -137,7 +150,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         format_args!("{}┐", &dashes[..remaining * dash_byte_len]),
         theme.border,
     )?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
+    clear_rest_of_row(buf, erase_rest_of_row)?;
 
     // Candidate rows
     let visible = app.visible_candidate_indices();
@@ -212,7 +225,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             crossterm::queue!(buf, Print(&spaces[..padding]))?;
             print_colored(buf, "│", theme.border)?;
         }
-        crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
+        clear_rest_of_row(buf, erase_rest_of_row)?;
     }
 
     // Bottom border
@@ -235,7 +248,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     )?;
     print_colored(buf, range_label, Some(theme.description))?;
     print_colored(buf, "┘", theme.border)?;
-    crossterm::queue!(buf, terminal::Clear(terminal::ClearType::UntilNewLine))?;
+    clear_rest_of_row(buf, erase_rest_of_row)?;
 
     Ok(popup)
 }
@@ -497,6 +510,88 @@ mod tests {
             _ => {}
         });
         text
+    }
+
+    /// Replays popup output on a grid with the terminal behavior that matters
+    /// at the right margin: after a character in the last column, the cursor
+    /// stays there with a wrap pending, so erasing to the end of the line
+    /// erases that character (xterm, Windows Terminal; tmux differs).
+    fn replay_on_screen(bytes: &[u8], screen: &mut [Vec<char>]) {
+        use termwiz::escape::{
+            Action,
+            csi::{CSI, Cursor, Edit, EraseInLine},
+            parser::Parser,
+        };
+        let cols = screen[0].len();
+        let (mut x, mut y) = (0, 0);
+        let put = |c: char, x: &mut usize, y: &mut usize, screen: &mut [Vec<char>]| {
+            screen[*y][*x] = c;
+            *x = (*x + 1).min(cols - 1);
+        };
+        Parser::new().parse(bytes, |action| match action {
+            Action::Print(c) => put(c, &mut x, &mut y, screen),
+            Action::PrintString(s) => s.chars().for_each(|c| put(c, &mut x, &mut y, screen)),
+            Action::CSI(CSI::Cursor(Cursor::Position { line, col })) => {
+                y = line.as_zero_based() as usize;
+                x = col.as_zero_based() as usize;
+            }
+            Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine))) => {
+                screen[y][x..].fill(' ');
+            }
+            _ => {}
+        });
+    }
+
+    #[test]
+    fn popup_flush_with_the_right_edge_keeps_its_right_border() {
+        let (cols, rows) = (40, 10);
+        // The cursor near the right edge pushes the popup against it.
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("alpha\tdesc\tcommand"),
+                Candidate::parse_line("alphabet\t\tcommand"),
+            ],
+            "al".into(),
+            0,
+            38,
+            cols,
+            rows,
+        );
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        assert_eq!(popup.col + popup.width, cols);
+
+        let mut screen = vec![vec![' '; usize::from(cols)]; usize::from(rows)];
+        replay_on_screen(&bytes, &mut screen);
+        let right = usize::from(cols) - 1;
+        let edge: String = (popup.row..popup.row + popup.height)
+            .map(|row| screen[usize::from(row)][right])
+            .collect();
+        assert_eq!(edge, "┐││┘");
+    }
+
+    #[test]
+    fn popup_clears_stale_cells_to_its_right() {
+        let (cols, rows) = (40, 10);
+        let app = App::new_with_term_size(
+            vec![Candidate::parse_line("alpha\t\tcommand")],
+            "al".into(),
+            0,
+            2,
+            cols,
+            rows,
+        );
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        assert!(popup.col + popup.width < cols);
+
+        // A wider popup drawn earlier left its rows behind.
+        let mut screen = vec![vec!['Z'; usize::from(cols)]; usize::from(rows)];
+        replay_on_screen(&bytes, &mut screen);
+        for row in popup.row..popup.row + popup.height {
+            let past: String = screen[usize::from(row)][usize::from(popup.col + popup.width)..]
+                .iter()
+                .collect();
+            assert!(past.trim().is_empty(), "row {row}: {past:?}");
+        }
     }
 
     fn rescue_abbreviation_app(prefix: &str) -> App {
