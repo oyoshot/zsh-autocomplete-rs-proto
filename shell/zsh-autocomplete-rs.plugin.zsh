@@ -364,7 +364,10 @@ _zacrs_daemon_send_render() {
     local render_cmd="render $_cr $_cc $COLUMNS $LINES"
     [[ -n "$_ctx_key" ]] && render_cmd+=" context_key=$_ctx_key"
     (( _cmd_pos )) && render_cmd+=" command_position=1"
-    [[ -n "$_command_context" ]] && render_cmd+=" command_context_hex=$(_zacrs_encode_hex_input "$_command_context")"
+    if [[ -n "$_command_context" ]]; then
+        _zacrs_encode_hex_to_REPLY "$_command_context"
+        render_cmd+=" command_context_hex=$REPLY"
+    fi
     (( _cands_present )) && render_cmd+=" candidates_present=1"
     render_cmd+=" popup_key=$$"
     [[ -n "$_sel" ]] && render_cmd+=" selected=$_sel"
@@ -722,8 +725,10 @@ _zacrs_invoke_daemon() {
     fi
 
     local stale_hex=""
-    [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
-    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
+    _zacrs_encode_hex_to_REPLY "$_zacrs_cursor_stale"
+    stale_hex="$REPLY"
+    _zacrs_encode_hex_to_REPLY "${terminfo[kcbt]:-}"
+    shift_tab_hex="$REPLY"
     local -a complete_args
     complete_args=(
         complete
@@ -805,8 +810,10 @@ _zacrs_invoke() {
         _zacrs_query_cursor_keeping_stale
     fi
     local stale_hex=""
-    [[ -n "$_zacrs_cursor_stale" ]] && stale_hex="$(_zacrs_encode_hex_input "$_zacrs_cursor_stale")"
-    [[ -n "$terminfo[kcbt]" ]] && shift_tab_hex="$(_zacrs_encode_hex_input "$terminfo[kcbt]")"
+    _zacrs_encode_hex_to_REPLY "$_zacrs_cursor_stale"
+    stale_hex="$REPLY"
+    _zacrs_encode_hex_to_REPLY "${terminfo[kcbt]:-}"
+    shift_tab_hex="$REPLY"
 
     local -a complete_args
     complete_args=(
@@ -884,11 +891,6 @@ _zacrs_keep_unread_stale() {
     fi
 }
 
-_zacrs_encode_hex_input() {
-    local input="$1"
-    [[ -z "$input" ]] && return 0
-    print -rn -- "$input" | od -An -tx1 -v | tr -d ' \n'
-}
 
 # === Shared completion helpers ===
 

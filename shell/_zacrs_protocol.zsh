@@ -11,6 +11,20 @@ _zacrs_parse_done_line() {
     return 0
 }
 
+# Hex-encode the bytes of $1 into REPLY. Runs in the shell: this is on the
+# path of every daemon render, where starting od and tr cost more than the
+# rest of the request.
+_zacrs_encode_hex_to_REPLY() {
+    local input="$1" LC_ALL=C char hex
+    local -i i
+    REPLY=""
+    for (( i = 1; i <= ${#input}; i++ )); do
+        char=${input[i]}
+        printf -v hex '%02x' "$(( #char ))"
+        REPLY+=$hex
+    done
+}
+
 _zacrs_decode_hex_to_REPLY() {
     local hex="$1"
     REPLY=""

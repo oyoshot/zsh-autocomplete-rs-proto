@@ -76,4 +76,23 @@ for malformed in \
     fi
 done
 
+# The encoder must give the bytes `od` gives, whatever the shell's locale and
+# multibyte setting, and the decoder must read them back.
+for multibyte_mode in on off; do
+    if [[ "$multibyte_mode" == on ]]; then
+        setopt multibyte
+    else
+        unsetopt multibyte
+    fi
+    for sample in '' 'git ch' 'ls -la ' $'tab\there\nline\x01\x7f' '日本語 ñ é' '%s\n' $'\xff\xfe raw' $'\e[Z'; do
+        _zacrs_encode_hex_to_REPLY "$sample"
+        encoded=$REPLY
+        assert_equal "$(print -rn -- "$sample" | od -An -tx1 -v | tr -d ' \n')" "$encoded" \
+            "hex of ${(qqq)sample} matches od with MULTIBYTE=$multibyte_mode"
+        _zacrs_decode_hex_to_REPLY "$encoded"
+        assert_equal "$sample" "$REPLY" "hex of ${(qqq)sample} decodes back with MULTIBYTE=$multibyte_mode"
+    done
+done
+setopt multibyte
+
 (( failures == 0 ))
