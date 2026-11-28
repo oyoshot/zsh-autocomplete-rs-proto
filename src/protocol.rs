@@ -1532,6 +1532,71 @@ mod tests {
         assert!(err.to_string().contains("payload too large"));
     }
 
+    /// Randomized only: the fields are heap strings of arbitrary length.
+    #[test]
+    fn filesystem_query_fields_survive_the_frame_for_any_text() {
+        bolero::check!()
+            .with_type::<(String, String, String)>()
+            .for_each(|(cwd, path_prefix, insertion_prefix)| {
+                let query = FilesystemQuery {
+                    cwd: format!("/{cwd}").into(),
+                    path_prefix: path_prefix.clone(),
+                    insertion_prefix: insertion_prefix.clone(),
+                    options: FilesystemOptions::default(),
+                };
+                let mut bytes = Vec::new();
+                write_filesystem_query(&mut bytes, &query).unwrap();
+                let mut reader = bytes.as_slice();
+                let decoded = read_filesystem_query(&mut reader, query.options);
+
+                // NUL cannot occur in a path, so the reader refuses the frame.
+                let has_nul = [cwd, path_prefix, insertion_prefix]
+                    .iter()
+                    .any(|field| field.contains('\0'));
+                if has_nul {
+                    assert!(decoded.is_err());
+                } else {
+                    assert_eq!(decoded.unwrap(), query);
+                    assert!(reader.is_empty());
+                }
+            });
+    }
+
+    /// Randomized only. Frames are well formed; their contents are arbitrary.
+    #[test]
+    fn filesystem_query_reader_accepts_exactly_absolute_nul_free_utf8_fields() {
+        bolero::check!()
+            .with_type::<[Vec<u8>; 3]>()
+            .for_each(|fields| {
+                let mut frame = Vec::new();
+                for field in fields {
+                    frame.extend_from_slice(format!("{}\n", field.len()).as_bytes());
+                    frame.extend_from_slice(field);
+                    frame.push(b'\n');
+                }
+                let decoded =
+                    read_filesystem_query(&mut frame.as_slice(), FilesystemOptions::default());
+
+                let text: Option<Vec<&str>> = fields
+                    .iter()
+                    .map(|field| std::str::from_utf8(field).ok())
+                    .collect();
+                let expected = text.filter(|text| {
+                    text.iter().all(|field| !field.contains('\0'))
+                        && std::path::Path::new(text[0]).is_absolute()
+                });
+                match expected {
+                    Some(text) => {
+                        let query = decoded.unwrap();
+                        assert_eq!(query.cwd, std::path::Path::new(text[0]));
+                        assert_eq!(query.path_prefix, text[1]);
+                        assert_eq!(query.insertion_prefix, text[2]);
+                    }
+                    None => assert!(decoded.is_err()),
+                }
+            });
+    }
+
     #[test]
     fn decode_hex_bytes_parses_escape_sequences() {
         assert_eq!(decode_hex_bytes("1b5b5a"), Some(b"\x1b[Z".to_vec()));
