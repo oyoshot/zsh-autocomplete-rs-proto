@@ -11,18 +11,14 @@ struct CachedFilter {
     mode: MatchMode,
 }
 
-pub enum InitialFilter {
+pub(crate) enum InitialFilter {
     TypedPrefix(String),
     CommonPrefix(String),
     CollectedFiles(String),
 }
 
 impl InitialFilter {
-    pub fn for_completion(
-        prefix: String,
-        expand_common_prefix: bool,
-        collected_files: bool,
-    ) -> Self {
+    fn for_completion(prefix: String, expand_common_prefix: bool, collected_files: bool) -> Self {
         if collected_files {
             Self::CollectedFiles(prefix)
         } else if expand_common_prefix {
@@ -327,7 +323,7 @@ impl App {
         )
     }
 
-    pub fn new_with_initial_filter(
+    pub(crate) fn new_with_initial_filter(
         candidates: Vec<Candidate>,
         initial_filter: InitialFilter,
         cursor_row: u16,
@@ -652,22 +648,33 @@ mod tests {
             CompletionSet::with_files(&config, files, "status\t\t\nstash\t\t\n", false, None)
                 .into_app("s".to_string(), 5, 0, 80, 24, FuzzyMatcher::new())
         };
+        // A name the typed "s" does not match by itself. The provider already
+        // matched it against the path, so it must stay listed.
         let file = || {
-            let mut file = Candidate::parse_line("st\t\tfile");
+            let mut file = Candidate::parse_line("Xy\t\tfile");
             file.literal_path = Some(crate::candidate::LiteralPath {
-                path: "st".into(),
+                path: "Xy".into(),
                 ignore_case: false,
             });
             vec![file]
+        };
+        let lists_file = |app: &App| {
+            app.filtered_indices()
+                .iter()
+                .any(|&i| app.all_candidates[i].text == "Xy")
         };
 
         // The common prefix "sta" is offered only when asked for.
         assert_eq!(app_for(true, Vec::new()).filter_text, "sta");
         assert_eq!(app_for(false, Vec::new()).filter_text, "s");
-        // Collected files already match what was typed; keep it.
-        assert_eq!(app_for(true, file()).filter_text, "s");
-        assert_eq!(app_for(false, file()).filter_text, "s");
-        assert_eq!(app_for(true, file()).prefix, "s");
+        // With collected files the filter stays at what was typed and the
+        // files stay listed, whatever the setting.
+        for auto_insert_unambiguous in [true, false] {
+            let app = app_for(auto_insert_unambiguous, file());
+            assert_eq!(app.filter_text, "s", "{auto_insert_unambiguous}");
+            assert_eq!(app.prefix, "s", "{auto_insert_unambiguous}");
+            assert!(lists_file(&app), "{auto_insert_unambiguous}");
+        }
     }
 
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {
