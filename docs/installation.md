@@ -8,6 +8,14 @@ Zsh configuration:
 source /path/to/zsh-autocomplete-rs.plugin.zsh
 ```
 
+If your configuration never runs `compinit`, the adapter runs `compinit -i` the
+first time it completes, with the dump file `$ZSH_COMPDUMP`, or
+`${XDG_CACHE_HOME:-$HOME/.cache}/zsh/compdump` when that is unset. `-i` removes
+insecure directories from `$fpath` without asking, so completion functions there
+are not loaded. Each shell checks the dump against `$fpath`, so functions added
+later are found. To choose these options yourself, run `compinit` in your
+configuration.
+
 The adapter reads its four `_zacrs_*.zsh` helpers from the same directory. Keep
 all five files together. The `init zsh` command has been removed; replace
 `source <(zsh-autocomplete-rs init zsh)` or its `eval` equivalent with the source
