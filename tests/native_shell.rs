@@ -317,13 +317,15 @@ fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
 
 #[test]
 fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
-    // Tab asks for the cursor position only when no popup is visible, which
-    // a 3-row terminal guarantees for the cases that need it.
+    // Tab asks for the cursor position, also over a visible popup. A 3-row
+    // terminal fits no popup, so Tab then inserts the only candidate or runs
+    // native completion.
     for (case, rows) in [
         ("typing", "24"),
         ("single", "3"),
         ("native", "3"),
         ("session", "24"),
+        ("hidden", "24"),
         ("passthrough", "24"),
     ] {
         for daemon in ["1", "0"] {
@@ -379,6 +381,28 @@ fn zsh_popup_frames_larger_than_one_read_are_drawn_whole() {
 }
 
 #[test]
+fn zsh_failed_frame_reads_clear_the_popup_on_screen() {
+    for case in ["render", "resize", "shrink"] {
+        run_popup_script(
+            include_str!("support/popup_draw_failure.zsh"),
+            &[("ZACRS_TEST_CASE", case)],
+        );
+    }
+}
+
+#[test]
+fn zsh_popup_sessions_redraw_the_word_where_it_is_on_screen() {
+    for case in ["moved", "silent", "continuation"] {
+        for daemon in ["1", "0"] {
+            run_popup_script(
+                include_str!("support/popup_tab_cursor.zsh"),
+                &[("ZACRS_TEST_CASE", case), ("ZACRS_TEST_DAEMON", daemon)],
+            );
+        }
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.
@@ -428,6 +452,21 @@ fn oversized_candidate_sets_leave_tab_to_the_shell() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(stdout.starts_with("DONE 4"), "{args:?}: {stdout:?}");
     }
+}
+
+#[test]
+fn zsh_file_name_typed_past_is_offered_from_the_previous_candidates() {
+    for daemon in ["1", "0"] {
+        run_popup_script(
+            include_str!("support/popup_overshoot.zsh"),
+            &[("ZACRS_TEST_DAEMON", daemon)],
+        );
+    }
+}
+
+#[test]
+fn zsh_cached_candidates_are_not_served_for_a_word_that_starts_elsewhere() {
+    run_popup_script(include_str!("support/popup_cache_word_start.zsh"), &[]);
 }
 
 #[test]

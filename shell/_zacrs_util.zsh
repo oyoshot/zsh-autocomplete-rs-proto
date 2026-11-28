@@ -2,6 +2,7 @@
 
 # Get terminal cursor position (0-indexed row, col)
 # Sets: cursor_row, cursor_col
+# Returns 1 if the terminal did not reply; the position is then a fallback.
 _zacrs_get_cursor_pos() {
     local _buf="" _byte="" _found=0
     typeset -g _zacrs_cursor_stale=""
@@ -40,6 +41,7 @@ _zacrs_get_cursor_pos() {
     (( cursor_col >= COLUMNS )) && cursor_col=$(( COLUMNS - 1 ))
 
     _zacrs_dbg "get_cursor_pos: row=$cursor_row col=$cursor_col stale=${#_zacrs_cursor_stale}"
+    (( _found ))
 }
 
 # Write the glob and literal-word policy into the caller's _zacrs_file_option_key.
@@ -61,6 +63,9 @@ _zacrs_pwd_matches_cwd() {
 # The shell-managed generation scopes reuse to one executed command. It is
 # advanced from preexec so every accepting ZLE widget follows the same path.
 # Sets REPLY to an empty string at command position.
+# The key names the word position, not how much of the word is typed: the
+# daemon compares the typed prefix itself, and looks under the same key for
+# names the user typed past.
 _zacrs_current_context_key() {
     REPLY=""
     _zacrs_filesystem_editor || return 0
@@ -107,7 +112,7 @@ _zacrs_current_context_key() {
     fi
     local _zacrs_file_option_key
     _zacrs_file_options
-    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${CURSOR:-${#LBUFFER}}:${_ctx_fields[3]}:${_ctx_fields[4]}:$_zacrs_file_option_key"
+    REPLY="${$}:${_zacrs_candidate_cache_generation:-0}:${_ctx_fields[1]}:${_ctx_fields[2]}:${_ctx_fields[3]}:${_ctx_fields[4]}:$_zacrs_file_option_key"
 }
 
 # Check if the last word in buffer is in command position

@@ -173,7 +173,7 @@ assert_context_key '' 'git' 'command position has no candidate cache key'
     print -r -- 'ok: oversized command context bypasses candidate caching'
 )
 assert_context_key \
-    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20:19::/test/home:$_zacrs_file_option_key" \
+    "${$}:42:${encoded_pwd}:git%20add%3Afoo%25bar%20::/test/home:$_zacrs_file_option_key" \
     'git add:foo%bar baz' \
     'candidate cache key includes command generation and encoded context'
 

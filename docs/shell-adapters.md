@@ -179,8 +179,8 @@ components so the expanded filter can still match it.
 The daemon retains structured filesystem snapshots with candidate and active
 popup caches, so navigation and cached selection do not enumerate again. The
 adapter only reuses cached candidates in top-level command editing. The cache
-scopes reuse to session, generation, cwd, HOME, cursor, right-side input and
-the glob and syntax settings used to verify literal words, including
+scopes reuse to session, generation, cwd, HOME, the input on both sides of the
+word being completed and the glob and syntax settings used to verify literal words, including
 `INTERACTIVE_COMMENTS`, `BANG_HIST`, `COMPLETE_ALIASES` and `ALIASES`. The
 existing exact-prefix rule still applies. The adapter generates context keys only when
 a daemon is available and the buffer, cwd and HOME fit within 1,024 characters.
