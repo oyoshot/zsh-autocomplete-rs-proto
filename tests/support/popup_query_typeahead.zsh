@@ -111,6 +111,20 @@ case "$ZACRS_TEST_CASE" in
         wait_reply
         wait_buffer xls
         ;;
+    navigation)
+        # Keys pressed in a session already on screen. Only the session
+        # marks a selected row; the popup shown while typing does not.
+        send_keys ls
+        wait_buffer ls
+        pty_output=''
+        send_keys $'\t'
+        wait_output 'the popup session' '▸'
+        # Space inserts the row that ZACRS_TEST_KEYS selected.
+        send_keys "$ZACRS_TEST_KEYS "
+        wait_buffer "$ZACRS_TEST_EXPECT"
+        print -r -- "ok: ${(qqq)ZACRS_TEST_KEYS} selects ${(qqq)ZACRS_TEST_EXPECT}"
+        exit 0
+        ;;
 esac
 
 print -r -- "ok: keys typed before the cursor reply survive ($ZACRS_TEST_CASE)"

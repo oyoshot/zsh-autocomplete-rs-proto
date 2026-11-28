@@ -340,6 +340,25 @@ fn zsh_keys_typed_before_the_cursor_position_reply_are_not_lost() {
 }
 
 #[test]
+fn zsh_ctrl_n_and_ctrl_p_move_the_popup_selection() {
+    // Candidates are ls, lsblk, lscpu and Tab selects ls.
+    for (keys, expect) in [("\x0e", "lsblk "), ("\x10", "lscpu ")] {
+        for daemon in ["1", "0"] {
+            run_popup_script(
+                include_str!("support/popup_query_typeahead.zsh"),
+                &[
+                    ("ZACRS_TEST_CASE", "navigation"),
+                    ("ZACRS_TEST_ROWS", "24"),
+                    ("ZACRS_TEST_KEYS", keys),
+                    ("ZACRS_TEST_EXPECT", expect),
+                    ("ZACRS_TEST_DAEMON", daemon),
+                ],
+            );
+        }
+    }
+}
+
+#[test]
 fn zsh_redraw_hooks_registered_after_the_plugin_run_on_every_redraw() {
     for daemon in ["1", "0"] {
         run_popup_script(
