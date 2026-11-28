@@ -10,16 +10,31 @@ use std::time::SystemTime;
 
 use crate::input::Action;
 
+/// Configurable kind groups, indexed by Candidate::kind_priority.
+const KINDS: [&str; 8] = [
+    "directory",
+    "file",
+    "abbreviation",
+    "command",
+    "alias",
+    "builtin",
+    "function",
+    "other",
+];
+const ABBREVIATION_KIND: usize = 2;
+
 /// A precomputed rank for each of Candidate::kind_priority's default groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KindOrder {
     priorities: [u8; 8],
+    abbreviation_listed: bool,
 }
 
 impl Default for KindOrder {
     fn default() -> Self {
         Self {
             priorities: [0, 1, 2, 3, 4, 5, 6, 7],
+            abbreviation_listed: false,
         }
     }
 }
@@ -27,16 +42,6 @@ impl Default for KindOrder {
 impl KindOrder {
     /// Listed groups lead; omitted groups follow in their default order.
     pub fn new(kinds: &[&str]) -> Result<Self, String> {
-        const KINDS: [&str; 8] = [
-            "directory",
-            "file",
-            "abbreviation",
-            "command",
-            "alias",
-            "builtin",
-            "function",
-            "other",
-        ];
         if kinds.len() > KINDS.len() {
             return Err("completion.kind_order accepts at most eight kinds".into());
         }
@@ -57,7 +62,20 @@ impl KindOrder {
                 next += 1;
             }
         }
-        Ok(Self { priorities })
+        Ok(Self {
+            priorities,
+            abbreviation_listed: kinds.contains(&KINDS[ABBREVIATION_KIND]),
+        })
+    }
+
+    /// Abbreviations precede same-named commands at command position. At
+    /// argument positions, they follow native candidates such as subcommands
+    /// and options unless `abbreviation` is listed explicitly.
+    pub fn at_position(mut self, command_position: bool) -> Self {
+        if !command_position && !self.abbreviation_listed {
+            self.priorities[ABBREVIATION_KIND] = self.priorities.len() as u8;
+        }
+        self
     }
 
     pub(crate) fn priority(&self, default_priority: u8) -> u8 {
@@ -681,16 +699,6 @@ mod tests {
     #[test]
     fn kind_order_defaults_and_partial_lists_keep_omitted_groups_in_default_order() {
         use crate::candidate::Candidate;
-        let kinds = [
-            "directory",
-            "file",
-            "abbreviation",
-            "command",
-            "alias",
-            "builtin",
-            "function",
-            "other",
-        ];
         for text in ["", "[completion]", "[completion]\nkind_order = []"] {
             let parsed: ConfigFile = toml::from_str(text).unwrap();
             assert_eq!(parsed.completion.kind_order, KindOrder::default());
@@ -717,10 +725,40 @@ mod tests {
             );
         }
         // Guard the mapping between configured names and the candidate model.
-        for (expected, kind) in kinds.into_iter().enumerate() {
+        for (expected, kind) in KINDS.into_iter().enumerate() {
             let candidate = Candidate::parse_line(&format!("name\t\t{kind}"));
             assert_eq!(candidate.kind_priority() as usize, expected);
         }
+        assert_eq!(KINDS[ABBREVIATION_KIND], "abbreviation");
+    }
+
+    #[test]
+    fn omitted_abbreviation_kind_follows_every_native_kind_at_argument_position() {
+        use crate::candidate::Candidate;
+        let priority = |order: KindOrder, kind: &str| {
+            order.priority(Candidate::parse_line(&format!("name\t\t{kind}")).kind_priority())
+        };
+        let natives = KINDS.iter().filter(|kind| **kind != "abbreviation");
+        for order in [
+            KindOrder::default(),
+            KindOrder::new(&["command", "file"]).unwrap(),
+        ] {
+            assert_eq!(order.at_position(true), order);
+            let argument = order.at_position(false);
+            for kind in natives.clone() {
+                assert_eq!(priority(argument, kind), priority(order, kind), "{kind}");
+                assert!(
+                    priority(argument, "abbreviation") > priority(argument, kind),
+                    "{kind}"
+                );
+            }
+        }
+
+        // An explicit position in kind_order is a user choice and is kept.
+        let explicit = KindOrder::new(&["abbreviation"]).unwrap();
+        assert_eq!(explicit.at_position(false), explicit);
+        let explicit_late = KindOrder::new(&["other", "abbreviation"]).unwrap();
+        assert_eq!(explicit_late.at_position(false), explicit_late);
     }
 
     #[test]

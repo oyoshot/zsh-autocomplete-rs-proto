@@ -203,7 +203,8 @@ fn run_render(
     }
 
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new().with_kind_order(config.kind_order);
+    let fuzzy = zsh_autocomplete_rs::fuzzy::FuzzyMatcher::new()
+        .with_kind_order(config.kind_order.at_position(command_position));
     let mut app = App::new_with_matcher(
         candidates, prefix, cursor_row, cursor_col, cols, rows, fuzzy,
     );
