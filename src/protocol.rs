@@ -867,6 +867,14 @@ impl TextFrameHeader {
 }
 
 impl TextCompleteResult {
+    /// Nothing to offer here; the shell continues with its own completion.
+    pub fn no_candidates() -> Self {
+        Self {
+            code: 4,
+            ..Self::rejected_edit()
+        }
+    }
+
     /// A rejected edit must not be retried through another completion source.
     pub fn rejected_edit() -> Self {
         Self {

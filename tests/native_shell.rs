@@ -265,6 +265,39 @@ fn zsh_new_lines_discard_popup_state_after_cancellation_and_acceptance() {
 }
 
 #[test]
+fn oversized_candidate_sets_leave_tab_to_the_shell() {
+    let runtime = tempfile::Builder::new()
+        .prefix("zacrs-oversized.")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let candidates = tempfile::NamedTempFile::new().unwrap();
+    // 1 MiB is the limit; a set one row under it is covered by the unit tests.
+    let rows: String = (0..30_000)
+        .map(|i| format!("ls-candidate-with-some-padding-{i}\tcommand\n"))
+        .collect();
+    assert!(rows.len() > 1_048_576);
+    fs::write(candidates.path(), rows).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_zsh-autocomplete-rs"))
+            .args(args)
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .stdin(fs::File::open(candidates.path()).unwrap())
+            .output()
+            .unwrap()
+    };
+
+    for args in [
+        ["complete", "--prefix", "ls"].as_slice(),
+        ["complete", "--daemon", "--prefix", "ls"].as_slice(),
+    ] {
+        let output = run(args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.starts_with("DONE 4"), "{args:?}: {stdout:?}");
+    }
+}
+
+#[test]
 fn shell_timeout_is_bounded() {
     let start = Instant::now();
     let (_, timed_out) = run_shell(

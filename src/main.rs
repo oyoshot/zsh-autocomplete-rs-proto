@@ -64,7 +64,10 @@ fn run_complete(command: CompleteCommand) -> io::Result<()> {
 
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
-    let tsv = daemon::read_tsv_payload(&mut reader).map_err(io::Error::other)?;
+    // The only failure is a candidate set over the limit; no path selects from one.
+    let Ok(tsv) = daemon::read_tsv_payload(&mut reader) else {
+        return write_done_result(io::stdout().lock(), &TextCompleteResult::no_candidates());
+    };
 
     if daemon_mode {
         let stdout = io::stdout();
@@ -183,6 +186,11 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
         io::stdin().lock().read_to_end(&mut buf)?;
         buf
     };
+
+    // Tab refuses a set over the limit, so do not draw a popup for one.
+    if raw_stdin.len() > daemon::MAX_CANDIDATE_BYTES {
+        return Ok(1);
+    }
 
     // Try daemon first
     if filesystem.is_none()
