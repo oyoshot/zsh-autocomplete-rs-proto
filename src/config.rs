@@ -588,7 +588,7 @@ impl Config {
         })
     }
 
-    fn load_from(path: &Path) -> io::Result<Self> {
+    pub fn load_from(path: &Path) -> io::Result<Self> {
         let content = fs::read_to_string(path)?;
         let file: ConfigFile = toml::from_str(&content)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;

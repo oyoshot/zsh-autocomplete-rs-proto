@@ -15,7 +15,10 @@ impl Drop for ShellGroup {
     fn drop(&mut self) {
         // NO_MONITOR keeps even disowned daemon jobs in this private group.
         // Kill the group even if Zsh exited before the daemon opened its socket.
-        unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+        let _ = rustix::process::kill_process_group(
+            rustix::process::Pid::from_child(&self.0),
+            rustix::process::Signal::KILL,
+        );
         let _ = self.0.wait();
     }
 }

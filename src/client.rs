@@ -1,9 +1,13 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
+
+use filedescriptor::{POLLIN, pollfd};
+use rustix::termios::{OptionalActions, Termios};
+use signal_hook::SigId;
+use signal_hook::consts::SIGWINCH;
 
 use crate::protocol::{
     self, Request, Response, TextCompleteRequest, TextCompleteResult, TextFrameHeader,
@@ -182,16 +186,17 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
         return read_complete_result(reader, initial_header);
     }
 
-    let tty_fd = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
-    let mut tty_writer = open_tty_writer(&tty_fd).map_err(|_| DaemonUnavailable::NotRunning)?;
-    let sigwinch_pipe = SigwinchPipe::new()?;
+    let mut tty = tty::open_tty_rw().map_err(|_| DaemonUnavailable::NotRunning)?;
+    let mut tty_writer = tty::open_tty_write().map_err(|_| DaemonUnavailable::NotRunning)?;
+    let mut sigwinch_pipe = SigwinchPipe::new()?;
 
     let mut state = SessionState::with_prev_popup(prev_popup, cursor_row, cursor_col);
     if let Some(result) = state.handle_header(reader, &mut tty_writer, initial_header, true)? {
         return Ok(result);
     }
 
-    let mut raw_mode = RawModeGuard::new(tty_fd.as_raw_fd())?;
+    let mut raw_mode =
+        RawModeGuard::new(tty.try_clone().map_err(|_| DaemonUnavailable::NotRunning)?)?;
     if !stale_bytes.is_empty() {
         let mut pos = 0;
         while pos < stale_bytes.len() {
@@ -209,8 +214,8 @@ pub fn run_text_popup_session<R: BufRead, W: Write>(
 
     loop {
         match read_session_event(
-            tty_fd.as_raw_fd(),
-            sigwinch_pipe.read_fd(),
+            &mut tty,
+            &mut sigwinch_pipe.reader,
             state.cursor_row,
             state.cursor_col,
         )? {
@@ -455,54 +460,9 @@ fn relay_tty_bytes<R: Read>(
         .map_err(|_| DaemonUnavailable::NotRunning)
 }
 
-fn open_tty_writer(tty_fd: &OwnedFd) -> io::Result<File> {
-    let _ = tty_fd;
-    File::options().write(true).open("/dev/tty")
-}
-
 const MAX_ESCAPE_SEQUENCE_LEN: usize = 32;
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-static SIGWINCH_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
-
-/// Returns a pointer to the calling thread's errno variable.
-/// Async-signal-safe: both __errno_location (Linux) and __error (macOS)
-/// are documented as async-signal-safe.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!(
-    "SigwinchPipe is not implemented for this target OS; only Linux and macOS are supported"
-);
-
-#[inline]
-fn errno_location() -> *mut libc::c_int {
-    #[cfg(target_os = "linux")]
-    // SAFETY: __errno_location is always valid on Linux.
-    unsafe {
-        libc::__errno_location()
-    }
-    #[cfg(target_os = "macos")]
-    // SAFETY: __error is always valid on macOS.
-    unsafe {
-        libc::__error()
-    }
-}
-
-extern "C" fn handle_sigwinch(_signal: libc::c_int) {
-    let fd = SIGWINCH_WRITE_FD.load(Ordering::Relaxed);
-    if fd < 0 {
-        return;
-    }
-
-    // Save and restore errno: write(2) may clobber it, and the interrupted
-    // code may be inspecting errno after a syscall returns EINTR.
-    let byte = [1u8; 1];
-    unsafe {
-        let errno_ptr = errno_location();
-        let saved = *errno_ptr;
-        libc::write(fd, byte.as_ptr() as *const libc::c_void, byte.len());
-        *errno_ptr = saved;
-    }
-}
 
 enum SessionEvent {
     Key(Vec<u8>),
@@ -514,75 +474,32 @@ enum SessionEvent {
     },
 }
 
+/// Self-pipe that becomes readable whenever SIGWINCH arrives.
+///
+/// signal-hook installs one process-wide handler that writes a byte with
+/// `MSG_DONTWAIT`, preserves errno, uses `SA_RESTART`, and chains to the
+/// handler that was installed before it.
 struct SigwinchPipe {
-    read_fd: OwnedFd,
-    _write_fd: OwnedFd,
-    previous: libc::sigaction,
+    reader: UnixStream,
+    id: SigId,
 }
 
 impl SigwinchPipe {
     fn new() -> Result<Self, DaemonUnavailable> {
-        let (read_fd, write_fd) = create_nonblocking_pipe()?;
-        let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
-        let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
-        action.sa_sigaction = handle_sigwinch as *const () as usize;
-        action.sa_flags = libc::SA_RESTART;
-        unsafe { libc::sigemptyset(&mut action.sa_mask) };
-        // Publish the write end before installing the handler so that once
-        // the handler is active it always sees a valid fd.
-        SIGWINCH_WRITE_FD.store(write_fd.as_raw_fd(), Ordering::Relaxed);
-        if unsafe { libc::sigaction(libc::SIGWINCH, &action, &mut previous) } != 0 {
-            SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
-            return Err(DaemonUnavailable::NotRunning);
-        }
-
-        Ok(Self {
-            read_fd,
-            _write_fd: write_fd,
-            previous,
-        })
+        let (reader, writer) = UnixStream::pair().map_err(|_| DaemonUnavailable::NotRunning)?;
+        reader
+            .set_nonblocking(true)
+            .and_then(|_| writer.set_nonblocking(true))
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
+        let id = signal_hook::low_level::pipe::register(SIGWINCH, writer)
+            .map_err(|_| DaemonUnavailable::NotRunning)?;
+        Ok(Self { reader, id })
     }
-
-    fn read_fd(&self) -> i32 {
-        self.read_fd.as_raw_fd()
-    }
-}
-
-fn create_nonblocking_pipe() -> Result<(OwnedFd, OwnedFd), DaemonUnavailable> {
-    let mut fds = [0; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(DaemonUnavailable::NotRunning);
-    }
-
-    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-    set_fd_flags(read_fd.as_raw_fd(), libc::FD_CLOEXEC, libc::F_SETFD)?;
-    set_fd_flags(write_fd.as_raw_fd(), libc::FD_CLOEXEC, libc::F_SETFD)?;
-    set_fd_flags(read_fd.as_raw_fd(), libc::O_NONBLOCK, libc::F_SETFL)?;
-    set_fd_flags(write_fd.as_raw_fd(), libc::O_NONBLOCK, libc::F_SETFL)?;
-    Ok((read_fd, write_fd))
-}
-
-fn set_fd_flags(fd: i32, flag: libc::c_int, set_cmd: libc::c_int) -> Result<(), DaemonUnavailable> {
-    let get_cmd = if set_cmd == libc::F_SETFD {
-        libc::F_GETFD
-    } else {
-        libc::F_GETFL
-    };
-    let current = retry_on_eintr(|| unsafe { libc::fcntl(fd, get_cmd) })?;
-    retry_on_eintr(|| unsafe { libc::fcntl(fd, set_cmd, current | flag) })?;
-    Ok(())
 }
 
 impl Drop for SigwinchPipe {
     fn drop(&mut self) {
-        // Restore the old handler before clearing the fd so that any SIGWINCH
-        // that arrives during teardown is dispatched to the previous handler
-        // rather than hitting handle_sigwinch with fd=-1 and silently dropping.
-        unsafe {
-            libc::sigaction(libc::SIGWINCH, &self.previous, std::ptr::null_mut());
-        }
-        SIGWINCH_WRITE_FD.store(-1, Ordering::Relaxed);
+        signal_hook::low_level::unregister(self.id);
     }
 }
 
@@ -596,50 +513,48 @@ fn is_escape_sequence_complete(buf: &[u8]) -> bool {
         || buf.len() >= MAX_ESCAPE_SEQUENCE_LEN
 }
 
-fn poll_fd_for_read(fd: i32) -> Result<bool, DaemonUnavailable> {
-    let mut tv = libc::timeval {
-        tv_sec: 0,
-        tv_usec: 50_000,
-    };
-    let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
-    unsafe { libc::FD_SET(fd, &mut readfds) };
-    let ret = retry_on_eintr(|| unsafe {
-        libc::select(
-            fd + 1,
-            &mut readfds,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut tv,
-        )
-    })?;
-    Ok(ret != 0)
+fn readable(fd: &impl AsRawFd) -> pollfd {
+    pollfd {
+        fd: fd.as_raw_fd(),
+        events: POLLIN,
+        revents: 0,
+    }
+}
+
+fn is_readable(entry: &pollfd) -> bool {
+    entry.revents != 0
+}
+
+/// Waits for read readiness. `filedescriptor::poll` falls back to select(2)
+/// on macOS, where poll(2) does not support terminal devices.
+fn poll_retry(fds: &mut [pollfd], timeout: Option<Duration>) -> Result<usize, DaemonUnavailable> {
+    loop {
+        match filedescriptor::poll(fds, timeout) {
+            Ok(ready) => return Ok(ready),
+            Err(filedescriptor::Error::Poll(err) | filedescriptor::Error::Io(err))
+                if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(DaemonUnavailable::NotRunning),
+        }
+    }
+}
+
+fn poll_for_read(fd: &impl AsRawFd) -> Result<bool, DaemonUnavailable> {
+    let mut fds = [readable(fd)];
+    Ok(poll_retry(&mut fds, Some(Duration::from_millis(50)))? != 0)
 }
 
 fn read_session_event(
-    tty_fd: i32,
-    resize_fd: i32,
+    tty: &mut File,
+    resize: &mut UnixStream,
     current_cursor_row: u16,
     current_cursor_col: u16,
 ) -> Result<SessionEvent, DaemonUnavailable> {
     loop {
-        let mut readfds: libc::fd_set = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::FD_SET(tty_fd, &mut readfds);
-            libc::FD_SET(resize_fd, &mut readfds);
-        }
-        let max_fd = tty_fd.max(resize_fd);
-        retry_on_eintr(|| unsafe {
-            libc::select(
-                max_fd + 1,
-                &mut readfds,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        })?;
+        let mut fds = [readable(tty), readable(resize)];
+        poll_retry(&mut fds, None)?;
 
-        if unsafe { libc::FD_ISSET(resize_fd, &readfds) } {
-            drain_resize_pipe(resize_fd)?;
+        if is_readable(&fds[1]) {
+            drain_resize_pipe(resize)?;
             let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
             return Ok(SessionEvent::Resize {
                 cursor_row: current_cursor_row,
@@ -649,39 +564,38 @@ fn read_session_event(
             });
         }
 
-        if unsafe { libc::FD_ISSET(tty_fd, &readfds) } {
-            return read_key_from_fd(tty_fd).map(SessionEvent::Key);
+        if is_readable(&fds[0]) {
+            return read_key(tty).map(SessionEvent::Key);
         }
     }
 }
 
-fn drain_resize_pipe(fd: i32) -> Result<(), DaemonUnavailable> {
+fn drain_resize_pipe(resize: &mut UnixStream) -> Result<(), DaemonUnavailable> {
     let mut buf = [0u8; 64];
     loop {
-        let read = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-        if read > 0 {
-            continue;
+        match resize.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(_) => continue,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(DaemonUnavailable::NotRunning),
         }
-        if read == 0 {
-            return Ok(());
-        }
-
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock {
-            return Ok(());
-        }
-        if err.kind() == io::ErrorKind::Interrupted {
-            continue;
-        }
-        return Err(DaemonUnavailable::NotRunning);
     }
 }
 
-fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
+fn read_byte(reader: &mut impl Read, byte: &mut [u8; 1]) -> Result<usize, DaemonUnavailable> {
+    loop {
+        match reader.read(byte) {
+            Ok(n) => return Ok(n),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(DaemonUnavailable::NotRunning),
+        }
+    }
+}
+
+fn read_key(tty: &mut File) -> Result<Vec<u8>, DaemonUnavailable> {
     let mut byte = [0u8; 1];
-    let n = retry_on_eintr(|| unsafe {
-        libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
-    })?;
+    let n = read_byte(tty, &mut byte)?;
     if n == 0 {
         return Err(DaemonUnavailable::NotRunning);
     }
@@ -690,12 +604,10 @@ fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
     let mut buf = vec![first];
     if first == 0x1b {
         loop {
-            if !poll_fd_for_read(fd)? {
+            if !poll_for_read(tty)? {
                 break;
             }
-            let n2 = retry_on_eintr(|| unsafe {
-                libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
-            })?;
+            let n2 = read_byte(tty, &mut byte)?;
             if n2 == 0 {
                 break;
             }
@@ -715,9 +627,7 @@ fn read_key_from_fd(fd: i32) -> Result<Vec<u8>, DaemonUnavailable> {
             0
         };
         for _ in 0..extra {
-            let n2 = retry_on_eintr(|| unsafe {
-                libc::read(fd, byte.as_mut_ptr() as *mut libc::c_void, 1) as libc::c_int
-            })?;
+            let n2 = read_byte(tty, &mut byte)?;
             if n2 == 0 {
                 break;
             }
@@ -763,34 +673,30 @@ fn extract_single_key(buf: &[u8], pos: &mut usize) -> Vec<u8> {
     key
 }
 
-fn retry_on_eintr(mut f: impl FnMut() -> libc::c_int) -> Result<libc::c_int, DaemonUnavailable> {
+fn retry_on_eintr<T>(mut f: impl FnMut() -> rustix::io::Result<T>) -> Result<T, DaemonUnavailable> {
     loop {
-        let rc = f();
-        if rc >= 0 {
-            return Ok(rc);
-        }
-        let err = io::Error::last_os_error();
-        if err.kind() != io::ErrorKind::Interrupted {
-            return Err(DaemonUnavailable::NotRunning);
+        match f() {
+            Ok(value) => return Ok(value),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return Err(DaemonUnavailable::NotRunning),
         }
     }
 }
 
 struct RawModeGuard {
-    fd: i32,
-    saved: libc::termios,
+    tty: File,
+    saved: Termios,
     active: bool,
 }
 
 impl RawModeGuard {
-    fn new(fd: i32) -> Result<Self, DaemonUnavailable> {
-        let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
-        retry_on_eintr(|| unsafe { libc::tcgetattr(fd, &mut termios) })?;
-        let saved = termios;
-        unsafe { libc::cfmakeraw(&mut termios) };
-        retry_on_eintr(|| unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) })?;
+    fn new(tty: File) -> Result<Self, DaemonUnavailable> {
+        let saved = retry_on_eintr(|| rustix::termios::tcgetattr(&tty))?;
+        let mut raw = saved.clone();
+        raw.make_raw();
+        retry_on_eintr(|| rustix::termios::tcsetattr(&tty, OptionalActions::Now, &raw))?;
         Ok(Self {
-            fd,
+            tty,
             saved,
             active: true,
         })
@@ -798,8 +704,8 @@ impl RawModeGuard {
 
     fn restore(&mut self) {
         if self.active {
-            let _ = retry_on_eintr(|| unsafe {
-                libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved as *const _)
+            let _ = retry_on_eintr(|| {
+                rustix::termios::tcsetattr(&self.tty, OptionalActions::Now, &self.saved)
             });
             self.active = false;
         }
@@ -817,7 +723,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io;
-    use std::os::fd::FromRawFd;
+    use std::os::fd::OwnedFd;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct InterruptingBuf {
@@ -1014,35 +920,35 @@ mod tests {
         assert_eq!(pos, key.len());
     }
 
+    fn file_pipe() -> (File, File) {
+        let (reader, writer) = io::pipe().unwrap();
+        (
+            File::from(OwnedFd::from(reader)),
+            File::from(OwnedFd::from(writer)),
+        )
+    }
+
     #[test]
-    fn read_key_from_fd_keeps_bracketed_paste_together() {
-        let mut fds = [0; 2];
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let reader = unsafe { File::from_raw_fd(fds[0]) };
-        let mut writer = unsafe { File::from_raw_fd(fds[1]) };
+    fn read_key_keeps_bracketed_paste_together() {
+        let (mut reader, mut writer) = file_pipe();
         writer
             .write_all(b"\x1b[200~git status --short\x1b[201~")
             .unwrap();
         drop(writer);
 
-        let key = read_key_from_fd(reader.as_raw_fd()).unwrap();
+        let key = read_key(&mut reader).unwrap();
 
         assert_eq!(key, b"\x1b[200~git status --short\x1b[201~");
     }
 
     #[test]
     fn read_session_event_returns_resize_when_resize_fd_is_ready() {
-        let mut tty_fds = [0; 2];
-        assert_eq!(unsafe { libc::pipe(tty_fds.as_mut_ptr()) }, 0);
-        let (resize_reader_fd, resize_writer_fd) = create_nonblocking_pipe().unwrap();
-        let tty_reader = unsafe { File::from_raw_fd(tty_fds[0]) };
-        let tty_writer = unsafe { File::from_raw_fd(tty_fds[1]) };
-        let resize_reader = File::from(resize_reader_fd);
-        let mut resize_writer = File::from(resize_writer_fd);
+        let (mut tty_reader, tty_writer) = file_pipe();
+        let (mut resize_reader, mut resize_writer) = UnixStream::pair().unwrap();
+        resize_reader.set_nonblocking(true).unwrap();
         resize_writer.write_all(&[1]).unwrap();
 
-        let event =
-            read_session_event(tty_reader.as_raw_fd(), resize_reader.as_raw_fd(), 7, 11).unwrap();
+        let event = read_session_event(&mut tty_reader, &mut resize_reader, 7, 11).unwrap();
         match event {
             SessionEvent::Resize {
                 cursor_row,

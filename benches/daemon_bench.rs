@@ -342,27 +342,23 @@ fn config_reload_mtime_check(c: &mut Criterion) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Benchmarks Config::load() + theme() + key_bindings() against a real TOML file
-/// to capture the full reload cost (not just Config::default()).
+/// Benchmarks Config::load_from() + theme() + key_bindings() against a real
+/// TOML file to capture the full reload cost (not just Config::default()).
 fn config_reload_full(c: &mut Criterion) {
     let dir = bench_runtime_dir();
     let cfg_dir = dir.join("zacrs");
     fs::create_dir_all(&cfg_dir).expect("failed to create temp config dir");
-    fs::write(cfg_dir.join("config.toml"), BENCH_CONFIG_TOML).expect("failed to write temp config");
-
-    // SAFETY: criterion runs iterations of a single bench_function sequentially
-    // on one thread, so no concurrent env access occurs.
-    unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+    let cfg_path = cfg_dir.join("config.toml");
+    fs::write(&cfg_path, BENCH_CONFIG_TOML).expect("failed to write temp config");
 
     c.bench_function("config_reload_full", |b| {
         b.iter(|| {
-            let config = Config::load();
+            let config = Config::load_from(&cfg_path).expect("failed to load temp config");
             let _theme = config.theme();
             let _key_bindings = config.key_bindings();
         });
     });
 
-    unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     let _ = fs::remove_dir_all(&dir);
 }
 
