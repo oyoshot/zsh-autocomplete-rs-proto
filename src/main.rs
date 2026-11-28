@@ -1,5 +1,4 @@
-use zsh_autocomplete_rs::app::{CompletionSet, InitialFilter};
-use zsh_autocomplete_rs::candidate::Candidate;
+use zsh_autocomplete_rs::app::CompletionSet;
 use zsh_autocomplete_rs::cli::{Cli, Command, DaemonAction};
 use zsh_autocomplete_rs::handoff::compute_reuse_token;
 use zsh_autocomplete_rs::protocol::TextCompleteResult;
@@ -226,18 +225,15 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
         return Ok(0);
     }
     // Fallback: direct execution
-    let mut candidates =
-        Candidate::parse_lines_dedup(std::str::from_utf8(&raw_stdin).unwrap_or(""));
     let files = match zsh_autocomplete_rs::filesystem::FilesystemQuery::collect_optional(filesystem)
     {
         Ok(files) => files,
         Err(_) => return Ok(1),
     };
-    let literal_files_present = !files.is_empty();
-    candidates.extend(files);
-    let set = CompletionSet::from_native(
+    let set = CompletionSet::with_files(
         config,
-        candidates,
+        files,
+        std::str::from_utf8(&raw_stdin).unwrap_or(""),
         command_position,
         command_context.as_deref(),
     );
@@ -247,13 +243,8 @@ fn run_render(command: RenderCommand, config: &config::Config) -> io::Result<i32
     }
 
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let initial_filter = InitialFilter::for_completion(
-        prefix,
-        config.auto_insert_unambiguous,
-        literal_files_present,
-    );
     let mut app = set.into_app(
-        initial_filter,
+        prefix,
         cursor_row,
         cursor_col,
         cols,

@@ -169,12 +169,14 @@ impl Viewport {
     }
 }
 
-/// The candidates for one completion request: native candidates plus the
-/// abbreviations eligible at the cursor, ranked with the kind order for the
-/// same position.
+/// The candidates for one completion request: files the engine collected,
+/// the shell's native candidates and the abbreviations eligible at the
+/// cursor, ranked with the kind order for the same position.
 pub struct CompletionSet {
     candidates: Vec<Candidate>,
     kind_order: KindOrder,
+    collected_files: bool,
+    expand_common_prefix: bool,
 }
 
 impl CompletionSet {
@@ -184,22 +186,26 @@ impl CompletionSet {
         command_position: bool,
         command_context: Option<&str>,
     ) -> Self {
-        Self::from_native(
+        Self::with_files(
             config,
-            Candidate::parse_lines_dedup(native_tsv),
+            Vec::new(),
+            native_tsv,
             command_position,
             command_context,
         )
     }
 
-    /// Like `new`, for native candidates the caller has already gathered,
-    /// such as the shell's candidates together with collected files.
-    pub fn from_native(
+    /// Like `new`, with the files the engine collected for this request.
+    pub fn with_files(
         config: &Config,
-        mut candidates: Vec<Candidate>,
+        files: Vec<Candidate>,
+        native_tsv: &str,
         command_position: bool,
         command_context: Option<&str>,
     ) -> Self {
+        let collected_files = !files.is_empty();
+        let mut candidates = files;
+        candidates.extend(Candidate::parse_lines_dedup(native_tsv));
         candidates.extend(
             config
                 .abbreviations
@@ -210,6 +216,8 @@ impl CompletionSet {
         Self {
             candidates,
             kind_order: config.kind_order.at_position(command_position),
+            collected_files,
+            expand_common_prefix: config.auto_insert_unambiguous,
         }
     }
 
@@ -217,11 +225,17 @@ impl CompletionSet {
         self.candidates.is_empty()
     }
 
-    /// Builds the popup state. `fuzzy` is reused for its cached matcher; its
-    /// kind order is replaced by this set's position-resolved order.
+    /// Builds the popup state for the typed `prefix`. `fuzzy` is reused for
+    /// its cached matcher; its kind order is replaced by this set's
+    /// position-resolved order.
+    ///
+    /// The filter starts at the candidates' common prefix only when
+    /// `auto_insert_unambiguous` is on and no files were collected. Otherwise
+    /// it stays at the typed prefix, so cancel and passthrough never return
+    /// more than the user typed.
     pub fn into_app(
         self,
-        initial_filter: InitialFilter,
+        prefix: String,
         cursor_row: u16,
         cursor_col: u16,
         term_cols: u16,
@@ -230,7 +244,7 @@ impl CompletionSet {
     ) -> App {
         App::new_with_initial_filter(
             self.candidates,
-            initial_filter,
+            InitialFilter::for_completion(prefix, self.expand_common_prefix, self.collected_files),
             cursor_row,
             cursor_col,
             term_cols,
@@ -613,7 +627,7 @@ mod tests {
             (false, ["status", "any", "arg"]),
         ] {
             let app = CompletionSet::new(&config, "status\t\t\n", command_position, None).into_app(
-                InitialFilter::CommonPrefix(String::new()),
+                String::new(),
                 5,
                 0,
                 80,
@@ -628,6 +642,32 @@ mod tests {
             assert_eq!(texts, expected, "command_position={command_position}");
         }
         assert!(CompletionSet::new(&Config::default(), "", false, None).is_empty());
+    }
+
+    #[test]
+    fn completion_set_chooses_the_initial_filter() {
+        let app_for = |auto_insert_unambiguous: bool, files: Vec<Candidate>| {
+            let mut config = Config::default();
+            config.auto_insert_unambiguous = auto_insert_unambiguous;
+            CompletionSet::with_files(&config, files, "status\t\t\nstash\t\t\n", false, None)
+                .into_app("s".to_string(), 5, 0, 80, 24, FuzzyMatcher::new())
+        };
+        let file = || {
+            let mut file = Candidate::parse_line("st\t\tfile");
+            file.literal_path = Some(crate::candidate::LiteralPath {
+                path: "st".into(),
+                ignore_case: false,
+            });
+            vec![file]
+        };
+
+        // The common prefix "sta" is offered only when asked for.
+        assert_eq!(app_for(true, Vec::new()).filter_text, "sta");
+        assert_eq!(app_for(false, Vec::new()).filter_text, "s");
+        // Collected files already match what was typed; keep it.
+        assert_eq!(app_for(true, file()).filter_text, "s");
+        assert_eq!(app_for(false, file()).filter_text, "s");
+        assert_eq!(app_for(true, file()).prefix, "s");
     }
 
     fn make_candidates(items: &[&str]) -> Vec<Candidate> {

@@ -6,7 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::app::{App, CompletionSet, InitialFilter};
+use crate::app::{App, CompletionSet};
 use crate::candidate::Candidate;
 use crate::config::{Config, ConfigReloader, KeyBindings, SuffixConfig, Theme, config_path};
 use crate::fuzzy::FuzzyMatcher;
@@ -1380,11 +1380,10 @@ impl DaemonServer {
             }
         };
 
-        let mut candidates = filesystem.to_vec();
-        candidates.extend(Candidate::parse_lines_dedup(tsv_str));
-        let set = CompletionSet::from_native(
+        let set = CompletionSet::with_files(
             &self.config,
-            candidates,
+            filesystem.to_vec(),
+            tsv_str,
             command_position,
             command_context.as_deref(),
         );
@@ -1396,19 +1395,7 @@ impl DaemonServer {
 
         // Take fuzzy matcher out to reuse, put it back after
         let fuzzy = self.fuzzy.take().unwrap_or_default();
-        let initial_filter = InitialFilter::for_completion(
-            prefix,
-            self.config.auto_insert_unambiguous,
-            !filesystem.is_empty(),
-        );
-        let mut app = set.into_app(
-            initial_filter,
-            cursor_row,
-            cursor_col,
-            term_cols,
-            term_rows,
-            fuzzy,
-        );
+        let mut app = set.into_app(prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy);
 
         if app.filtered_indices().is_empty() {
             debug!("render request had no matching candidates after filter");
@@ -1492,13 +1479,15 @@ impl DaemonServer {
         command_context: Option<&str>,
         filesystem: Arc<[Candidate]>,
     ) -> Option<App> {
-        let literal_files_present = !filesystem.is_empty();
         let native_candidates_present =
             !filesystem.is_empty() || tsv.lines().any(|line| !line.is_empty());
-        let mut candidates = filesystem.to_vec();
-        candidates.extend(Candidate::parse_lines_dedup(tsv));
-        let set =
-            CompletionSet::from_native(&self.config, candidates, command_position, command_context);
+        let set = CompletionSet::with_files(
+            &self.config,
+            filesystem.to_vec(),
+            tsv,
+            command_position,
+            command_context,
+        );
 
         if set.is_empty() {
             let _ = write_apply_result(writer, &ApplyResult::no_candidates());
@@ -1506,21 +1495,7 @@ impl DaemonServer {
         }
 
         let fuzzy = self.fuzzy.take().unwrap_or_default();
-        // Without auto_insert_unambiguous the filter stays at the typed prefix,
-        // so cancel and passthrough paths never return an extended value.
-        let initial_filter = InitialFilter::for_completion(
-            prefix,
-            self.config.auto_insert_unambiguous,
-            literal_files_present,
-        );
-        let mut app = set.into_app(
-            initial_filter,
-            cursor_row,
-            cursor_col,
-            term_cols,
-            term_rows,
-            fuzzy,
-        );
+        let mut app = set.into_app(prefix, cursor_row, cursor_col, term_cols, term_rows, fuzzy);
 
         if app.filtered_indices().is_empty() {
             self.fuzzy = Some(app.take_fuzzy());
