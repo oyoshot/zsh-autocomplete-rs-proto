@@ -166,6 +166,16 @@ impl Shell {
 impl Drop for Shell {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        // macOS holds an exiting process until its terminal output has been
+        // read, so read it while waiting instead of blocking in wait().
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            if self.drain(10).is_err() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 }
