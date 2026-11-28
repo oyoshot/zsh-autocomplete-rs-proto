@@ -826,62 +826,92 @@ mod tests {
         assert!(popup.width > 0);
     }
 
+    /// Replays popup output on a grid with the terminal behavior that matters
+    /// at the right margin: after a character in the last column, the cursor
+    /// stays there with a wrap pending, so erasing to the end of the line
+    /// erases that character (xterm, Windows Terminal; tmux differs).
+    fn replay_on_screen(bytes: &[u8], screen: &mut [Vec<char>]) {
+        use termwiz::escape::{
+            Action,
+            csi::{CSI, Cursor, Edit, EraseInLine},
+            parser::Parser,
+        };
+        let cols = screen[0].len();
+        let (mut x, mut y) = (0, 0);
+        let put = |c: char, x: &mut usize, y: &mut usize, screen: &mut [Vec<char>]| {
+            screen[*y][*x] = c;
+            *x = (*x + 1).min(cols - 1);
+        };
+        Parser::new().parse(bytes, |action| match action {
+            Action::Print(c) => put(c, &mut x, &mut y, screen),
+            Action::PrintString(s) => s.chars().for_each(|c| put(c, &mut x, &mut y, screen)),
+            Action::CSI(CSI::Cursor(Cursor::Position { line, col })) => {
+                y = line.as_zero_based() as usize;
+                x = col.as_zero_based() as usize;
+            }
+            Action::CSI(CSI::Edit(Edit::EraseInLine(EraseInLine::EraseToEndOfLine))) => {
+                screen[y][x..].fill(' ');
+            }
+            _ => {}
+        });
+    }
+
     #[test]
-    fn popup_at_the_right_edge_keeps_its_right_border() {
-        let candidates: Vec<Candidate> = ["dev", "Music", "01_A4_format.xlsx"]
-            .iter()
-            .map(|text| Candidate {
-                text: text.to_string(),
-                description: String::new(),
-                kind: "file".to_string(),
-                insert_text: None,
-                cursor_offset: None,
-                source_group: Default::default(),
-            })
-            .collect();
+    fn popup_flush_with_the_right_edge_keeps_its_right_border() {
+        let (cols, rows) = (40, 10);
+        let candidates = vec![
+            Candidate::parse_line("alpha\tdesc\tcommand"),
+            Candidate::parse_line("alphabet\t\tcommand"),
+        ];
         let width = Popup::compute(&App::new_with_term_size(
             candidates.clone(),
-            String::new(),
-            2,
+            "al".into(),
             0,
-            40,
-            24,
+            0,
+            cols,
+            rows,
         ))
         .width;
-
-        // A row that ends in the last column leaves the cursor on its border,
-        // so each row must clear the line before drawing, never after. Cover
-        // a popup moved left to the edge, one that ends there as placed, and
-        // one with room to its right.
-        for cursor_col in [38, 40 - width, 2] {
+        // A cursor near the right edge pushes the popup against it; one at
+        // the right distance places it there without moving it.
+        for cursor_col in [38, cols - width] {
             let app =
-                App::new_with_term_size(candidates.clone(), String::new(), 2, cursor_col, 40, 24);
+                App::new_with_term_size(candidates.clone(), "al".into(), 0, cursor_col, cols, rows);
             let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
-            let bytes = String::from_utf8(bytes).unwrap();
-            assert_eq!(popup.col, cursor_col.min(40 - width));
+            assert_eq!(popup.col + popup.width, cols);
 
-            // Rows are drawn in order, and the cursor returns to the command
-            // line after the last one.
-            let move_to = |row: u16, col: u16| format!("\x1b[{};{}H", row + 1, col + 1);
-            let last_row = popup.row + popup.height - 1;
-            for row in popup.row..=last_row {
-                let next = if row == last_row {
-                    move_to(app.cursor_row, app.cursor_col)
-                } else {
-                    move_to(row + 1, popup.col)
-                };
-                let row_bytes = bytes
-                    .split_once(move_to(row, popup.col).as_str())
-                    .and_then(|(_, rest)| rest.split_once(next.as_str()))
-                    .map(|(row_bytes, _)| row_bytes)
-                    .unwrap_or_else(|| panic!("row {row} not drawn at the popup column"));
-                let clear = row_bytes.rfind("\x1b[K");
-                let border = row_bytes.rfind(['┐', '│', '┘']);
-                assert!(
-                    clear.is_some() && border.is_some() && clear < border,
-                    "cursor_col={cursor_col} row={row}: {row_bytes:?}"
-                );
-            }
+            let mut screen = vec![vec![' '; usize::from(cols)]; usize::from(rows)];
+            replay_on_screen(&bytes, &mut screen);
+            let right = usize::from(cols) - 1;
+            let edge: String = (popup.row..popup.row + popup.height)
+                .map(|row| screen[usize::from(row)][right])
+                .collect();
+            assert_eq!(edge, "┐││┘", "cursor_col={cursor_col}");
+        }
+    }
+
+    #[test]
+    fn popup_clears_stale_cells_to_its_right() {
+        let (cols, rows) = (40, 10);
+        let app = App::new_with_term_size(
+            vec![Candidate::parse_line("alpha\t\tcommand")],
+            "al".into(),
+            0,
+            2,
+            cols,
+            rows,
+        );
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        assert!(popup.col + popup.width < cols);
+
+        // A wider popup drawn earlier left its rows behind.
+        let mut screen = vec![vec!['Z'; usize::from(cols)]; usize::from(rows)];
+        replay_on_screen(&bytes, &mut screen);
+        for row in popup.row..popup.row + popup.height {
+            let past: String = screen[usize::from(row)][usize::from(popup.col + popup.width)..]
+                .iter()
+                .collect();
+            assert!(past.trim().is_empty(), "row {row}: {past:?}");
         }
     }
 
