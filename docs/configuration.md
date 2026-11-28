@@ -30,6 +30,22 @@ candidate if there is exactly one, or otherwise runs Zsh's own completion.
 Shrinking the terminal below that size while a popup is open closes it, as
 cancelling does.
 
+The popup shows at most 10 candidates at a time, and Page Up and Page Down move
+by one page of shown rows. Change the limit in the `[popup]` table:
+
+```toml
+[popup]
+max_rows = 20
+```
+
+`max_rows` must be a positive integer; other values make the configuration
+invalid. A terminal too short for the limit shows as many candidates as fit
+below the cursor line. The popup shown while typing makes room only for the
+candidates it shows. A popup opened with Tab makes room for every candidate
+it holds, up to the limit, even those the current filter hides, so filtering
+never moves it; opening it can scroll the screen further. Changes apply to
+popups opened after the configuration is reloaded.
+
 ![Popup with cyan matches, selection marker, and visible candidate range](images/popup-ui.png)
 
 Override colors in the `[theme]` table:

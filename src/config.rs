@@ -161,7 +161,7 @@ impl ConfigReloader {
 
 #[derive(Clone)]
 pub struct Config {
-    pub max_visible: usize,
+    pub max_rows: usize,
     pub auto_insert_unambiguous: bool,
     pub expand_abbreviation_on_enter: bool,
     pub expand_abbreviation_on_space: bool,
@@ -175,7 +175,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            max_visible: 10,
+            max_rows: DEFAULT_MAX_ROWS,
             auto_insert_unambiguous: true,
             expand_abbreviation_on_enter: false,
             expand_abbreviation_on_space: false,
@@ -216,12 +216,23 @@ impl Default for CompletionRaw {
     }
 }
 
+/// Default for `[popup] max_rows`.
+pub const DEFAULT_MAX_ROWS: usize = 10;
+
+#[derive(Debug, Deserialize, Default)]
+struct PopupRaw {
+    /// Candidate rows shown at most; zero makes the configuration invalid.
+    max_rows: Option<std::num::NonZeroUsize>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct ConfigFile {
     #[serde(default)]
     keybindings: KeybindingsRaw,
     #[serde(default)]
     theme: ThemeRaw,
+    #[serde(default)]
+    popup: PopupRaw,
     #[serde(default)]
     completion: CompletionRaw,
     #[serde(default)]
@@ -609,7 +620,10 @@ impl Config {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let abbreviations = Self::abbreviations_from_file(&file);
         Ok(Config {
-            max_visible: 10,
+            max_rows: file
+                .popup
+                .max_rows
+                .map_or(DEFAULT_MAX_ROWS, std::num::NonZeroUsize::get),
             auto_insert_unambiguous: file.completion.auto_insert_unambiguous,
             expand_abbreviation_on_enter: file.completion.expand_abbreviation_on_enter,
             expand_abbreviation_on_space: file.completion.expand_abbreviation_on_space,
@@ -773,6 +787,33 @@ mod tests {
             "['directory', 'file', 'abbreviation', 'command', 'alias', 'builtin', 'function', 'other', 'file']",
         ] {
             let text = format!("[completion]\nkind_order = {value}");
+            assert!(toml::from_str::<ConfigFile>(&text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn popup_max_rows_defaults_and_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (text, expected) in [
+            ("", DEFAULT_MAX_ROWS),
+            ("[popup]", DEFAULT_MAX_ROWS),
+            ("[popup]\nmax_rows = 1", 1),
+            ("[popup]\nmax_rows = 25", 25),
+        ] {
+            fs::write(&path, text).unwrap();
+            assert_eq!(
+                Config::load_from(&path).unwrap().max_rows,
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn popup_max_rows_rejects_zero_negative_and_non_integers() {
+        for value in ["0", "-1", "2.5", "'10'"] {
+            let text = format!("[popup]\nmax_rows = {value}");
             assert!(toml::from_str::<ConfigFile>(&text).is_err(), "{text}");
         }
     }

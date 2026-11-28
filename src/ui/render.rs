@@ -42,19 +42,27 @@ pub fn layout_candidate(text: &str, description: &str, inner: usize) -> Candidat
     }
 }
 
-/// Scroll the terminal to ensure enough blank space below the cursor for the popup.
-/// Updates `app.cursor_row` and `app.max_visible` to reflect the new state.
-pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<()> {
-    app.sync_max_visible();
-
-    let scroll_amount = Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
+/// Computes the scroll-up bytes that make room for a popup of `rows`
+/// candidate rows below the cursor, and moves `app.cursor_row` up to match.
+/// Returns the bytes and the rows scrolled. Callers check `App::popup_fits`
+/// first.
+pub fn scroll_for_popup(app: &mut App, rows: usize) -> (Vec<u8>, u16) {
+    let mut scroll_bytes = Vec::new();
+    let scroll_amount = Popup::scroll_to_fit(app.cursor_row, app.term_rows, rows);
     if scroll_amount > 0 {
-        // Scroll terminal content up without moving cursor position
-        crossterm::execute!(tty, terminal::ScrollUp(scroll_amount))?;
+        let _ = crossterm::queue!(&mut scroll_bytes, terminal::ScrollUp(scroll_amount));
         app.cursor_row -= scroll_amount;
     }
+    (scroll_bytes, scroll_amount)
+}
 
-    Ok(())
+/// Scrolls the terminal so that the popup drawn once fits below the cursor,
+/// and updates `app.cursor_row` to match.
+pub fn ensure_space(tty: &mut std::fs::File, app: &mut App) -> std::io::Result<()> {
+    let rows = app.shown_rows();
+    let (bytes, _) = scroll_for_popup(app, rows);
+    tty.write_all(&bytes)?;
+    tty.flush()
 }
 
 #[inline]
@@ -483,6 +491,43 @@ mod tests {
     use super::*;
     use crate::candidate::Candidate;
 
+    /// A 60-row terminal with the cursor on row 50, showing up to 40 rows of
+    /// the first `matching` of 40 candidates.
+    fn app_near_the_bottom(matching: usize) -> App {
+        let candidates = (0..40)
+            .map(|i| {
+                let name = if i < matching { "item" } else { "other" };
+                Candidate::parse_line(&format!("{name}{i:02}"))
+            })
+            .collect();
+        App::new_with_term_size(candidates, "item".into(), 50, 0, 80, 60).with_max_rows(40)
+    }
+
+    #[test]
+    fn scroll_for_popup_makes_room_for_the_given_rows() {
+        // Two rows fit in the nine rows below the cursor.
+        let mut few = app_near_the_bottom(40);
+        let (bytes, scrolled) = scroll_for_popup(&mut few, 2);
+        assert!(bytes.is_empty());
+        assert_eq!((scrolled, few.cursor_row), (0, 50));
+
+        // Forty need 42 rows with the frame, so the terminal scrolls by 33.
+        let mut many = app_near_the_bottom(40);
+        let (_, scrolled) = scroll_for_popup(&mut many, 40);
+        assert_eq!((scrolled, many.cursor_row), (33, 17));
+    }
+
+    #[test]
+    fn ensure_space_makes_room_for_the_rows_shown() {
+        // Two of the 40 candidates match, so the popup drawn once needs four
+        // rows with the frame and nine are free: nothing scrolls.
+        let mut app = app_near_the_bottom(2);
+        let mut tty = tempfile::tempfile().unwrap();
+        ensure_space(&mut tty, &mut app).unwrap();
+        assert_eq!(app.cursor_row, 50);
+        assert_eq!(tty.metadata().unwrap().len(), 0);
+    }
+
     // --- truncate_to_width ---
 
     fn printed_text(bytes: &[u8]) -> String {
@@ -656,8 +701,8 @@ mod tests {
                     source_group: Default::default(),
                 })
                 .collect();
-            let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
-            app.cap_max_visible(8);
+            let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24)
+                .with_max_rows(8);
             for (selected, label) in [(0, " 1–8 / 42 "), (41, " 35–42 / 42 ")] {
                 app.set_selected(selected);
                 let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
