@@ -1,0 +1,30 @@
+# Minimal bash adapter prototype. It sits inside programmable completion, so bash
+# itself supplies the word being completed (COMP_WORDS, COMP_CWORD) and applies
+# the edit (a single COMPREPLY entry is inserted with native quoting).
+source /usr/share/bash-completion/completions/git
+_zacrs_native=$(complete -p git | sed -E 's/.* -F ([^ ]+) .*/\1/')
+_zacrs_complete() {
+    "$_zacrs_native" "$@"                       # fact: native candidates
+    echo "${#COMPREPLY[@]}" > "$ZACRS_PROTO_DIR/gathered"
+    (( ${#COMPREPLY[@]} > 1 )) || return 0       # one candidate: leave it to bash
+    local cur=${COMP_WORDS[COMP_CWORD]} c tsv=''
+    for c in "${COMPREPLY[@]}"; do tsv+="${c%% }"$'\t\t\n'; done
+    local pos; read -r -a pos < <(python3 "$ZACRS_PROTO_DIR/cursor_pos.py")
+    local reply
+    mapfile -t reply < <(printf '%sEND\n' "$tsv" | "$ZACRS_BIN" complete --prefix "$cur" \
+        --cursor-row "${pos[0]}" --cursor-col "${pos[1]}" --cols "$COLUMNS" --rows "$LINES")
+    printf '%s\n' "${reply[@]}" > "$ZACRS_PROTO_DIR/reply"
+    local code text
+    read -r _ code text <<< "${reply[0]}"
+    if [[ ( $code == 0 || $code == 2 ) && -n $text ]]; then
+        COMPREPLY=("$text")                      # instruction: edit
+    else
+        COMPREPLY=()
+    fi
+    printf '\e[5n'                               # ask readline to redraw (fzf's technique)
+}
+bind '"\e[0n": redraw-current-line'
+complete -o nospace -F _zacrs_complete git
+_zacrs_probe() { printf '%s|%s\n' "$READLINE_LINE" "$READLINE_POINT" > "$ZACRS_PROTO_DIR/probe"; }
+bind -x '"\C-y": _zacrs_probe'
+PS1='> '
