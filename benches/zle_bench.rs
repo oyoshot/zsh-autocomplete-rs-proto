@@ -368,16 +368,30 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
         shells.push((name.clone(), shell));
     }
     let mut samples = Samples::new();
+    let mut idle_marks = vec![0u64; shells.len()];
     for rep in 0..u64::from(args.samples) + u64::from(args.warmups) {
-        for (name, shell) in &mut shells {
+        for turn in 0..shells.len() {
+            // Rotate who goes first.
+            let index = (turn + rep as usize) % shells.len();
+            let (name, shell) = &mut shells[index];
+            let idle = session.home.path().join(format!("idle-{name}"));
+            let marks = &mut idle_marks[index];
             interrupted()?;
             let mut measured = Sample::new();
             for (size, command) in [(100, "bench-small"), (10_000, "bench-large")] {
+                // A popup is on screen before the hook that drew it returns.
+                // Let that hook finish, so its tail is not charged to the next key.
+                let mut settle = |shell: &mut pty::Shell| -> Result<()> {
+                    *marks += 1;
+                    shell.send(b"\x1d")?;
+                    shell.probe(&idle, &format!("{marks}\n"))
+                };
                 // A new word before the one completed makes a new cache entry.
                 shell.clear_output();
                 shell.send(format!("\x15{command} x{rep} ").as_bytes())?;
                 shell.popup_drawn()?;
-                let mut timed = |key: &[u8]| -> Result<f64> {
+                let mut timed = |shell: &mut pty::Shell, key: &[u8]| -> Result<f64> {
+                    settle(shell)?;
                     shell.clear_output();
                     let start = Instant::now();
                     shell.send(key)?;
@@ -385,9 +399,9 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
                     Ok(start.elapsed().as_secs_f64() * 1000.0)
                 };
                 // "w" is a prefix the cache has not seen for this line: gather.
-                measured.insert(format!("gather_{size}_ms"), timed(b"w")?);
+                measured.insert(format!("gather_{size}_ms"), timed(shell, b"w")?);
                 // Erasing it returns to the prefix the cache holds: no gather.
-                measured.insert(format!("cached_{size}_ms"), timed(b"\x7f")?);
+                measured.insert(format!("cached_{size}_ms"), timed(shell, b"\x7f")?);
             }
             if rep >= u64::from(args.warmups) {
                 samples.entry(name.clone()).or_default().push(measured);
@@ -556,29 +570,31 @@ fn main() -> Result<()> {
         binary_git_blob: git_hash(&binary)?, binary: binary.clone(),
         adapters: adapters.iter().map(|(name, entry)| Ok((name.clone(), adapter(entry)?))).collect::<Result<_>>()?,
         samples: args.samples, warmups: args.warmups, workload: args.workload.clone(),
-        method: if args.workload == "startup" {
-            "fresh interactive PTY (80x24); warm common compdump; EPOCHREALTIME source interval; PTY creation through final line-init; rotating order; same binary; cold excludes stop time, not filesystem caches"
-        } else if args.workload == "popup" {
-            "one interactive PTY (80x24) per adapter, alternating; compinit -i -D; reused daemon; fixed-list completers of 100 and 10000 words; last key written to PTY through the end of the popup frame read from the PTY; cursor queries answered by the harness"
-        } else {
-            "fresh interactive PTY (80x24); compinit -i -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate"
+        method: match args.workload.as_str() {
+            "startup" => "fresh interactive PTY (80x24); warm common compdump; EPOCHREALTIME source interval; PTY creation through final line-init; rotating order; same binary; cold excludes stop time, not filesystem caches",
+            "popup" => "one interactive PTY (80x24) per adapter, rotating order; compinit -i -D; reused daemon; fixed-list completers of 100 and 10000 words; shell idle, then last key written to PTY through the end of the popup frame read from the PTY; cursor queries answered by the harness",
+            _ => "fresh interactive PTY (80x24); compinit -i -D; reused daemon; queued input through probe file; completion drawing suppressed; baseline then candidate",
         }.into(),
     };
     let session = Session::new(binary, zsh)?;
-    let samples = if args.workload == "startup" {
-        startup(&args, &session, &adapters)?
-    } else if args.workload == "popup" {
-        popup(&args, &session, &adapters)?
-    } else {
-        keys(&args, &session, &adapters)?
+    let samples = match args.workload.as_str() {
+        "startup" => startup(&args, &session, &adapters)?,
+        "popup" => popup(&args, &session, &adapters)?,
+        _ => keys(&args, &session, &adapters)?,
     };
     let summary = summarize(&samples);
     for (group, variants) in &summary {
         for (variant, metrics) in variants {
             for (metric, stats) in metrics {
+                // Below 100 samples the 99th percentile is just the maximum.
+                let tail = if stats.n >= 100 {
+                    format!(", p99 {:.3}", stats.p99)
+                } else {
+                    String::new()
+                };
                 println!(
-                    "{group} {variant} {metric}: {:.3} ± {:.3} (median {:.3}, p90 {:.3}, p99 {:.3})",
-                    stats.mean, stats.sd, stats.median, stats.p90, stats.p99
+                    "{group} {variant} {metric}: {:.3} ± {:.3} (median {:.3}, p90 {:.3}{tail})",
+                    stats.mean, stats.sd, stats.median, stats.p90
                 );
             }
         }

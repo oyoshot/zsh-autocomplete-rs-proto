@@ -141,6 +141,8 @@ impl Shell {
         let mut answered = 0;
         while Instant::now() < deadline {
             self.drain(1)?;
+            // `drain` drops the front of a very long capture.
+            answered = answered.min(self.output.len());
             while let Some(at) = find(&self.output[answered..], QUERY) {
                 self.writer.write_all(b"\x1b[5;20R")?;
                 answered += at + QUERY.len();

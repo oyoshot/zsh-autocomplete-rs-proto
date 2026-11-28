@@ -217,7 +217,8 @@ CARGO_TARGET_DIR=target cargo bench --bench zle_bench -- \
 ```
 
 Both adapters stay open in their own terminals, share one daemon and take turns,
-so drift in the machine affects them alike. Each turn measures two keys for a
+going first alternately, so drift in the machine affects them alike. Before each
+timed key the harness waits until the shell has finished the previous one. Each turn measures two keys for a
 completer that lists 100 words and for one that lists 10,000:
 
 - `gather_*_ms`: a key that makes the adapter run native completion and send
@@ -229,8 +230,9 @@ The completers return a fixed list, so the figures are the adapter's and the
 engine's own cost. A real completer adds its running time to the gather case.
 The harness answers the adapter's cursor position queries at once; a real
 terminal takes longer. The subprocess path, a cold daemon, the Tab picker and
-file candidates are not measured. The report gives the median, 90th and 99th
-percentile of each metric; choose enough samples for the percentile you read.
+file candidates are not measured. The report gives the median and the 90th and
+99th percentiles of each metric. Below 100 samples the 99th is the maximum, and
+the summary line leaves it out.
 
 ### Shell startup comparisons
 
