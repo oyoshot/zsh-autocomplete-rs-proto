@@ -545,14 +545,6 @@ fn subsequence_indices(query: &str, haystack: &str, case_sensitive: bool) -> Opt
     Some(indices)
 }
 
-fn compare_empty_candidates(a: &Candidate, b: &Candidate, order: &KindOrder) -> Ordering {
-    order
-        .priority(a.kind_priority())
-        .cmp(&order.priority(b.kind_priority()))
-        .then_with(|| a.text.len().cmp(&b.text.len()))
-        .then_with(|| a.text.cmp(&b.text))
-}
-
 fn compare_scored_candidates(
     a: &Candidate,
     a_score: u32,
@@ -571,18 +563,14 @@ fn compare_scored_candidates(
         .then_with(|| a.text.cmp(&b.text))
 }
 
+/// Orders by kind only. The sort is stable, so candidates of the same kind
+/// keep the order the source gave them, such as compsys groups.
 fn sort_empty_query_matches(
     results: &mut [ScoredMatch],
     candidates: &[Candidate],
     order: &KindOrder,
 ) {
-    results.sort_unstable_by(|a, b| {
-        compare_empty_candidates(
-            &candidates[a.candidate_idx],
-            &candidates[b.candidate_idx],
-            order,
-        )
-    });
+    results.sort_by_key(|m| order.priority(candidates[m.candidate_idx].kind_priority()));
 }
 
 fn sort_scored_matches(results: &mut [ScoredMatch], candidates: &[Candidate], order: &KindOrder) {
@@ -1266,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_kind_then_len_sort() {
+    fn empty_query_sorts_by_kind_and_keeps_source_order_within_a_kind() {
         let mut m = FuzzyMatcher::new();
         let candidates = make_candidates_with_kind(&[
             ("longcmd", "command"),
@@ -1276,11 +1264,8 @@ mod tests {
         ]);
         let results = m.filter(&candidates, "");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        // Files before commands, then by length, then alphabetically.
-        assert_eq!(texts[0], "z");
-        assert_eq!(texts[1], "ab");
-        assert_eq!(texts[2], "abc");
-        assert_eq!(texts[3], "longcmd");
+        // Files before commands; commands as given, not by length or text.
+        assert_eq!(texts, ["z", "longcmd", "ab", "abc"]);
     }
 
     #[test]

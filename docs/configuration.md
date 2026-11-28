@@ -90,8 +90,10 @@ The available actions are `move-down`, `move-up`, `page-down`, `page-up`,
 ## Candidate order
 
 With a nonempty query, candidates are ordered by matching score, shorter
-candidate text, kind priority, then text. With an empty query, kind priority
-comes first, followed by shorter text and text order.
+candidate text, kind priority, then text. With an empty query, candidates are
+ordered by kind priority alone. Within a kind they keep the order in which
+Zsh's completion system listed them, so `git <Tab>` shows the main commands
+first, and abbreviations keep the order of the configuration file.
 
 Customize kind priority in `[completion]`. The default order depends on the
 cursor position. At command position, it is:

@@ -546,9 +546,10 @@ mod tests {
 
         // Native subcommands arrive without a kind. At argument position they
         // rank before abbreviations; at command position abbreviations lead.
+        // Abbreviations keep their configured order.
         for (command_position, expected) in [
-            (true, ["any", "cmd", "status"]),
-            (false, ["status", "any", "arg"]),
+            (true, ["cmd", "any", "status"]),
+            (false, ["status", "arg", "any"]),
         ] {
             let app = CompletionSet::new(&config, "status\t\t\n", command_position, None).into_app(
                 String::new(),
