@@ -379,6 +379,16 @@ fn zsh_popup_frames_larger_than_one_read_are_drawn_whole() {
 }
 
 #[test]
+fn zsh_failed_frame_reads_clear_the_popup_on_screen() {
+    for case in ["render", "resize", "shrink"] {
+        run_popup_script(
+            include_str!("support/popup_draw_failure.zsh"),
+            &[("ZACRS_TEST_CASE", case)],
+        );
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.
