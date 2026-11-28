@@ -416,9 +416,8 @@ pub fn clear_rect_to_bytes(
     Ok(buf)
 }
 
-/// Clears what a previous popup leaves outside the new popup: rows the new
-/// popup does not cover, and on rows it does cover, the cells left of it, in
-/// case the popup moved right. Its own frame clears the cells right of it.
+/// Clears the rows of a previous popup that the new popup does not cover. The
+/// new popup erases the rows it covers whole (see `start_popup_row`).
 pub fn clear_stale_rows_to_bytes(
     prev_popup_row: u16,
     prev_popup_height: u16,
@@ -435,20 +434,18 @@ pub fn clear_stale_rows_to_bytes(
     let mut wrote_any = false;
 
     for row in prev_popup_row..prev_end {
-        // Erase the whole line, or on a covered row, from its start through
-        // the cell left of the popup (crossterm has no command for that).
-        let (col, erase) = if !(new_popup.row..new_end).contains(&row) {
-            (0, "\x1b[2K")
-        } else if let Some(left) = new_popup.col.checked_sub(1) {
-            (left, "\x1b[1K")
-        } else {
+        if (new_popup.row..new_end).contains(&row) {
             continue;
-        };
+        }
         if !wrote_any {
             crossterm::queue!(&mut buf, cursor::SavePosition)?;
             wrote_any = true;
         }
-        crossterm::queue!(&mut buf, cursor::MoveTo(col, row), Print(erase))?;
+        crossterm::queue!(
+            &mut buf,
+            cursor::MoveTo(0, row),
+            terminal::Clear(terminal::ClearType::CurrentLine)
+        )?;
     }
 
     if wrote_any {
@@ -1060,6 +1057,30 @@ mod tests {
     }
 
     #[test]
+    fn render_frames_leave_the_saved_cursor_to_the_shell() {
+        // The shell saves the cursor before a frame and restores it after.
+        let app = App::new_with_term_size(
+            vec![
+                Candidate::parse_line("ls\t\tcommand"),
+                Candidate::parse_line("lsblk\t\tcommand"),
+            ],
+            "ls".into(),
+            1,
+            2,
+            80,
+            24,
+        );
+        let (bytes, _) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        let ansi = String::from_utf8_lossy(&bytes);
+        for save_or_restore in ["\u{1b}7", "\u{1b}8", "\u{1b}[s", "\u{1b}[u"] {
+            assert!(
+                !ansi.contains(save_or_restore),
+                "{save_or_restore:?} in {ansi:?}"
+            );
+        }
+    }
+
+    #[test]
     fn render_popup_to_bytes_handles_zero_sized_terminal_input() {
         let candidates = vec![Candidate {
             literal_path: None,
@@ -1105,13 +1126,12 @@ mod tests {
     }
 
     #[test]
-    fn clear_stale_rows_to_bytes_clears_left_of_a_popup_that_moved_right() {
+    fn clear_stale_rows_to_bytes_leaves_covered_rows_to_the_new_popup() {
         let bytes = clear_stale_rows_to_bytes(6, 4, &popup_at(6, 5, 2)).unwrap();
         let ansi = String::from_utf8_lossy(&bytes);
-        // Covered rows keep the popup's cells and lose the ones left of it.
-        assert!(ansi.contains("[7;5H\u{1b}[1K"), "{ansi:?}");
-        assert!(ansi.contains("[8;5H\u{1b}[1K"), "{ansi:?}");
-        // Uncovered rows are cleared whole.
+        // The new popup erases rows 6 and 7 whole when it draws them.
+        assert!(!ansi.contains("[7;"), "{ansi:?}");
+        assert!(!ansi.contains("[8;"), "{ansi:?}");
         assert!(ansi.contains("[9;1H\u{1b}[2K"), "{ansi:?}");
         assert!(ansi.contains("[10;1H\u{1b}[2K"), "{ansi:?}");
     }

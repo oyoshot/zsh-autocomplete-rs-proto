@@ -32,7 +32,7 @@ if [[ "$ZACRS_HOOK_ORDER" == after ]]; then
 fi
 _test_ready() {
     (( ++_test_ready_count ))
-    print -r -- "$_zacrs_popup_visible:$_zacrs_popup_row:$_zacrs_popup_height:$_zacrs_popup_cursor_row:$_zacrs_last_render_cursor_row:$_zacrs_last_render_cursor_col:$_zacrs_popup_snapshot_lbuffer:$_zacrs_prev_lbuffer:$_zacrs_redraw_deferred:$_zacrs_self_insert_wrapped" > "$HOME/state"
+    print -r -- "$_zacrs_popup_visible:$_zacrs_popup_row:$_zacrs_popup_height:$_zacrs_popup_cursor_row:$_zacrs_last_render_cursor_col:$_zacrs_popup_snapshot_lbuffer:$_zacrs_prev_lbuffer:$_zacrs_redraw_deferred:$_zacrs_self_insert_wrapped" > "$HOME/state"
     print -r -- "$_test_other_count" > "$HOME/other-count"
     print -r -- "$_test_ready_count" > "$HOME/ready"
 }
@@ -128,7 +128,7 @@ wait_file() {
 assert_fresh_line() {
     local expected="$1"
     wait_file ready "$expected"
-    [[ "$(<"$HOME/state")" == '0:0:0:0:0:0:::0:0' ]] \
+    [[ "$(<"$HOME/state")" == '0:0:0:0:0:::0:0' ]] \
         || fail "stale state at line $expected: $(<"$HOME/state")"
     [[ "$(<"$HOME/other-count")" == "$expected" ]] \
         || fail "competing line-init hook count: $(<"$HOME/other-count"), expected $expected"

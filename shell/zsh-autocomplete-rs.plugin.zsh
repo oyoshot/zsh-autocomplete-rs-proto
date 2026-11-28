@@ -53,7 +53,6 @@ typeset -g _zacrs_popup_visible=0
 typeset -g _zacrs_popup_row=0
 typeset -g _zacrs_popup_height=0
 typeset -g _zacrs_popup_cursor_row=0
-typeset -gi _zacrs_last_render_cursor_row=0
 typeset -gi _zacrs_last_render_cursor_col=0
 typeset -gi _zacrs_chain_retry=0
 typeset -g _zacrs_daemon_available=0
@@ -443,26 +442,29 @@ _zacrs_daemon_send_render() {
 }
 
 # Atomic clear+draw: hide cursor, clear the visible popup's rows, pipe tty
-# bytes, show cursor, then record the parsed geometry as the popup on screen.
-# Args: $1=fd $2=tty_len
+# bytes, restore the cursor and show it, then record the parsed geometry as
+# the popup on screen.
+# Args: $1=fd $2=tty_len $3=cursor row the frame was rendered for
 # Returns 0 on success, 1 on sysread failure. On failure nothing is drawn and
 # the _zacrs_popup_* geometry still describes the popup on screen.
 _zacrs_daemon_draw_atomic() {
-    local _da_fd=$1 _da_tty_len=$2
+    local _da_fd=$1 _da_tty_len=$2 _da_cursor_row=$3
     # Build the entire clear+draw sequence into a single buffer so that
     # it reaches the terminal as one write() — no intermediate frames.
     # Synchronized Output markers (\e[?2026h/l) are embedded inside the
     # same write to avoid nesting conflicts with ZSH's own sync regions.
-    local _da_buf=$'\e[?2026h\e[?25l'
+    # Save the cursor here and restore it after the frame rather than use
+    # the frame's final move: a resize redraw renders for a column queried
+    # before Zsh drew the last key. Clearing and the frame move absolutely,
+    # and the frame must not save the cursor itself.
+    local _da_buf=$'\e[?2026h\e[?25l\e7'
     if (( _zacrs_popup_visible )); then
-        _da_buf+=$'\e7'
         local _oi
         # Rows past a shrunk terminal are gone; a terminal would apply their
         # clears to its last row instead.
         for (( _oi = 0; _oi < _zacrs_popup_height && _zacrs_popup_row + _oi < LINES; _oi++ )); do
             _da_buf+=$'\e['"$(( _zacrs_popup_row + _oi + 1 ))"$';1H\e[2K'
         done
-        _da_buf+=$'\e8'
     fi
     # One sysread performs a single read(2) of at most its buffer size
     # (8 KiB by default), so a large frame arrives in several reads. Read
@@ -476,6 +478,10 @@ _zacrs_daemon_draw_atomic() {
         _da_buf+=$_da_chunk
         (( _da_left -= _da_count ))
     done
+    # The cursor moves up with the rows the frame scrolls.
+    _da_buf+=$'\e8'
+    local _da_scrolled=$(( _da_cursor_row - _zacrs_parsed_cursor_row ))
+    (( _da_scrolled > 0 )) && _da_buf+=$'\e['"$_da_scrolled"'A'
     printf '%s' "$_da_buf"$'\e[?25h\e[?2026l' > /dev/tty
     _zacrs_commit_render_header
     return 0
@@ -492,24 +498,12 @@ _zacrs_render() {
         command_context="$REPLY"
         is_cmd_pos=$_zacrs_command_context_is_command
     fi
-    # When the popup is already on screen and the terminal hasn't resized,
-    # reuse the previous cursor position instead of querying the terminal.
-    # This eliminates the \e[6n round-trip (an extra /dev/tty write + read
-    # loop) that can trigger a mid-render terminal flush on some platforms.
-    if (( _zacrs_popup_visible
-            && _zacrs_last_render_cursor_row > 0
-            && COLUMNS == _zacrs_popup_snapshot_columns
-            && LINES == _zacrs_popup_snapshot_lines )); then
-        cursor_row=$_zacrs_last_render_cursor_row
-        cursor_col=$_zacrs_last_render_cursor_col
-    else
-        _zacrs_get_cursor_pos
-        if _zacrs_requeue_stale; then
-            # Like type-ahead: the next redraw retries with the new buffer.
-            _zacrs_clear_popup
-            _zacrs_prev_lbuffer=""
-            return
-        fi
+    _zacrs_get_cursor_pos
+    if _zacrs_requeue_stale; then
+        # Like type-ahead: the next redraw retries with the new buffer.
+        _zacrs_clear_popup
+        _zacrs_prev_lbuffer=""
+        return
     fi
 
     if (( !_zacrs_daemon_available )) && (( ${+functions[_zacrs_maybe_retry_daemon]} )); then
@@ -524,10 +518,9 @@ _zacrs_render() {
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len
             local tty_ok=1
-            _zacrs_daemon_draw_atomic $fd $tty_len || tty_ok=0
+            _zacrs_daemon_draw_atomic $fd $tty_len $cursor_row || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
-                _zacrs_last_render_cursor_row=$cursor_row
                 _zacrs_last_render_cursor_col=$cursor_col
                 _zacrs_record_popup_snapshot "$prefix_len"
             else
@@ -561,7 +554,6 @@ _zacrs_render() {
 
     if [[ $exit_code -eq 0 && -n "$output" ]]; then
         _zacrs_popup_visible=1
-        _zacrs_last_render_cursor_row=$cursor_row
         _zacrs_last_render_cursor_col=$cursor_col
         _zacrs_parse_render_header "$output"
         _zacrs_commit_render_header
@@ -587,7 +579,6 @@ _zacrs_clear_popup() {
     _cb+=$'\e8\e[?25h\e[?2026l'
     printf '%s' "$_cb" > /dev/tty
     _zacrs_popup_visible=0
-    _zacrs_last_render_cursor_row=0
     _zacrs_last_render_cursor_col=0
     _zacrs_reset_popup_snapshot
 }
@@ -609,7 +600,6 @@ _zacrs_finish_popup_session() {
     _zacrs_popup_row=0
     _zacrs_popup_height=0
     _zacrs_popup_cursor_row=0
-    _zacrs_last_render_cursor_row=0
     _zacrs_last_render_cursor_col=0
     _zacrs_reset_popup_snapshot
 }
@@ -1160,20 +1150,12 @@ _zacrs_auto_popup() {
     # 非空 prefix の再利用可否は daemon 側の prefix-aware cache が判定する。
     if (( _zacrs_daemon_available )) && [[ -n "$context_key" ]]; then
         local cursor_row=0 cursor_col=0
-        if (( _zacrs_popup_visible
-                && _zacrs_last_render_cursor_row > 0
-                && COLUMNS == _zacrs_popup_snapshot_columns
-                && LINES == _zacrs_popup_snapshot_lines )); then
-            cursor_row=$_zacrs_last_render_cursor_row
-            cursor_col=$_zacrs_last_render_cursor_col
-        else
-            _zacrs_get_cursor_pos
-            if _zacrs_requeue_stale; then
-                # Like type-ahead: the next redraw retries with the new buffer.
-                _zacrs_clear_popup
-                _zacrs_prev_lbuffer=""
-                return
-            fi
+        _zacrs_get_cursor_pos
+        if _zacrs_requeue_stale; then
+            # Like type-ahead: the next redraw retries with the new buffer.
+            _zacrs_clear_popup
+            _zacrs_prev_lbuffer=""
+            return
         fi
         # candidates 引数を空にして送信 → デーモンがキャッシュを探す
         _zacrs_daemon_send_render "$cursor_row" "$cursor_col" "$naive_prefix" "" "" "$context_key" "$is_cmd_pos" 0 "$command_context"
@@ -1183,10 +1165,9 @@ _zacrs_auto_popup() {
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len
             local tty_ok=1
-            _zacrs_daemon_draw_atomic $fd $tty_len || tty_ok=0
+            _zacrs_daemon_draw_atomic $fd $tty_len $cursor_row || tty_ok=0
             if (( tty_ok )); then
                 _zacrs_popup_visible=1
-                _zacrs_last_render_cursor_row=$cursor_row
                 _zacrs_last_render_cursor_col=$cursor_col
                 _zacrs_record_popup_snapshot "$prefix_len"
             else
@@ -1347,21 +1328,24 @@ TRAPWINCH() {
     # and let the next ZLE event render a fresh popup with correct geometry.
     if (( _zacrs_popup_visible && _zacrs_daemon_available && _zacrs_popup_snapshot_daemon )) && _zacrs_popup_snapshot_matches_editor \
         && (( _zacrs_popup_snapshot_columns == COLUMNS )); then
-        local _resize_prefix="${LBUFFER##* }" _resize_cmd_pos=0 _resize_context=""
+        local _resize_cmd_pos=0 _resize_context=""
         if _zacrs_command_context "$LBUFFER"; then
             _resize_context="$REPLY"
             _resize_cmd_pos=$_zacrs_command_context_is_command
         fi
-        _zacrs_daemon_send_render "$_zacrs_popup_cursor_row" "$_zacrs_last_render_cursor_col" "" "" "" "" "$_resize_cmd_pos" 0 "$_resize_context"
+        # A shorter terminal keeps the cursor on its last row. The renderer
+        # clamps the row the same way, and the draw must start from it to
+        # tell scrolled rows apart.
+        local _resize_row=$_zacrs_popup_cursor_row
+        (( _resize_row > LINES - 1 )) && _resize_row=$(( LINES - 1 ))
+        _zacrs_daemon_send_render "$_resize_row" "$_zacrs_last_render_cursor_col" "" "" "" "" "$_resize_cmd_pos" 0 "$_resize_context"
         if (( $? == 0 )); then
             local fd=$_zacrs_send_render_fd
             local tty_len=$_zacrs_parsed_tty_len
             local tty_ok=1
-            _zacrs_daemon_draw_atomic $fd $tty_len || tty_ok=0
+            _zacrs_daemon_draw_atomic $fd $tty_len $_resize_row || tty_ok=0
             exec {fd}<&-
             if (( tty_ok )); then
-                _zacrs_popup_visible=1
-                _zacrs_last_render_cursor_row=$_zacrs_popup_cursor_row
                 _zacrs_popup_snapshot_columns=$COLUMNS
                 _zacrs_popup_snapshot_lines=$LINES
                 zle -R
