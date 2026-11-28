@@ -163,6 +163,15 @@ impl Popup {
     }
 }
 
+/// Where rows `(row, height)` end up when the screen content moves `by` rows
+/// (negative is up). Rows moved above the top are dropped.
+pub fn rows_moved((row, height): (u16, u16), by: i32) -> (u16, u16) {
+    let top = i32::from(row) + by;
+    let height = i32::from(height) + top.min(0);
+    let clamp = |value: i32| u16::try_from(value.max(0)).unwrap_or(u16::MAX);
+    (clamp(top), clamp(height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +487,15 @@ mod tests {
                     }
                 },
             );
+    }
+
+    #[test]
+    fn rows_moved_drops_rows_moved_off_the_top() {
+        assert_eq!(rows_moved((14, 4), 0), (14, 4));
+        assert_eq!(rows_moved((14, 4), -9), (5, 4));
+        assert_eq!(rows_moved((3, 5), -5), (0, 3));
+        assert_eq!(rows_moved((3, 2), -9), (0, 0));
+        assert_eq!(rows_moved((3, 2), 4), (7, 2));
+        assert_eq!(rows_moved((u16::MAX - 1, 2), 4), (u16::MAX, 2));
     }
 }
