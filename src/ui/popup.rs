@@ -36,13 +36,11 @@ impl Popup {
         usize::from(term_rows.saturating_sub(MIN_TERM_ROWS - 1))
     }
 
-    /// Lines to scroll the terminal up so that a popup with `max_visible`
-    /// candidate rows fits below the cursor. The cursor moves up by the same
-    /// amount, so the result never exceeds `cursor_row`.
-    pub fn scroll_to_fit(cursor_row: u16, term_rows: u16, max_visible: usize) -> u16 {
-        let popup_height = u16::try_from(max_visible)
-            .unwrap_or(u16::MAX)
-            .saturating_add(2);
+    /// Lines to scroll the terminal up so that a popup with `rows` candidate
+    /// rows fits below the cursor. The cursor moves up by the same amount, so
+    /// the result never exceeds `cursor_row`.
+    pub fn scroll_to_fit(cursor_row: u16, term_rows: u16, rows: usize) -> u16 {
+        let popup_height = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
         let space_below = term_rows.saturating_sub(cursor_row.saturating_add(1));
         popup_height.saturating_sub(space_below).min(cursor_row)
     }
@@ -424,10 +422,13 @@ mod tests {
         assert!(plugin.contains(&check), "expected `{check}` in the plugin");
     }
 
-    /// In any terminal a popup fits, scrolling by `scroll_to_fit` leaves room
-    /// to place the popup directly below the cursor and inside the terminal,
-    /// so it never covers the cursor line. Runs as a randomized test under
-    /// `cargo test` and as a proof over every input under `cargo kani --tests`.
+    /// In any terminal a popup fits, scrolling by `scroll_to_fit` for at
+    /// least the rows the popup shows (`max_visible` here) leaves room to
+    /// place it directly below the cursor and inside the terminal, so it never
+    /// covers the cursor line. Callers pass the rows of a popup drawn once,
+    /// or, for one that stays open, every row it can show. Runs as a
+    /// randomized test under `cargo test` and as a proof over every input
+    /// under `cargo kani --tests`.
     #[test]
     #[cfg_attr(kani, kani::proof)]
     fn popup_fits_below_the_cursor_after_scrolling() {

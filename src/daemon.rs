@@ -1284,7 +1284,8 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        let (scroll_bytes, _) = scroll_for_popup(&mut app);
+        let rows = app.shown_rows();
+        let (scroll_bytes, _) = ui::render::scroll_for_popup(&mut app, rows);
 
         if let Some(idx) = selected {
             app.set_selected(idx);
@@ -1460,7 +1461,8 @@ impl DaemonServer {
             return;
         }
 
-        let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
+        let rows = app.session_rows();
+        let (scroll_bytes, scrolled) = ui::render::scroll_for_popup(&mut app, rows);
         let reuse_fast_path = reuse_popup && scrolled == 0;
         if self
             .send_frame(
@@ -1692,7 +1694,8 @@ impl DaemonServer {
                         );
                         break;
                     }
-                    let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
+                    let rows = app.session_rows();
+                    let (scroll_bytes, scrolled) = ui::render::scroll_for_popup(&mut app, rows);
                     // The new popup's rows erase whole lines, so clearing the
                     // rest of the previous popup also covers a move or resize.
                     let before = FramePrefix::Scroll {
@@ -1869,23 +1872,6 @@ fn cancel_text(app: &App) -> &str {
     } else {
         ""
     }
-}
-
-/// Compute scroll-up bytes needed to make room for the popup below the
-/// cursor, and move `app.cursor_row` up to match. Returns the bytes and the
-/// rows scrolled. Callers check `App::popup_fits` first.
-fn scroll_for_popup(app: &mut App) -> (Vec<u8>, u16) {
-    let mut scroll_bytes = Vec::new();
-    let scroll_amount =
-        ui::popup::Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
-    if scroll_amount > 0 {
-        let _ = crossterm::queue!(
-            &mut scroll_bytes,
-            crossterm::terminal::ScrollUp(scroll_amount)
-        );
-        app.cursor_row -= scroll_amount;
-    }
-    (scroll_bytes, scroll_amount)
 }
 
 fn init_tracing() {
@@ -2578,6 +2564,43 @@ mod tests {
     }
 
     #[test]
+    fn handle_render_makes_room_for_the_rows_it_shows() {
+        let mut server = test_server();
+        // Two of 22 candidates match `gi`. On row 20 of 24, the popup drawn
+        // while typing scrolls one line for its two rows, not nine for ten.
+        let tsv: String = ["git", "gizmo"]
+            .into_iter()
+            .map(str::to_string)
+            .chain((1..=20).map(|i| format!("x{i:02}")))
+            .map(|name| format!("{name}\tcommand\tcommand\n"))
+            .collect();
+        let response = server.handle_render(
+            RenderParams {
+                prefix: "gi".to_string(),
+                cursor_row: 20,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                selected: None,
+                command_position: false,
+                command_context: None,
+            },
+            tsv.as_bytes(),
+        );
+
+        match response {
+            crate::protocol::Response::Success { metadata, .. } => {
+                let metadata = metadata.expect("render metadata");
+                assert!(
+                    metadata.contains(" cursor_row=19 "),
+                    "unexpected metadata: {metadata}"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn handle_render_includes_reuse_token_metadata() {
         let mut server = test_server();
         let response = server.handle_render(
@@ -2804,10 +2827,40 @@ mod tests {
     }
 
     #[test]
+    fn open_popup_stays_below_the_cursor_when_editing_matches_more() {
+        let mut server = test_server();
+        // The common prefix keeps the first candidate's case, so the filter
+        // starts as `doC` and matches one candidate; Backspace to `do`
+        // matches all three. Near the bottom of the terminal, the session
+        // makes room for all three rows up front.
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "do".to_string(),
+                cursor_row: 20,
+                cursor_col: 2,
+                ..complete_params_for_terminal(80, 24, false)
+            },
+            "doCa\t\t\ndoca\t\t\ndocb\t\t\n",
+            &[SessionMessage::Key(b"\x7f")],
+        );
+        let mut frames = Vec::new();
+        for _ in 0..2 {
+            let (header, _) = read_frame(&mut reader);
+            let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
+            frames.push((frame.cursor_row, frame.popup_row, frame.popup_height));
+        }
+        // One row first, three after Backspace, both right below the cursor.
+        assert_eq!(frames, [(18, 19, 3), (18, 19, 5)]);
+    }
+
+    #[test]
     fn handle_complete_clears_a_previous_popup_where_the_scroll_moved_it() {
         let mut server = test_server();
-        // Two candidates near the bottom of a 24-row terminal: the session
-        // scrolls 9 rows and draws the popup on rows 12..16 (0-based).
+        // Ten candidates near the bottom of a 24-row terminal: the session
+        // scrolls 9 rows to fit them and draws the popup on rows 12..23
+        // (0-based). The terminal scrolls only for the rows shown, so fewer
+        // candidates would scroll less.
         let mut reader = run_complete_session(
             &mut server,
             CompleteParams {
@@ -2826,7 +2879,11 @@ mod tests {
                 reuse_popup: false,
                 shift_tab_sequence: None,
             },
-            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[
+                "git", "gizmo", "gcc", "gdb", "gem", "gh", "gio", "go", "gpg", "grep",
+            ]
+            .map(|name| format!("{name}\tcommand\tcommand\n"))
+            .concat(),
             &[],
         );
         let (header, tty) = read_frame(&mut reader);

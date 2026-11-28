@@ -1,10 +1,8 @@
 use crate::candidate::Candidate;
-use crate::config::{Config, KindOrder};
+use crate::config::{Config, DEFAULT_MAX_ROWS, KindOrder};
 use crate::fuzzy::{FuzzyMatcher, MatchMode};
 use crate::ui::popup::Popup;
 use std::collections::HashMap;
-
-const DEFAULT_MAX_VISIBLE: usize = 10;
 
 struct CachedFilter {
     indices: Vec<usize>,
@@ -153,6 +151,7 @@ impl Viewport {
 pub struct CompletionSet {
     candidates: Vec<Candidate>,
     kind_order: KindOrder,
+    max_rows: usize,
 }
 
 impl CompletionSet {
@@ -173,6 +172,7 @@ impl CompletionSet {
         Self {
             candidates,
             kind_order: config.kind_order.at_position(command_position),
+            max_rows: config.max_rows,
         }
     }
 
@@ -180,8 +180,9 @@ impl CompletionSet {
         self.candidates.is_empty()
     }
 
-    /// Builds the popup state. `fuzzy` is reused for its cached matcher; its
-    /// kind order is replaced by this set's position-resolved order.
+    /// Builds the popup state with the configured row limit. `fuzzy` is
+    /// reused for its cached matcher; its kind order is replaced by this
+    /// set's position-resolved order.
     pub fn into_app(
         self,
         prefix: String,
@@ -200,6 +201,7 @@ impl CompletionSet {
             term_rows,
             fuzzy.with_kind_order(self.kind_order),
         )
+        .with_max_rows(self.max_rows)
     }
 }
 
@@ -211,6 +213,9 @@ pub struct App {
     match_mode: MatchMode,
     pub filter_text: String,
     viewport: Viewport,
+    /// Candidate rows shown at most, as configured.
+    max_rows: usize,
+    /// Candidate rows shown: `max_rows`, or fewer in a short terminal.
     max_visible: usize,
     pub cursor_row: u16,
     pub cursor_col: u16,
@@ -297,7 +302,8 @@ impl App {
             match_mode: MatchMode::default(),
             filter_text: lcp,
             viewport: Viewport::default(),
-            max_visible: DEFAULT_MAX_VISIBLE,
+            max_rows: DEFAULT_MAX_ROWS,
+            max_visible: DEFAULT_MAX_ROWS,
             cursor_row,
             cursor_col,
             term_cols,
@@ -475,21 +481,35 @@ impl App {
         // Stays at one row even when no popup fits; callers check
         // `popup_fits` before drawing.
         let max_visible = Popup::rows_available(self.term_rows).max(1);
-        self.max_visible = DEFAULT_MAX_VISIBLE.min(max_visible);
+        self.max_visible = self.max_rows.min(max_visible);
         self.clamp_viewport();
+    }
+
+    /// Candidate rows the popup shows, from which `Popup::compute` takes its
+    /// height: `max_visible`, or fewer when fewer candidates match. A popup
+    /// drawn once makes room below the cursor for these rows.
+    pub fn shown_rows(&self) -> usize {
+        self.visible_candidate_indices().len()
+    }
+
+    /// Candidate rows the popup can show while it stays open: every
+    /// candidate it holds, up to `max_visible`. Editing the filter can match
+    /// more candidates than the first frame did, so an open popup makes room
+    /// for these rows and stays below the cursor.
+    pub fn session_rows(&self) -> usize {
+        self.all_candidates.len().clamp(1, self.max_visible)
+    }
+
+    /// Shows at most `max_rows` candidate rows, never fewer than one.
+    pub fn with_max_rows(mut self, max_rows: usize) -> Self {
+        self.max_rows = max_rows.max(1);
+        self.sync_max_visible();
+        self
     }
 
     /// Whether the terminal is large enough to show the popup at all.
     pub fn popup_fits(&self) -> bool {
         Popup::fits_terminal(self.term_cols, self.term_rows)
-    }
-
-    /// Lowers `max_visible` to at most `limit` rows, never below one, and
-    /// keeps the selection visible.
-    #[cfg(test)]
-    pub(crate) fn cap_max_visible(&mut self, limit: usize) {
-        self.max_visible = self.max_visible.min(limit.max(1));
-        self.clamp_viewport();
     }
 
     fn clamp_viewport(&mut self) {
@@ -892,6 +912,51 @@ mod tests {
     const FIFTEEN_ITEMS: &[&str] = &[
         "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
     ];
+
+    #[test]
+    fn max_rows_limits_visible_rows_within_the_terminal() {
+        let app = |max_rows, term_rows| {
+            App::new_with_term_size(
+                make_candidates(FIFTEEN_ITEMS),
+                String::new(),
+                1,
+                0,
+                80,
+                term_rows,
+            )
+            .with_max_rows(max_rows)
+        };
+        assert_eq!(app(4, 24).visible_candidate_indices().len(), 4);
+        assert_eq!(app(14, 24).visible_candidate_indices().len(), 14);
+        // A short terminal shows fewer rows than configured, and zero still
+        // shows one.
+        assert_eq!(app(14, 8).max_visible(), Popup::rows_available(8));
+        assert_eq!(app(0, 24).max_visible(), 1);
+
+        // Paging moves by the configured rows.
+        let mut paged = app(4, 24);
+        paged.page_down();
+        assert_eq!(paged.selected(), Some(4));
+    }
+
+    #[test]
+    fn completion_set_applies_the_configured_max_rows() {
+        let mut config = Config::default();
+        config.max_rows = 3;
+        let tsv: String = FIFTEEN_ITEMS
+            .iter()
+            .map(|item| format!("{item}\t\t\n"))
+            .collect();
+        let app = CompletionSet::new(&config, &tsv, false, None).into_app(
+            String::new(),
+            1,
+            0,
+            80,
+            24,
+            FuzzyMatcher::new(),
+        );
+        assert_eq!(app.max_visible(), 3);
+    }
 
     #[test]
     fn page_down_by_max_visible() {
