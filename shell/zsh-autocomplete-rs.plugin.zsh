@@ -351,7 +351,8 @@ _zacrs_daemon_filter() {
 # On OK        (return 0): _zacrs_send_render_fd holds open fd; caller must sysread + close.
 # On EMPTY     (return 1): fd already closed.
 # On CACHE_MISS (return 3): fd already closed; caller should collect candidates and retry.
-# On transport failure or an unsupported filter (return 2): caller can use the subprocess.
+# On transport failure, an unsupported filter or a refused candidate set (return 2):
+# caller can use the subprocess.
 _zacrs_daemon_send_render() {
     local _cr="$1" _cc="$2" _pfx="$3" _cands="$4" _sel="${5:-}" _ctx_key="${6:-}" _cmd_pos="${7:-0}" _cands_present="${8:-0}" _command_context="${9:-}"
     [[ "$_pfx" != *[$'\r\n']* ]] || return 2
@@ -400,7 +401,7 @@ _zacrs_daemon_send_render() {
         return 3
     elif [[ "$header" == 'ERROR payload too large' ]]; then
         # The daemon refused this candidate set, not the session. The caller
-        # draws it through the subprocess; later requests still use the daemon.
+        # hands the set to the subprocess; later requests still use the daemon.
         exec {fd}<&-
         return 2
     else
