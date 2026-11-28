@@ -48,6 +48,13 @@ impl Shell {
     }
 
     fn drain(&mut self, timeout_ms: i32) -> Result<()> {
+        let read = self.read_output(timeout_ms);
+        interrupted()?;
+        read
+    }
+
+    /// Append whatever the terminal has written, waiting up to `timeout_ms`.
+    fn read_output(&mut self, timeout_ms: i32) -> Result<()> {
         let mut fd = filedescriptor::pollfd {
             fd: self
                 .master
@@ -60,7 +67,6 @@ impl Shell {
             std::slice::from_mut(&mut fd),
             Some(Duration::from_millis(timeout_ms as u64)),
         );
-        interrupted()?;
         if result? > 0 {
             let mut buffer = [0; 8192];
             match self.reader.read(&mut buffer) {
@@ -122,27 +128,22 @@ impl Shell {
         .into())
     }
 
-    /// Forget captured output, so the next `popup_drawn` sees only what follows.
-    pub fn clear_output(&mut self) {
-        self.output.clear();
-    }
-
-    /// Wait until a popup frame has been written in full, answering the
-    /// adapter's cursor position queries as a terminal would.
-    pub fn popup_drawn(&mut self) -> Result<()> {
+    /// Write `bytes` and wait until a popup frame has been written back in
+    /// full, answering the adapter's cursor position queries as a terminal
+    /// would. Output captured before the write is discarded, so an earlier
+    /// frame cannot satisfy the wait.
+    pub fn send_until_popup(&mut self, bytes: &[u8]) -> Result<()> {
         const QUERY: &[u8] = b"\x1b[6n";
+        // What the adapter writes after a frame: `_zacrs_daemon_draw_atomic`
+        // in shell/zsh-autocomplete-rs.plugin.zsh. A changed sequence shows
+        // up here as a timeout that prints the capture.
         const FRAME_END: &[u8] = b"\x1b[?25h\x1b[?2026l";
-        let find = |haystack: &[u8], needle: &[u8]| {
-            haystack
-                .windows(needle.len())
-                .position(|window| window == needle)
-        };
+        self.output.clear();
+        self.send(bytes)?;
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut answered = 0;
         while Instant::now() < deadline {
             self.drain(1)?;
-            // `drain` drops the front of a very long capture.
-            answered = answered.min(self.output.len());
             while let Some(at) = find(&self.output[answered..], QUERY) {
                 self.writer.write_all(b"\x1b[5;20R")?;
                 answered += at + QUERY.len();
@@ -173,9 +174,17 @@ impl Drop for Shell {
             if matches!(self.child.try_wait(), Ok(Some(_))) {
                 return;
             }
-            if self.drain(10).is_err() {
-                std::thread::sleep(Duration::from_millis(10));
+            // Not `drain`: after an interrupt this still has to read.
+            if self.read_output(10).is_err() {
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
+        eprintln!("benchmark shell did not exit within 5 s of being killed");
     }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }

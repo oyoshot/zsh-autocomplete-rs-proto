@@ -10,11 +10,14 @@ _bench_large() { compadd -a _bench_large; }
 compdef _bench_small bench-small
 compdef _bench_large bench-large
 _bench_ready() { print ready > "$HOME/ready-$BENCH_MODE"; }
-# The harness sends this key and waits for the file before it starts a timer:
-# a widget runs only once the hook of the key before it has returned.
-_bench_idle() { print -r -- $(( ++_bench_idle_count )) > "$HOME/idle-$BENCH_MODE"; }
+# The harness sends this key and waits for the file before it starts a timer.
+# The file is written from a redraw hook registered after the adapter's, so
+# the adapter has finished with the key by then.
+_bench_idle() { :; }
+_bench_idle_done() { [[ $LASTWIDGET != _bench_idle ]] || print idle > "$HOME/idle-$BENCH_MODE"; }
 zle -N _bench_idle
 bindkey '^]' _bench_idle
+add-zle-hook-widget line-pre-redraw _bench_idle_done
 add-zle-hook-widget line-init _bench_ready
 PROMPT='B> '
 RPROMPT=''

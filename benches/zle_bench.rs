@@ -348,8 +348,8 @@ fn keys(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) ->
     Ok(results)
 }
 
-/// Time from the last key to a fully drawn popup, with a daemon. Both adapters
-/// stay open and take turns, so drift in the machine affects them alike.
+/// Time from a key to a fully drawn popup, with a daemon, for a key that
+/// gathers candidates and a key the daemon answers from its cache.
 fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -> Result<Results> {
     fs::write(
         session.home.path().join(".zshrc"),
@@ -368,40 +368,38 @@ fn popup(args: &Args, session: &Session, adapters: &BTreeMap<String, PathBuf>) -
         shells.push((name.clone(), shell));
     }
     let mut samples = Samples::new();
-    let mut idle_marks = vec![0u64; shells.len()];
     for rep in 0..u64::from(args.samples) + u64::from(args.warmups) {
         for turn in 0..shells.len() {
+            interrupted()?;
             // Rotate who goes first.
             let index = (turn + rep as usize) % shells.len();
             let (name, shell) = &mut shells[index];
             let idle = session.home.path().join(format!("idle-{name}"));
-            let marks = &mut idle_marks[index];
-            interrupted()?;
             let mut measured = Sample::new();
             for (size, command) in [(100, "bench-small"), (10_000, "bench-large")] {
-                // A popup is on screen before the hook that drew it returns.
-                // Let that hook finish, so its tail is not charged to the next key.
-                let mut settle = |shell: &mut pty::Shell| -> Result<()> {
-                    *marks += 1;
-                    shell.send(b"\x1d")?;
-                    shell.probe(&idle, &format!("{marks}\n"))
-                };
                 // A new word before the one completed makes a new cache entry.
-                shell.clear_output();
-                shell.send(format!("\x15{command} x{rep} ").as_bytes())?;
-                shell.popup_drawn()?;
-                let mut timed = |shell: &mut pty::Shell, key: &[u8]| -> Result<f64> {
-                    settle(shell)?;
-                    shell.clear_output();
+                shell.send_until_popup(format!("\x15{command} x{rep} ").as_bytes())?;
+                for (kind, key) in [
+                    // A prefix the cache has not seen for this line.
+                    ("gather", &b"w"[..]),
+                    // Erasing it returns to the prefix the cache holds.
+                    ("cached", b"\x7f"),
+                ] {
+                    // A popup is on screen before the hook that drew it
+                    // returns. Wait for the shell, so that hook's tail is not
+                    // charged to this key.
+                    if idle.exists() {
+                        fs::remove_file(&idle)?;
+                    }
+                    shell.send(b"\x1d")?;
+                    shell.probe(&idle, "idle\n")?;
                     let start = Instant::now();
-                    shell.send(key)?;
-                    shell.popup_drawn()?;
-                    Ok(start.elapsed().as_secs_f64() * 1000.0)
-                };
-                // "w" is a prefix the cache has not seen for this line: gather.
-                measured.insert(format!("gather_{size}_ms"), timed(shell, b"w")?);
-                // Erasing it returns to the prefix the cache holds: no gather.
-                measured.insert(format!("cached_{size}_ms"), timed(shell, b"\x7f")?);
+                    shell.send_until_popup(key)?;
+                    measured.insert(
+                        format!("{kind}_{size}_ms"),
+                        start.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
             }
             if rep >= u64::from(args.warmups) {
                 samples.entry(name.clone()).or_default().push(measured);
@@ -423,12 +421,15 @@ struct Stats {
     max: f64,
     p10: f64,
     p90: f64,
-    p99: f64,
+    /// Absent below 100 samples, where it would only repeat the maximum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p99: Option<f64>,
 }
 fn distribution(mut values: Vec<f64>) -> Stats {
     values.sort_by(f64::total_cmp);
     let n = values.len();
     let mean = values.iter().sum::<f64>() / n as f64;
+    let rank = |quantile: f64| values[(quantile * (n - 1) as f64).round_ties_even() as usize];
     Stats {
         n,
         mean,
@@ -436,9 +437,9 @@ fn distribution(mut values: Vec<f64>) -> Stats {
         median: (values[(n - 1) / 2] + values[n / 2]) / 2.0,
         min: values[0],
         max: values[n - 1],
-        p10: values[(0.1 * (n - 1) as f64).round_ties_even() as usize],
-        p90: values[(0.9 * (n - 1) as f64).round_ties_even() as usize],
-        p99: values[(0.99 * (n - 1) as f64).round_ties_even() as usize],
+        p10: rank(0.1),
+        p90: rank(0.9),
+        p99: (n >= 100).then(|| rank(0.99)),
     }
 }
 type Summary = BTreeMap<String, BTreeMap<String, BTreeMap<String, Stats>>>;
@@ -586,12 +587,9 @@ fn main() -> Result<()> {
     for (group, variants) in &summary {
         for (variant, metrics) in variants {
             for (metric, stats) in metrics {
-                // Below 100 samples the 99th percentile is just the maximum.
-                let tail = if stats.n >= 100 {
-                    format!(", p99 {:.3}", stats.p99)
-                } else {
-                    String::new()
-                };
+                let tail = stats
+                    .p99
+                    .map_or_else(String::new, |p99| format!(", p99 {p99:.3}"));
                 println!(
                     "{group} {variant} {metric}: {:.3} ± {:.3} (median {:.3}, p90 {:.3}{tail})",
                     stats.mean, stats.sd, stats.median, stats.p90
