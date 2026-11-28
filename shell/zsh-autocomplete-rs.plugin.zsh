@@ -354,7 +354,6 @@ _zacrs_daemon_send_render() {
 # Returns 0 on success, 1 on sysread failure.
 _zacrs_daemon_draw_atomic() {
     local _da_fd=$1 _da_tty_len=$2 _da_prev_vis=$3 _da_prev_row=$4 _da_prev_height=$5 _da_selective=${6:-0}
-    local _da_ok=0
     # Build the entire clear+draw sequence into a single buffer so that
     # it reaches the terminal as one write() — no intermediate frames.
     # Synchronized Output markers (\e[?2026h/l) are embedded inside the
@@ -375,19 +374,20 @@ _zacrs_daemon_draw_atomic() {
         done
         _da_buf+=$'\e8'
     fi
-    if (( _da_tty_len > 0 )); then
-        local _da_tty_data=""
-        if sysread -i $_da_fd -c $_da_tty_len _da_tty_data; then
-            _da_buf+="$_da_tty_data"
-        else
-            _da_ok=1
-        fi
-    fi
-    _da_buf+=$'\e[?25h\e[?2026l'
-    if (( _da_ok == 0 )); then
-        printf '%s' "$_da_buf" > /dev/tty
-    fi
-    return $_da_ok
+    # One sysread performs a single read(2) of at most its buffer size
+    # (8 KiB by default), so a large frame arrives in several reads. Read
+    # exactly tty_len bytes, and never draw a partial frame: it would leave
+    # the cursor inside the popup instead of on the edit line. A daemon that
+    # stalls mid-frame fails the read after 1 s rather than blocking ZLE;
+    # callers then fall back as for any other daemon failure.
+    local _da_chunk _da_count _da_left=$_da_tty_len
+    while (( _da_left > 0 )); do
+        sysread -i $_da_fd -s $_da_left -t 1 -c _da_count _da_chunk || return 1
+        _da_buf+=$_da_chunk
+        (( _da_left -= _da_count ))
+    done
+    printf '%s' "$_da_buf"$'\e[?25h\e[?2026l' > /dev/tty
+    return 0
 }
 
 # === Non-blocking render (auto-trigger) ===

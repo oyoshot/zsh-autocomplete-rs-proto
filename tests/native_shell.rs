@@ -350,6 +350,16 @@ fn zsh_redraw_hooks_registered_after_the_plugin_run_on_every_redraw() {
 }
 
 #[test]
+fn zsh_popup_frames_larger_than_one_read_are_drawn_whole() {
+    for daemon in ["1", "0"] {
+        run_popup_script(
+            include_str!("support/popup_large_frame.zsh"),
+            &[("ZACRS_TEST_DAEMON", daemon)],
+        );
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.
