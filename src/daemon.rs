@@ -2580,6 +2580,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             }],
             "g".to_string(),
             5,

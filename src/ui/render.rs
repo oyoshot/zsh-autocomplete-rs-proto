@@ -603,6 +603,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             }];
             let mut app = App::new_with_term_size(candidates, "日".into(), 1, 0, cols, 24);
             for selected in [false, true] {
@@ -633,6 +634,7 @@ mod tests {
                     kind: String::new(),
                     insert_text: None,
                     cursor_offset: None,
+                    source_group: Default::default(),
                 })
                 .collect();
             let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
@@ -763,6 +765,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         let layout = layout_candidate(&c.text, &c.description, 20);
         assert_eq!(layout.text, "git");
@@ -778,6 +781,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         let layout = layout_candidate(&c.text, &c.description, 20);
         assert_eq!(layout.text, "git");
@@ -796,6 +800,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             },
             Candidate {
                 text: "grep".to_string(),
@@ -803,6 +808,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             },
         ];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
@@ -822,6 +828,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
 
@@ -838,6 +845,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, "".to_string(), 4, 8, 0, 0);
 
@@ -889,6 +897,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, String::new(), 5, 10, 80, 24);
         assert_eq!(app.filter_text.len(), usize::from(u16::MAX));

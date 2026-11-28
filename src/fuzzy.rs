@@ -545,14 +545,6 @@ fn subsequence_indices(query: &str, haystack: &str, case_sensitive: bool) -> Opt
     Some(indices)
 }
 
-fn compare_empty_candidates(a: &Candidate, b: &Candidate, order: &KindOrder) -> Ordering {
-    order
-        .priority(a.kind_priority())
-        .cmp(&order.priority(b.kind_priority()))
-        .then_with(|| a.text.len().cmp(&b.text.len()))
-        .then_with(|| a.text.cmp(&b.text))
-}
-
 fn compare_scored_candidates(
     a: &Candidate,
     a_score: u32,
@@ -571,12 +563,72 @@ fn compare_scored_candidates(
         .then_with(|| a.text.cmp(&b.text))
 }
 
+/// Orders by kind, then by source group, then by text within groups that
+/// are sorted. The sort is stable, so groups that keep their order list
+/// candidates as the source gave them.
+fn compare_empty_candidates(a: &Candidate, b: &Candidate, order: &KindOrder) -> Ordering {
+    // The whole group, not only its index, identifies it, so candidates
+    // with different orders never compare by different rules.
+    let group = a.source_group;
+    order
+        .priority(a.kind_priority())
+        .cmp(&order.priority(b.kind_priority()))
+        .then(group.cmp(&b.source_group))
+        .then_with(|| {
+            if group.keep_order {
+                return Ordering::Equal;
+            }
+            let by_text = if group.numeric {
+                compare_numeric_text(&a.text, &b.text)
+            } else {
+                a.text.cmp(&b.text)
+            };
+            if group.reverse {
+                by_text.reverse()
+            } else {
+                by_text
+            }
+        })
+}
+
+/// Compares runs of ASCII digits by value and everything else by character,
+/// so "file2" sorts before "file10". Equal values fall back to the text.
+fn compare_numeric_text(a: &str, b: &str) -> Ordering {
+    let (mut a_rest, mut b_rest) = (a, b);
+    loop {
+        match (a_rest.chars().next(), b_rest.chars().next()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(ac), Some(bc)) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
+                let a_len = a_rest.bytes().take_while(u8::is_ascii_digit).count();
+                let b_len = b_rest.bytes().take_while(u8::is_ascii_digit).count();
+                let a_num = a_rest[..a_len].trim_start_matches('0');
+                let b_num = b_rest[..b_len].trim_start_matches('0');
+                let by_value = a_num.len().cmp(&b_num.len()).then(a_num.cmp(b_num));
+                if by_value != Ordering::Equal {
+                    return by_value;
+                }
+                a_rest = &a_rest[a_len..];
+                b_rest = &b_rest[b_len..];
+            }
+            (Some(ac), Some(bc)) => {
+                if ac != bc {
+                    return ac.cmp(&bc);
+                }
+                a_rest = &a_rest[ac.len_utf8()..];
+                b_rest = &b_rest[bc.len_utf8()..];
+            }
+        }
+    }
+}
+
 fn sort_empty_query_matches(
     results: &mut [ScoredMatch],
     candidates: &[Candidate],
     order: &KindOrder,
 ) {
-    results.sort_unstable_by(|a, b| {
+    results.sort_by(|a, b| {
         compare_empty_candidates(
             &candidates[a.candidate_idx],
             &candidates[b.candidate_idx],
@@ -650,6 +702,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }
@@ -1107,6 +1160,7 @@ mod tests {
                 kind: kind.to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }
@@ -1266,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_kind_then_len_sort() {
+    fn empty_query_sorts_ungrouped_candidates_by_kind_then_text() {
         let mut m = FuzzyMatcher::new();
         let candidates = make_candidates_with_kind(&[
             ("longcmd", "command"),
@@ -1276,11 +1330,91 @@ mod tests {
         ]);
         let results = m.filter(&candidates, "");
         let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
-        // Files before commands, then by length, then alphabetically.
-        assert_eq!(texts[0], "z");
-        assert_eq!(texts[1], "ab");
-        assert_eq!(texts[2], "abc");
-        assert_eq!(texts[3], "longcmd");
+        // Files before commands, then by text rather than length.
+        assert_eq!(texts, ["z", "ab", "abc", "longcmd"]);
+    }
+
+    #[test]
+    fn empty_query_lists_source_groups_in_order_and_sorts_within_them() {
+        use crate::candidate::SourceGroup;
+        let mut m = FuzzyMatcher::new();
+        let group = |index, keep_order| SourceGroup {
+            index,
+            keep_order,
+            ..SourceGroup::default()
+        };
+        let mut candidates = make_candidates(&[
+            "commit", "stash", "add", "zip", "HEAD~2", "HEAD~10", "bisect",
+        ]);
+        let groups = [
+            group(1, false),
+            group(2, false),
+            group(1, false),
+            group(0, false),
+            group(3, true),
+            group(3, true),
+            group(1, false),
+        ];
+        for (candidate, group) in candidates.iter_mut().zip(groups) {
+            candidate.source_group = group;
+        }
+        let results = m.filter(&candidates, "");
+        let texts: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+        // Groups split across sources merge, sort, and keep the group order;
+        // a group that keeps its order is listed as given.
+        assert_eq!(
+            texts,
+            [
+                "zip", "add", "bisect", "commit", "stash", "HEAD~2", "HEAD~10"
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_query_sorts_numeric_and_reverse_groups() {
+        use crate::candidate::SourceGroup;
+        let mut m = FuzzyMatcher::new();
+        let texts = ["file10", "file2", "file02", "file1", "a"];
+        for (numeric, reverse, expected) in [
+            (true, false, ["a", "file1", "file02", "file2", "file10"]),
+            (false, true, ["file2", "file10", "file1", "file02", "a"]),
+            (true, true, ["file10", "file2", "file02", "file1", "a"]),
+        ] {
+            let mut candidates = make_candidates(&texts);
+            for candidate in &mut candidates {
+                candidate.source_group = SourceGroup {
+                    index: 1,
+                    numeric,
+                    reverse,
+                    ..SourceGroup::default()
+                };
+            }
+            let results = m.filter(&candidates, "");
+            let actual: Vec<&str> = results.iter().map(|r| r.candidate.text.as_str()).collect();
+            assert_eq!(actual, expected, "numeric={numeric} reverse={reverse}");
+        }
+    }
+
+    #[test]
+    fn numeric_text_comparison_is_a_total_order() {
+        let mut texts = vec![
+            "b", "a10", "a2", "a02", "a", "10", "9", "", "a2b", "a2a", "日本1",
+        ];
+        texts.sort_by(|a, b| compare_numeric_text(a, b));
+        assert_eq!(
+            texts,
+            [
+                "", "9", "10", "a", "a02", "a2", "a2a", "a2b", "a10", "b", "日本1"
+            ]
+        );
+        for a in &texts {
+            for b in &texts {
+                assert_eq!(
+                    compare_numeric_text(a, b),
+                    compare_numeric_text(b, a).reverse()
+                );
+            }
+        }
     }
 
     #[test]
