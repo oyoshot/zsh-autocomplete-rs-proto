@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795849383825,
+  "lastUpdate": 1795851638187,
   "repoUrl": "https://github.com/oyoshot/zsh-autocomplete-rs-proto",
   "entries": {
     "Benchmark": [
@@ -25318,6 +25318,282 @@ window.BENCHMARK_DATA = {
           {
             "name": "compute_common_prefix/no_prefix/1000",
             "value": 643,
+            "range": "± 2",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "105966658+oyoshot@users.noreply.github.com",
+            "name": "oyoshot",
+            "username": "oyoshot"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "17f0d61397ef8c51e12600d3a896de1e8833a558",
+          "message": "feat(completion): order empty queries by compsys group (#203)\n\n* feat(completion): keep the completion system's order for empty queries\n\nWith an empty query, candidates of the same kind were sorted by length\nand then text. After `git `, that put short but rarely used commands\nsuch as gc, mv, svn and var ahead of add, branch and checkout, and lost\nthe grouping that Zsh's completion system provides.\n\nSort empty queries by kind priority alone with a stable sort, so each\nkind keeps the order of its source: compsys groups for native\ncandidates and the configuration file for abbreviations. Nonempty\nqueries are unchanged.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* fix(shell): sort captured matches the way compsys would\n\nCompsys sorts the matches of each compadd call unless they go to an\nunsorted group (-V) or the call passes -o nosort. Capturing with -O\nskipped that sort, so with an empty query the popup showed matches in\nthe order completion functions passed them. Command names after a pipe\nappeared in hash order.\n\nApply the same sort to each captured call, including numeric and\nreverse orders, and sort command names in the gather fallback.\nSorting 3,700 command names adds about 1.5 ms to candidate capture.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* Revert \"fix(shell): sort captured matches the way compsys would\"\n\nThis reverts commit 7269bb70eefa5cfc5ad09bc39baa8722ca2db51c.\n\n* feat(completion): order empty queries by compsys group\n\nSorting captured matches in the shell could not reproduce compsys:\ncompsys sorts whole groups that several compadd calls may fill, and\nranking belongs in the engine.\n\nThe Zsh adapter now tags each captured match with its compsys group,\nnumbered in order of creation, and marks groups that compsys leaves\nunsorted (-V or -o nosort) with \"keep\". These are two optional\ncandidate columns. With an empty query the engine orders candidates\nby kind, then group, then text, and keeps the source order in groups\nmarked \"keep\". Candidates without group information sort by text\nwithin their kind, and abbreviations keep the configuration order.\n\nOption parsing stops at the first match, honours only the first -o,\nand takes a separate -o word only when it is a valid order list.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* fix(completion): honour compsys sort orders and group identity\n\nReview of the group ordering found three gaps:\n- A repeated -o did not consume its order word, so a later -V was\n  read as a match and the call landed in the default group.\n- Compsys keeps groups with the same name but another order apart,\n  but the key held only the name, so the first call fixed the order.\n- Groups sorted with -o numeric or -o reverse were sorted by text.\n\nThe order column now carries \"keep\", or any of \"numeric\" and\n\"reverse\", and is part of the group key. The engine sorts numeric\ngroups with digit runs compared by value and reverses reverse groups.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-28T16:31:39+09:00",
+          "tree_id": "2a189e7a9e40afbfe2718ace539fbbd6cf8108d0",
+          "url": "https://github.com/oyoshot/zsh-autocomplete-rs-proto/commit/17f0d61397ef8c51e12600d3a896de1e8833a558"
+        },
+        "date": 1795851637467,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "filter_scaling/100",
+            "value": 5681,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/1000",
+            "value": 64118,
+            "range": "± 212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_scaling/10000",
+            "value": 801697,
+            "range": "± 2860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/empty",
+            "value": 203629,
+            "range": "± 332",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/1char",
+            "value": 94318,
+            "range": "± 269",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/3char",
+            "value": 64362,
+            "range": "± 181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/exact",
+            "value": 23218,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/no_match",
+            "value": 20666,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_query_variants/long",
+            "value": 18905,
+            "range": "± 135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/3char",
+            "value": 169272,
+            "range": "± 1185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/normalized_exact",
+            "value": 170405,
+            "range": "± 1062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/long_normalized",
+            "value": 172391,
+            "range": "± 1028",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_query_variants/no_match",
+            "value": 160822,
+            "range": "± 1063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/100",
+            "value": 15763,
+            "range": "± 124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/1000",
+            "value": 169407,
+            "range": "± 821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_unicode_scaling/normalized_primary/10000",
+            "value": 1863032,
+            "range": "± 17129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/full_rescan_git",
+            "value": 137322,
+            "range": "± 739",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "filter_sequence/incremental_git",
+            "value": 100914,
+            "range": "± 544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_prefix_cargo",
+            "value": 636756,
+            "range": "± 1183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/normal_typo_calude",
+            "value": 250041,
+            "range": "± 866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "command_typo_rescue/rescue_typo_calude",
+            "value": 250445,
+            "range": "± 1109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/0",
+            "value": 75891,
+            "range": "± 127761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/100",
+            "value": 127817,
+            "range": "± 1720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "abbreviation_injection_and_filter/1000",
+            "value": 556145,
+            "range": "± 13846",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/full_rescan_roundtrip_git",
+            "value": 337856,
+            "range": "± 1427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "app_backspace_sequence/app_cache_roundtrip_git",
+            "value": 405,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_no_trunc",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/ascii_trunc",
+            "value": 93,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_no_trunc",
+            "value": 21,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/cjk_trunc",
+            "value": 72,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_no_trunc",
+            "value": 24,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "truncate_to_width/mixed_trunc",
+            "value": 66,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/1field",
+            "value": 19,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/2fields",
+            "value": 27,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/3fields",
+            "value": 38,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_line/long_desc",
+            "value": 37,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/unique_1000",
+            "value": 303585,
+            "range": "± 627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_lines_dedup/duplicates_50pct_1000",
+            "value": 205909,
+            "range": "± 440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/10",
+            "value": 95,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/100",
+            "value": 663,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/with_prefix/1000",
+            "value": 5932,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_common_prefix/no_prefix/1000",
+            "value": 475,
             "range": "± 2",
             "unit": "ns/iter"
           }
