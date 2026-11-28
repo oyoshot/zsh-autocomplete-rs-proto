@@ -76,4 +76,23 @@ for malformed in \
     fi
 done
 
+# The encoder must give the bytes `od` gives under options a user may have
+# set, on both sides of the length where it hands over to `od`, and the decoder
+# must read them back.
+typeset long_ascii=${(l:1024::abc :):-} long_wide=${(l:400::日本:):-} over_limit=${(l:1500::x y:):-}
+for encoder_options in multibyte nomultibyte ksharrays kshzerosubscript shwordsplit; do
+    for sample in '' 'git ch' 'ls -la ' $'tab\there\nline\x01\x7f' '日本語 ñ é' '%s\n' \
+        $'\xff\xfe raw' $'\e[Z' $'a\0b' "$long_ascii" "$long_wide" "$over_limit"; do
+        expected=$(print -rn -- "$sample" | od -An -tx1 -v | tr -d ' \n')
+        () {
+            setopt localoptions $encoder_options
+            _zacrs_encode_hex_to_REPLY "$sample"
+        }
+        encoded=$REPLY
+        assert_equal "$expected" "$encoded" "hex of ${(q+)sample[1,16]} (${#sample}) matches od with $encoder_options"
+        _zacrs_decode_hex_to_REPLY "$encoded"
+        assert_equal "$sample" "$REPLY" "hex of ${(q+)sample[1,16]} (${#sample}) decodes back with $encoder_options"
+    done
+done
+
 (( failures == 0 ))

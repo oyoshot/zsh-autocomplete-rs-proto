@@ -210,7 +210,6 @@ found by reading and not confirmed by running.
 | 4 | An oversized set, a failed file lookup and a malformed request each produce different replies on the socket, the subprocess render and Tab | read |
 | 4 | Terminal size comes from `COLUMNS`/`LINES` on the socket and from the terminal on the subprocess | read |
 | 5 | An unknown request closes the connection with no reply | read |
-| Budgets | Each daemon render starts `od` and `tr` to hex-encode the command context | confirmed |
 | Budgets | The cursor position is asked of the terminal on every changed key; the reuse of the last position appears unreachable | read |
 | — | A candidate whose text is `END` with empty description and kind is taken as the end of the candidate list | read |
 
