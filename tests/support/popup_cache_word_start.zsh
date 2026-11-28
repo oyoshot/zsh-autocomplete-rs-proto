@@ -65,4 +65,29 @@ wait_file probe 'cd fo'
 plain_output
 [[ "$REPLY" == *foodir* ]] || fail "missing the directory: ${(qqq)REPLY}"
 [[ "$REPLY" != *foofile* ]] || fail "offered a file gathered for the redirection: ${(qqq)REPLY}"
+
+# Tab gathers and stores through another request. Open the picker over the
+# redirection, cancel it, and edit the line the same way.
+send_keys $'\x15'
+pty_output=''
+send_keys 'cd >foo'
+wait_plain 'the popup after the second redirection' foodir foofile '└'
+pty_output=''
+send_keys $'\t'
+wait_output 'the picker' $'\e[7m'
+# Let the picker read the cancel key on its own before more keys follow.
+pty_output=''
+send_keys $'\e'
+wait_output 'the picker to close' $'\e[2K'
+: > "$HOME/probe"
+send_keys $'\x19'
+wait_file probe 'cd >foo'
+pty_output=''
+send_keys $'\x02\x02\x02\x08\x05'
+wait_plain 'the popup for the line edited after Tab' '┌' foodir '└'
+: > "$HOME/probe"
+send_keys $'\x19'
+wait_file probe 'cd foo'
+plain_output
+[[ "$REPLY" != *foofile* ]] || fail "offered a file gathered by Tab for the redirection: ${(qqq)REPLY}"
 print -r -- 'ok: a set gathered for a word that starts after the last space is not served for another line'

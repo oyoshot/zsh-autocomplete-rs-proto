@@ -163,7 +163,9 @@ shorter word in the same argument position and directory, usually while that
 word was being typed, and keeps only the names the current word extends. They
 can be stale until the next command line. Without the daemon or such an
 earlier gather, as for a pasted word, the popup closes and the typed text is
-kept.
+kept. The same holds for a word that does not start after the last space, such
+as one after a redirection, `;` or an opening quote: `cat <README.mdx` lists
+nothing, because candidates for such a word are not kept.
 
 These candidates are never applied without an explicit choice. Tab opens the
 popup with nothing selected, even for a single candidate; Enter and Space then
