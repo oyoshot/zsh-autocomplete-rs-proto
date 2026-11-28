@@ -125,11 +125,7 @@ pub fn expand_command_abbreviation(
     let abbreviation = config.abbreviations.iter().find(|abbreviation| {
         abbreviation.trigger == trigger && abbreviation.is_available_at(true, Some(command_context))
     })?;
-    let candidate = Candidate::abbreviation(
-        abbreviation.trigger.clone(),
-        abbreviation.expansion.clone(),
-        abbreviation.description.clone(),
-    );
+    let candidate = Candidate::from(abbreviation);
     let text = candidate.insert_text?;
     if text.is_empty() {
         return None;

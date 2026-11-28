@@ -1,4 +1,4 @@
-use crate::config::SuffixConfig;
+use crate::config::{Abbreviation, SuffixConfig};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -151,6 +151,16 @@ impl Candidate {
             insert_text: Some(insert_text),
             cursor_offset,
         }
+    }
+}
+
+impl From<&Abbreviation> for Candidate {
+    fn from(abbreviation: &Abbreviation) -> Self {
+        Self::abbreviation(
+            abbreviation.trigger.clone(),
+            abbreviation.expansion.clone(),
+            abbreviation.description.clone(),
+        )
     }
 }
 
