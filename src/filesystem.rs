@@ -176,6 +176,7 @@ impl FilesystemQuery {
                         path,
                         ignore_case: self.options.ignore_case,
                     }),
+                    source_group: Default::default(),
                 };
                 // Count owned data as well as row storage. Abandon the whole query
                 // on overflow, since a partial snapshot could be auto-selected.

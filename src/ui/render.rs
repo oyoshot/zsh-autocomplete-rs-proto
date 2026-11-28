@@ -1,5 +1,4 @@
 use crate::app::App;
-use crate::candidate::Candidate;
 use crate::fuzzy::FuzzyMatcher;
 use crate::ui::popup::Popup;
 use crate::ui::theme::Theme;
@@ -17,12 +16,13 @@ pub struct CandidateLayout {
     pub description: String,
 }
 
+/// Lays out the shown candidate `text` and its `description` in `inner` cells.
 #[inline]
-pub fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout {
-    let text = truncate_to_width(&candidate.text, inner);
+pub fn layout_candidate(text: &str, description: &str, inner: usize) -> CandidateLayout {
+    let text = truncate_to_width(text, inner);
     let text_w = UnicodeWidthStr::width(text.as_str());
 
-    if candidate.description.is_empty() || text_w + 2 >= inner {
+    if description.is_empty() || text_w + 2 >= inner {
         return CandidateLayout {
             text,
             gap: inner.saturating_sub(text_w),
@@ -31,7 +31,7 @@ pub fn layout_candidate(candidate: &Candidate, inner: usize) -> CandidateLayout 
     }
 
     let desc_max = inner - text_w - 2;
-    let desc = truncate_to_width(&candidate.description, desc_max);
+    let desc = truncate_to_width(description, desc_max);
     let desc_w = UnicodeWidthStr::width(desc.as_str());
     let gap = inner - text_w - desc_w;
 
@@ -148,8 +148,16 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
     let mut matcher = FuzzyMatcher::new();
     for (i, &candidate_idx) in visible.iter().enumerate() {
         let candidate = &app.all_candidates[candidate_idx];
-        let layout = layout_candidate(candidate, content_width);
-        let ranges = matcher.highlight_ranges(candidate, &app.filter_text, app.match_mode());
+        let hidden = app.hidden_len(candidate);
+        let shown = &candidate.text[hidden..];
+        let layout = layout_candidate(shown, &candidate.description, content_width);
+        // Matches are found in the full text; keep their shown parts.
+        let ranges: Vec<_> = matcher
+            .highlight_ranges(candidate, &app.filter_text, app.match_mode())
+            .into_iter()
+            .filter(|r| r.end > hidden)
+            .map(|r| r.start.max(hidden) - hidden..r.end - hidden)
+            .collect();
 
         crossterm::queue!(buf, cursor::MoveTo(popup.col, popup.row + 1 + i as u16))?;
 
@@ -171,7 +179,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
             } else {
                 crossterm::queue!(buf, SetAttribute(Attribute::Reverse))?;
             }
-            print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, true)?;
+            print_candidate(buf, &layout.text, shown, &ranges, theme, true)?;
             crossterm::queue!(
                 buf,
                 Print(&spaces[..layout.gap]),
@@ -187,7 +195,7 @@ fn render_popup(buf: &mut impl Write, app: &App, theme: &Theme) -> std::io::Resu
         } else {
             print_colored(buf, "│", theme.border)?;
             crossterm::queue!(buf, Print(&spaces[..gutter]))?;
-            print_candidate(buf, &layout.text, &candidate.text, &ranges, theme, false)?;
+            print_candidate(buf, &layout.text, shown, &ranges, theme, false)?;
 
             if !layout.description.is_empty() {
                 crossterm::queue!(
@@ -506,6 +514,33 @@ mod tests {
     }
 
     #[test]
+    fn path_rows_show_names_under_the_directory_in_the_title() {
+        let dir = "~/OneDrive/画像/Screenshots/";
+        let app = App::new_with_term_size(
+            ["スクリーンショット 2026-01-31 123931.png", "desktop.ini"]
+                .iter()
+                .map(|name| Candidate::parse_line(&format!("{dir}{name}\t\tfile")))
+                .collect(),
+            format!("{dir}de"),
+            1,
+            0,
+            80,
+            24,
+        );
+        let (bytes, popup) = render_popup_to_bytes(&app, &Theme::default()).unwrap();
+        let text = printed_text(&bytes);
+        let rows: Vec<_> = text.split('│').collect();
+        assert!(text.starts_with(&format!("┌ {dir}de ")), "{text}");
+        assert_eq!(rows[1].trim(), "desktop.ini", "{text}");
+        assert_eq!(emphasized_text(&app), "de");
+        // The title, not the full candidate text, sets the width.
+        assert_eq!(
+            usize::from(popup.width),
+            UnicodeWidthStr::width(format!("┌ {dir}de ┐").as_str())
+        );
+    }
+
+    #[test]
     fn unicode_popup_emphasizes_only_complete_matching_characters() {
         let app = App::new_with_term_size(
             vec![
@@ -569,6 +604,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             }];
             let mut app = App::new_with_term_size(candidates, "日".into(), 1, 0, cols, 24);
             for selected in [false, true] {
@@ -600,6 +636,7 @@ mod tests {
                     kind: String::new(),
                     insert_text: None,
                     cursor_offset: None,
+                    source_group: Default::default(),
                 })
                 .collect();
             let mut app = App::new_with_term_size(candidates, "item-".into(), 1, 0, cols, 24);
@@ -731,8 +768,9 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
-        let layout = layout_candidate(&c, 20);
+        let layout = layout_candidate(&c.text, &c.description, 20);
         assert_eq!(layout.text, "git");
         assert_eq!(layout.gap, 17);
         assert!(layout.description.is_empty());
@@ -747,8 +785,9 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
-        let layout = layout_candidate(&c, 20);
+        let layout = layout_candidate(&c.text, &c.description, 20);
         assert_eq!(layout.text, "git");
         assert_eq!(layout.description, "command");
         let text_w = UnicodeWidthStr::width(layout.text.as_str());
@@ -766,6 +805,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             },
             Candidate {
                 literal_path: None,
@@ -774,6 +814,7 @@ mod tests {
                 kind: "command".to_string(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             },
         ];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
@@ -794,6 +835,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, "g".to_string(), 5, 2, 80, 24);
 
@@ -811,6 +853,7 @@ mod tests {
             kind: String::new(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, "".to_string(), 4, 8, 0, 0);
 
@@ -863,6 +906,7 @@ mod tests {
             insert_text: None,
             cursor_offset: None,
             literal_path: None,
+            source_group: Default::default(),
         }];
         let app = App::new_with_term_size(candidates, String::new(), 5, 10, 80, 24);
         assert_eq!(app.filter_text.len(), usize::from(u16::MAX));

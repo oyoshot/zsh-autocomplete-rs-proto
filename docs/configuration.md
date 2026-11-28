@@ -15,6 +15,12 @@ candidates are outside the visible area, the bottom border shows the visible
 range, for example `1–10 / 42`. The marker and range are omitted when the terminal
 is too narrow to fit them.
 
+File and directory candidates omit the parent directory that they all share,
+as far as the filter label shows it: completing `~/Pictures/` lists
+`photo.png`, not `~/Pictures/photo.png`. A popup too narrow for the whole label
+still omits the directory, so that the names stay distinct. Selecting a
+candidate still inserts the full path.
+
 The popup is drawn below the cursor line and never over it. It needs at least
 4 rows (the cursor line, the frame and one candidate) and 8 columns (the
 narrowest popup in which a shortened candidate still shows a character
@@ -91,7 +97,15 @@ The available actions are `move-down`, `move-up`, `page-down`, `page-up`,
 
 With a nonempty query, candidates are ordered by matching score, shorter
 candidate text, kind priority, then text. With an empty query, kind priority
-comes first, followed by shorter text and text order.
+comes first. Within a kind, candidates follow the groups of Zsh's completion
+system in the order they were created, sorted by text within each group, and
+groups that Zsh leaves unsorted keep their order. Groups that ask for a
+numeric or reverse order are sorted that way. Text is compared by character
+code, not by locale. Zsh puts all matches in one
+group unless the `group-name` style is set, so with
+`zstyle ':completion:*' group-name ''`, `git <Tab>` lists the main commands
+before the others. Abbreviations keep the order of the configuration file,
+and candidates without group information are sorted by text.
 
 Customize kind priority in `[completion]`. The default order depends on the
 cursor position. At command position, it is:

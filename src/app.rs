@@ -265,9 +265,27 @@ pub struct App {
     pub term_rows: u16,
     pub prefix: String,
     fuzzy: FuzzyMatcher,
+    /// The parent directory, ending in `/`, shared by every path candidate.
+    shared_dir: String,
 }
 
 impl App {
+    /// Bytes at the start of `candidate.text` that the popup does not show:
+    /// the shared parent directory of path candidates, as far as the filter
+    /// label shows it, so that no hidden directory goes unseen.
+    pub fn hidden_len(&self, candidate: &Candidate) -> usize {
+        if !is_path(candidate) {
+            return 0;
+        }
+        let shown = common_prefix_len(&self.shared_dir, [self.filter_text.as_str()], |a, b| a == b);
+        through_last_slash(&self.shared_dir, shown)
+    }
+
+    /// The part of `candidate.text` that the popup shows.
+    pub fn display_text<'a>(&self, candidate: &'a Candidate) -> &'a str {
+        &candidate.text[self.hidden_len(candidate)..]
+    }
+
     pub(crate) fn kind_order(&self) -> crate::config::KindOrder {
         self.fuzzy.kind_order()
     }
@@ -348,6 +366,7 @@ impl App {
                 (prefix, filter_text)
             }
         };
+        let shared_dir = shared_parent_dir(&candidates);
         let mut app = App {
             all_candidates: candidates,
             filtered_indices: Vec::new(),
@@ -362,6 +381,7 @@ impl App {
             term_rows,
             prefix,
             fuzzy,
+            shared_dir,
         };
         app.sync_max_visible();
         app.update_filter_with_scope(None, collected_files);
@@ -569,20 +589,68 @@ impl App {
     }
 }
 
+fn is_path(candidate: &Candidate) -> bool {
+    matches!(candidate.base_kind(), "file" | "directory")
+}
+
+/// The part of `text` up to and including the `/` before its last
+/// component. A directory's trailing `/` does not start a component.
+fn parent_dir(text: &str) -> &str {
+    text.trim_end_matches('/')
+        .rfind('/')
+        .map_or("", |i| &text[..=i])
+}
+
+/// Length of the byte prefix that `first` shares with every other item.
+fn common_prefix_len<'a>(
+    first: &str,
+    others: impl IntoIterator<Item = &'a str>,
+    eq: impl Fn(u8, u8) -> bool,
+) -> usize {
+    let mut len = first.len();
+    for other in others {
+        len = first
+            .bytes()
+            .zip(other.bytes())
+            .take(len)
+            .take_while(|&(a, b)| eq(a, b))
+            .count();
+    }
+    len
+}
+
+/// Length of `s[..len]` up to and including its last `/`; 0 if it has none.
+fn through_last_slash(s: &str, len: usize) -> usize {
+    s.as_bytes()[..len]
+        .iter()
+        .rposition(|&b| b == b'/')
+        .map_or(0, |i| i + 1)
+}
+
+/// The longest parent directory, ending in `/`, that every path candidate
+/// starts with; empty if there is none.
+fn shared_parent_dir(candidates: &[Candidate]) -> String {
+    let mut parents = candidates
+        .iter()
+        .filter(|c| is_path(c))
+        .map(|c| parent_dir(&c.text));
+    let Some(first) = parents.next() else {
+        return String::new();
+    };
+    let len = common_prefix_len(first, parents, |a, b| a == b);
+    first[..through_last_slash(first, len)].to_string()
+}
+
 pub fn compute_common_prefix(candidates: &[Candidate], prefix: &str) -> String {
     if candidates.is_empty() {
         return prefix.to_string();
     }
     let first = &candidates[0].text;
-    let mut len = first.len();
-    for c in &candidates[1..] {
-        len = first
-            .bytes()
-            .zip(c.text.bytes())
-            .take(len)
-            .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
-            .count();
-    }
+    let mut len = common_prefix_len(
+        first,
+        candidates[1..].iter().map(|c| c.text.as_str()),
+        |a, b| a.eq_ignore_ascii_case(&b),
+    );
     while len > 0 && !first.is_char_boundary(len) {
         len -= 1;
     }
@@ -618,9 +686,10 @@ mod tests {
 
         // Native subcommands arrive without a kind. At argument position they
         // rank before abbreviations; at command position abbreviations lead.
+        // Abbreviations keep their configured order.
         for (command_position, expected) in [
-            (true, ["any", "cmd", "status"]),
-            (false, ["status", "any", "arg"]),
+            (true, ["cmd", "any", "status"]),
+            (false, ["status", "arg", "any"]),
         ] {
             let app = CompletionSet::new(&config, "status\t\t\n", command_position, None).into_app(
                 String::new(),
@@ -687,6 +756,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect()
     }
@@ -696,6 +766,60 @@ mod tests {
             .iter()
             .map(|&candidate_idx| app.all_candidates[candidate_idx].text.as_str())
             .collect()
+    }
+
+    // --- shown candidate text ---
+
+    fn path_app(lines: &[&str], prefix: &str) -> App {
+        let candidates = lines.iter().map(|l| Candidate::parse_line(l)).collect();
+        App::new_with_term_size(candidates, prefix.into(), 1, 0, 80, 24)
+    }
+
+    fn shown_texts(app: &App) -> Vec<&str> {
+        app.all_candidates
+            .iter()
+            .map(|c| app.display_text(c))
+            .collect()
+    }
+
+    #[test]
+    fn path_rows_omit_their_shared_parent_directory() {
+        for (lines, expected) in [
+            (
+                &["~/写真/a.png\t\tfile", "~/写真/b/\t\tdirectory"][..],
+                &["a.png", "b/"][..],
+            ),
+            // Only whole components are shared, even within a character.
+            (&["src/ab/x\t\tfile", "src/ac/y\t\tfile"], &["ab/x", "ac/y"]),
+            (&["ab/x\t\tfile", "ac/y\t\tfile"], &["ab/x", "ac/y"]),
+            (&["写真/a\t\tfile", "写画/b\t\tfile"], &["写真/a", "写画/b"]),
+            // A directory's own name stays visible.
+            (&["a/b/\t\tdirectory"], &["b/"]),
+            (&["a/\t\tdirectory", "a/b\t\tfile"], &["a/", "a/b"]),
+            (&["plain\t\tfile", "dir/x\t\tfile"], &["plain", "dir/x"]),
+            // Other candidates are shown whole and do not affect the parent.
+            (
+                &["d/origin/main\t\t", "d/x\t\tfile", "d/y\t\tfile"],
+                &["d/origin/main", "x", "y"],
+            ),
+            (&["d/x\t\tfile_rescue", "d/y\t\tfile"], &["x", "y"]),
+        ] {
+            let app = path_app(lines, "");
+            assert_eq!(shown_texts(&app), expected, "{lines:?}");
+        }
+    }
+
+    #[test]
+    fn path_rows_hide_only_directories_the_filter_label_shows() {
+        let mut app = path_app(&["~/写真/2026/a\t\tfile", "~/写真/2026/b\t\tfile"], "");
+        assert_eq!(app.filter_text, "~/写真/2026/");
+        assert_eq!(shown_texts(&app), ["a", "b"]);
+        // Erasing into the directory shows the part no longer in the label.
+        for _ in 0..4 {
+            app.backspace();
+        }
+        assert_eq!(app.filter_text, "~/写真/2");
+        assert_eq!(shown_texts(&app), ["2026/a", "2026/b"]);
     }
 
     // --- compute_common_prefix ---

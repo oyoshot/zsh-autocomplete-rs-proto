@@ -136,12 +136,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("ascii_with_desc"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }
@@ -154,12 +155,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("ascii_no_desc"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }
@@ -172,12 +174,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("cjk_with_desc"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }
@@ -190,12 +193,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("cjk_no_desc"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }
@@ -208,12 +212,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("mixed_with_desc"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }
@@ -228,12 +233,13 @@ fn bench_layout_candidate(c: &mut Criterion) {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         };
         group.bench_with_input(
             BenchmarkId::from_parameter("long_desc_truncation"),
             &candidate,
             |b, c| {
-                b.iter(|| layout_candidate(c, inner));
+                b.iter(|| layout_candidate(&c.text, &c.description, inner));
             },
         );
     }

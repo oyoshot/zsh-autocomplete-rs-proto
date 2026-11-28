@@ -146,6 +146,7 @@ pub fn generate_candidates(count: usize) -> Vec<Candidate> {
             kind,
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates
@@ -176,6 +177,7 @@ pub fn generate_unicode_candidates(count: usize) -> Vec<Candidate> {
             kind,
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates
@@ -190,6 +192,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             kind: command_kind(rescue),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         },
         Candidate {
             literal_path: None,
@@ -198,6 +201,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             kind: command_kind(rescue),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         },
         Candidate {
             literal_path: None,
@@ -206,6 +210,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             kind: command_kind(rescue),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         },
         Candidate {
             literal_path: None,
@@ -214,6 +219,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             kind: command_kind(rescue),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         },
     ];
 
@@ -231,6 +237,7 @@ pub fn generate_realistic_command_candidates(count: usize, rescue: bool) -> Vec<
             kind: command_kind(rescue),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
 
@@ -267,6 +274,7 @@ pub fn generate_prefixed_candidates(prefix: &str, count: usize) -> Vec<Candidate
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates
@@ -320,6 +328,7 @@ pub fn generate_cjk_candidates(count: usize) -> Vec<Candidate> {
             kind,
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates
@@ -341,6 +350,7 @@ pub fn generate_no_description_candidates(count: usize) -> Vec<Candidate> {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates
@@ -368,6 +378,7 @@ pub fn generate_long_description_candidates(count: usize) -> Vec<Candidate> {
             kind: "command".to_string(),
             insert_text: None,
             cursor_offset: None,
+            source_group: Default::default(),
         });
     }
     candidates

@@ -3011,6 +3011,7 @@ mod tests {
                 insert_text: None,
                 cursor_offset: None,
                 literal_path: None,
+                source_group: Default::default(),
             }],
             "g".to_string(),
             5,

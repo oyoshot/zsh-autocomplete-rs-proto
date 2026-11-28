@@ -97,7 +97,7 @@ impl Popup {
             .iter()
             .map(|&candidate_idx| {
                 let c = &app.all_candidates[candidate_idx];
-                let text_w = UnicodeWidthStr::width(c.text.as_str());
+                let text_w = UnicodeWidthStr::width(app.display_text(c));
                 let desc_w = if c.description.is_empty() {
                     0
                 } else {
@@ -185,6 +185,7 @@ mod tests {
                 kind: String::new(),
                 insert_text: None,
                 cursor_offset: None,
+                source_group: Default::default(),
             })
             .collect();
         App::new_with_term_size(
