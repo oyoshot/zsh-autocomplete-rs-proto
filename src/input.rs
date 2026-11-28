@@ -89,6 +89,9 @@ fn map_key_event_to_action(key: KeyEvent, bindings: &KeyBindings) -> Option<Acti
         (KeyCode::Tab, Modifiers::SHIFT) => Some(bindings.shift_tab),
         (KeyCode::Enter, Modifiers::NONE) => Some(bindings.enter),
         (KeyCode::Char('c'), Modifiers::CTRL) => Some(Action::Cancel),
+        // Emacs-style line motion, as in Zsh's own menu selection.
+        (KeyCode::Char('n'), Modifiers::CTRL) => Some(Action::MoveDown),
+        (KeyCode::Char('p'), Modifiers::CTRL) => Some(Action::MoveUp),
         (KeyCode::Char(' '), Modifiers::NONE) => Some(bindings.space),
         (KeyCode::Char(c), Modifiers::NONE) if !c.is_control() => Some(Action::TypeChar(c)),
         _ => None,
@@ -125,6 +128,13 @@ mod tests {
         let b = default_bindings();
         assert_eq!(parse_raw_bytes(b"\x1b[A", &b), Action::MoveUp);
         assert_eq!(parse_raw_bytes(b"\x1b[B", &b), Action::MoveDown);
+    }
+
+    #[test]
+    fn ctrl_n_and_ctrl_p_move_the_selection() {
+        let b = default_bindings();
+        assert_eq!(parse_raw_bytes(b"\x0e", &b), Action::MoveDown);
+        assert_eq!(parse_raw_bytes(b"\x10", &b), Action::MoveUp);
     }
 
     #[test]
