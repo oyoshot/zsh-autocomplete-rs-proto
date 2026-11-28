@@ -93,7 +93,9 @@ With a nonempty query, candidates are ordered by matching score, shorter
 candidate text, kind priority, then text. With an empty query, kind priority
 comes first. Within a kind, candidates follow the groups of Zsh's completion
 system in the order they were created, sorted by text within each group, and
-groups that Zsh leaves unsorted keep their order. Zsh puts all matches in one
+groups that Zsh leaves unsorted keep their order. Groups that ask for a
+numeric or reverse order are sorted that way. Text is compared by character
+code, not by locale. Zsh puts all matches in one
 group unless the `group-name` style is set, so with
 `zstyle ':completion:*' group-name ''`, `git <Tab>` lists the main commands
 before the others. Abbreviations keep the order of the configuration file,

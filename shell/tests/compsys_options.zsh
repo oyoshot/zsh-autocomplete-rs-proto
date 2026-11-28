@@ -69,7 +69,8 @@ assert_group() {
     local REPLY
     local -a reply
     _zacrs_compadd_group "$@"
-    local actual="$REPLY ${reply[1]}"
+    # The group key, then the order column.
+    local actual="$REPLY|${reply[1]}"
     if [[ "$actual" != "$expected" ]]; then
         print -u2 -r -- "not ok: ${description} (expected=${(qqq)expected}, actual=${(qqq)actual})"
         (( ++failures ))
@@ -78,19 +79,24 @@ assert_group() {
     fi
 }
 
-assert_group 'J: 0' 'no group is the default sorted group' - b a
-assert_group 'J:commands 0' 'sorted group' -J commands - b a
-assert_group 'V:commands 1' 'unsorted group' -V commands - b a
-assert_group 'V:commands 1' 'unsorted group in a flag cluster' -QV commands - b a
-assert_group 'J:files 0' 'attached group name' -Jfiles - b a
-assert_group 'J:commands 1' 'nosort order' -J commands -o nosort - b a
-assert_group 'J: 1' 'nosort among several orders' -o match,nosort - b a
-assert_group 'J: 1' 'attached nosort order' -onosort - b a
-assert_group 'J: 0' 'only the first order applies' -o numeric -o nosort - 10 9
-assert_group 'J: 0' 'a word that is not an order list is a match' -o nosorted b a
-assert_group 'J: 0' 'option value containing V is not a group flag' -P -V - b a
-assert_group 'J: 0' 'options end at the first match' foo -V bar
-assert_group 'J: 0' 'candidate after option terminator is not a flag' - -V b a
+assert_group 'J::|' 'no group is the default sorted group' - b a
+assert_group 'J:commands:|' 'sorted group' -J commands - b a
+assert_group 'V:commands:keep|keep' 'unsorted group' -V commands - b a
+assert_group 'V:commands:keep|keep' 'unsorted group in a flag cluster' -QV commands - b a
+assert_group 'J:files:|' 'attached group name' -Jfiles - b a
+assert_group 'J:commands:keep|keep' 'nosort order is a distinct group' -J commands -o nosort - b a
+assert_group 'J::keep|keep' 'nosort among several orders' -o match,nosort - b a
+assert_group 'J::keep|keep' 'attached nosort order' -onosort - b a
+assert_group 'J::numeric|numeric' 'numeric order' -o numeric - 10 9
+assert_group 'J::reverse|reverse' 'reverse order' -o reverse - a b
+assert_group 'J::numeric,reverse|numeric,reverse' 'numeric reverse order' -o reverse,numeric - 9 10
+assert_group 'V:recent:keep|keep' 'unsorted group wins over numeric order' -o numeric -V recent - 2 1
+assert_group 'J::numeric|numeric' 'only the first order applies' -o numeric -o nosort - 10 9
+assert_group 'V:recent:keep|keep' 'a later order word is consumed' -o numeric -o nosort -V recent - 2 1
+assert_group 'J::|' 'a word that is not an order list is a match' -o nosorted b a
+assert_group 'J::|' 'option value containing V is not a group flag' -P -V - b a
+assert_group 'J::|' 'options end at the first match' foo -V bar
+assert_group 'J::|' 'candidate after option terminator is not a flag' - -V b a
 
 assert_render_gate() {
     local expected=$1 candidates=$2 buffer=$3 prefix=$4 description=$5

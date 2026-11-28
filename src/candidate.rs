@@ -13,14 +13,36 @@ pub struct Candidate {
 
 /// Where a candidate's source placed it, for ordering empty queries.
 ///
-/// Groups are listed by `index`. Within a group, candidates are sorted by
-/// text unless `keep_order` is set, in which case they keep the order in
-/// which the source listed them. Every candidate of one group must share
-/// `keep_order`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Groups are listed by `index`. Within a group, candidates keep the order in
+/// which the source listed them when `keep_order` is set. Otherwise they are
+/// sorted by text, comparing runs of digits by value when `numeric` is set,
+/// in descending order when `reverse` is set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceGroup {
     pub index: u32,
     pub keep_order: bool,
+    pub numeric: bool,
+    pub reverse: bool,
+}
+
+impl SourceGroup {
+    /// Parses a group number and a comma-separated order: `keep`, or any of
+    /// `numeric` and `reverse`. Unknown orders are ignored.
+    fn parse(index: Option<&str>, order: Option<&str>) -> Self {
+        let mut group = Self {
+            index: index.and_then(|i| i.parse().ok()).unwrap_or(0),
+            ..Self::default()
+        };
+        for order in order.unwrap_or("").split(',') {
+            match order {
+                "keep" => group.keep_order = true,
+                "numeric" => group.numeric = true,
+                "reverse" => group.reverse = true,
+                _ => {}
+            }
+        }
+        group
+    }
 }
 
 impl Candidate {
@@ -105,23 +127,22 @@ impl Candidate {
     }
 
     /// Parses `text\tdescription\tkind\tgroup\torder`. Every field after
-    /// the text is optional. `group` is the source group's number and an
-    /// `order` of `keep` keeps the group in source order; without them the
-    /// candidate is in group 0, sorted by text.
+    /// the text is optional. `group` and `order` describe the source group
+    /// (see [`SourceGroup`]); without them the candidate is in group 0,
+    /// sorted by text.
     pub fn parse_line(line: &str) -> Self {
         let mut parts = line.splitn(5, '\t');
         let text = parts.next().unwrap_or("").to_string();
         let description = parts.next().unwrap_or("").to_string();
         let kind = parts.next().unwrap_or("").to_string();
-        let index = parts.next().and_then(|g| g.parse().ok()).unwrap_or(0);
-        let keep_order = parts.next() == Some("keep");
+        let source_group = SourceGroup::parse(parts.next(), parts.next());
         Candidate {
             text,
             description,
             kind,
             insert_text: None,
             cursor_offset: None,
-            source_group: SourceGroup { index, keep_order },
+            source_group,
         }
     }
 
@@ -172,8 +193,8 @@ impl Candidate {
             cursor_offset,
             // Abbreviations keep the order of the configuration file.
             source_group: SourceGroup {
-                index: 0,
                 keep_order: true,
+                ..SourceGroup::default()
             },
         }
     }
@@ -228,36 +249,39 @@ mod tests {
 
     #[test]
     fn parse_source_group() {
+        let group = |line| Candidate::parse_line(line).source_group;
         let sorted = Candidate::parse_line("add\t\t\t2\t");
+        assert_eq!(sorted.kind, "");
         assert_eq!(
             sorted.source_group,
             SourceGroup {
                 index: 2,
-                keep_order: false
+                ..SourceGroup::default()
             }
         );
-        assert_eq!(sorted.kind, "");
-
-        let kept = Candidate::parse_line("HEAD~1\t\t\t3\tkeep");
         assert_eq!(
-            kept.source_group,
+            group("HEAD~1\t\t\t3\tkeep"),
             SourceGroup {
                 index: 3,
-                keep_order: true
+                keep_order: true,
+                ..SourceGroup::default()
+            }
+        );
+        assert_eq!(
+            group("10\t\t\t1\tnumeric,reverse"),
+            SourceGroup {
+                index: 1,
+                numeric: true,
+                reverse: true,
+                ..SourceGroup::default()
             }
         );
     }
 
     #[test]
     fn parse_invalid_source_group_falls_back_to_the_default_group() {
-        let c = Candidate::parse_line("add\t\t\tx\tkeep");
-        assert_eq!(
-            c.source_group,
-            SourceGroup {
-                index: 0,
-                keep_order: true
-            }
-        );
+        let c = Candidate::parse_line("add\t\t\tx\tunknown");
+        assert_eq!(c.source_group, SourceGroup::default());
     }
 
     #[test]
