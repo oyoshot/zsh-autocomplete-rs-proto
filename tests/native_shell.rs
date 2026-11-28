@@ -316,6 +316,16 @@ fn zsh_shrinking_the_terminal_under_an_open_popup_closes_it() {
 }
 
 #[test]
+fn zsh_redraw_hooks_registered_after_the_plugin_run_on_every_redraw() {
+    for daemon in ["1", "0"] {
+        run_popup_script(
+            include_str!("support/popup_hook_chain.zsh"),
+            &[("ZACRS_TEST_DAEMON", daemon)],
+        );
+    }
+}
+
+#[test]
 fn zsh_terminal_too_small_for_the_popup_falls_back_to_native_completion() {
     // The last size is the smallest terminal that fits, where a popup must
     // still appear.

@@ -820,7 +820,7 @@ _zacrs_complete_popup() {
 
 # === Auto-trigger via line-pre-redraw hook ===
 
-_zacrs_line_pre_redraw() {
+_zacrs_auto_popup() {
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
     (( _zacrs_self_insert_wrapped && ! _zacrs_space_enabled && PENDING == 0 )) && _zacrs_restore_self_insert
@@ -1005,6 +1005,13 @@ _zacrs_line_pre_redraw() {
 
     # 候補あり: デーモンのキャッシュを更新しながら render
     _zacrs_render "$prefix" "$prefix_len" "$candidates_str" "$from_gather" "" "$context_key"
+}
+
+# The hook dispatcher stops at the first callback that fails, so a non-zero
+# status here would keep other plugins' redraw hooks from running.
+_zacrs_line_pre_redraw() {
+    _zacrs_auto_popup
+    return 0
 }
 
 # === Widget wrappers: Enter/Ctrl-C でポップアップクリア ===
