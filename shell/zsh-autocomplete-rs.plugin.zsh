@@ -1027,6 +1027,18 @@ _zacrs_complete_with_popup() {
 
 # === Auto-trigger via line-pre-redraw hook ===
 
+# Record everything _zacrs_auto_popup compares to decide whether a redraw
+# needs work. Reads the caller's primary_editor and _zacrs_file_option_key.
+_zacrs_remember_redraw_state() {
+    _zacrs_prev_lbuffer="$LBUFFER"
+    _zacrs_prev_buffer="$BUFFER"
+    _zacrs_prev_cursor=$CURSOR
+    _zacrs_prev_primary_editor=$primary_editor
+    _zacrs_prev_home="${HOME:-}"
+    _zacrs_prev_cwd="$PWD"
+    _zacrs_prev_file_options="$_zacrs_file_option_key"
+}
+
 _zacrs_auto_popup() {
     # A non-insert widget may drain the type-ahead batch. Restore the original
     # self-insert before any unchanged-buffer early return.
@@ -1052,7 +1064,7 @@ _zacrs_auto_popup() {
     # the same check (Popup::fits_terminal) and stays authoritative if the
     # limits diverge.
     if (( LINES < 4 || COLUMNS < 8 )); then
-        _zacrs_prev_lbuffer="$LBUFFER"
+        _zacrs_remember_redraw_state
         _zacrs_clear_popup
         return
     fi
@@ -1068,13 +1080,7 @@ _zacrs_auto_popup() {
 
     _zacrs_redraw_deferred=0
 
-    _zacrs_prev_lbuffer="$LBUFFER"
-    _zacrs_prev_buffer="$BUFFER"
-    _zacrs_prev_cursor=$CURSOR
-    _zacrs_prev_primary_editor=$primary_editor
-    _zacrs_prev_home="${HOME:-}"
-    _zacrs_prev_cwd="$PWD"
-    _zacrs_prev_file_options="$_zacrs_file_option_key"
+    _zacrs_remember_redraw_state
 
     # 空 or 空白のみ → コマンド未入力なのでスキップ
     [[ ! "$LBUFFER" =~ [^[:space:]] ]] && { _zacrs_reset_cache; _zacrs_clear_popup; return }

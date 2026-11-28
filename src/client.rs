@@ -833,14 +833,15 @@ mod tests {
                 &mut apply.as_bytes(),
                 &mut Vec::new(),
                 "DONE 0 display with spaces",
-                vec![],
+                b"x".to_vec(),
                 None,
                 0,
                 0,
             )
             .unwrap();
             assert_eq!(result, TextCompleteResult::rejected_edit(), "{apply}");
-            assert!(unread.is_empty());
+            // No session ran, so the typed-ahead key goes back to the shell.
+            assert_eq!(unread, b"x", "{apply}");
         }
     }
 
@@ -863,16 +864,17 @@ mod tests {
             true,
             true,
             None,
-            Vec::new(),
+            b"x".to_vec(),
             None,
             None,
             None,
             None,
             Some(&query),
         );
+        // No session ran, so the typed-ahead key goes back to the shell.
         assert!(
             matches!(result, Ok(CompleteSessionOutcome::Done(result, unread))
-            if result == TextCompleteResult::rejected_edit() && unread.is_empty())
+            if result == TextCompleteResult::rejected_edit() && unread == b"x")
         );
     }
 
