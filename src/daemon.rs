@@ -1181,6 +1181,9 @@ impl DaemonServer {
         }
     }
 
+    /// Writes `extra_prefix`, then clears what `prev_popup` (row, height)
+    /// leaves outside the new popup, then draws. `prev_popup` must be in the
+    /// rows `extra_prefix` leaves, such as after it scrolls.
     fn send_frame<W: Write>(
         &self,
         writer: &mut W,
@@ -1210,11 +1213,11 @@ impl DaemonServer {
             tty_len: total_len,
         }
         .write_to(writer)?;
-        if !stale_clear_bytes.is_empty() {
-            writer.write_all(&stale_clear_bytes)?;
-        }
         if !extra_prefix.is_empty() {
             writer.write_all(extra_prefix)?;
+        }
+        if !stale_clear_bytes.is_empty() {
+            writer.write_all(&stale_clear_bytes)?;
         }
         writer.write_all(&tty_bytes)?;
         writer.flush()
@@ -1271,7 +1274,7 @@ impl DaemonServer {
             return Response::Empty;
         }
 
-        let scroll_bytes = scroll_for_popup(&mut app);
+        let (scroll_bytes, _) = scroll_for_popup(&mut app);
 
         if let Some(idx) = selected {
             app.set_selected(idx);
@@ -1447,9 +1450,11 @@ impl DaemonServer {
             return;
         }
 
-        let scroll_bytes = scroll_for_popup(&mut app);
-        let reuse_fast_path = reuse_popup && scroll_bytes.is_empty();
-        let prev_popup = prev_popup_row.zip(prev_popup_height);
+        let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
+        let reuse_fast_path = reuse_popup && scrolled == 0;
+        let prev_popup = prev_popup_row
+            .zip(prev_popup_height)
+            .map(|rows| rows_after_scroll(rows, scrolled));
         if self
             .send_frame(
                 writer,
@@ -1662,7 +1667,7 @@ impl DaemonServer {
                         );
                         break;
                     }
-                    let scroll_bytes = scroll_for_popup(&mut app);
+                    let (scroll_bytes, scrolled) = scroll_for_popup(&mut app);
                     let new_popup = crate::ui::popup::Popup::compute(&app);
                     let (extra_prefix, prev_popup) =
                         if resize_requires_full_popup_clear(&previous_popup, &new_popup) {
@@ -1679,7 +1684,10 @@ impl DaemonServer {
                         } else {
                             (
                                 scroll_bytes,
-                                Some((previous_popup.row, previous_popup.height)),
+                                Some(rows_after_scroll(
+                                    (previous_popup.row, previous_popup.height),
+                                    scrolled,
+                                )),
                             )
                         };
                     if self
@@ -1846,9 +1854,9 @@ fn cancel_text(app: &App) -> &str {
 }
 
 /// Compute scroll-up bytes needed to make room for the popup below the
-/// cursor, and move `app.cursor_row` up to match. Callers check
-/// `App::popup_fits` first.
-fn scroll_for_popup(app: &mut App) -> Vec<u8> {
+/// cursor, and move `app.cursor_row` up to match. Returns the bytes and the
+/// rows scrolled. Callers check `App::popup_fits` first.
+fn scroll_for_popup(app: &mut App) -> (Vec<u8>, u16) {
     let mut scroll_bytes = Vec::new();
     let scroll_amount =
         ui::popup::Popup::scroll_to_fit(app.cursor_row, app.term_rows, app.max_visible());
@@ -1859,7 +1867,14 @@ fn scroll_for_popup(app: &mut App) -> Vec<u8> {
         );
         app.cursor_row -= scroll_amount;
     }
-    scroll_bytes
+    (scroll_bytes, scroll_amount)
+}
+
+/// Where rows `(row, height)` end up after the screen scrolls up `scrolled`
+/// rows. Rows pushed off the top are dropped.
+fn rows_after_scroll((row, height): (u16, u16), scrolled: u16) -> (u16, u16) {
+    let lost = scrolled.saturating_sub(row);
+    (row.saturating_sub(scrolled), height.saturating_sub(lost))
 }
 
 fn init_tracing() {
@@ -1926,6 +1941,7 @@ fn read_text_line(reader: &mut impl BufRead) -> io::Result<String> {
 mod tests {
     use super::{
         CompleteParams, DaemonServer, RenderParams, read_prefix_and_candidates, read_text_line,
+        rows_after_scroll,
     };
     use crate::config::Config;
     use crate::fuzzy::FuzzyMatcher;
@@ -2769,6 +2785,54 @@ mod tests {
         let tty = String::from_utf8_lossy(&tty_bytes);
         assert!(tty.contains("┌"));
         assert!(tty.contains("git"));
+    }
+
+    #[test]
+    fn handle_complete_clears_a_previous_popup_where_the_scroll_moved_it() {
+        let mut server = test_server();
+        // Two candidates near the bottom of a 24-row terminal: the session
+        // scrolls 9 rows and draws the popup on rows 12..16 (0-based).
+        let mut reader = run_complete_session(
+            &mut server,
+            CompleteParams {
+                prefix: "g".to_string(),
+                cursor_row: 20,
+                cursor_col: 2,
+                term_cols: 80,
+                term_rows: 24,
+                // Rows 14..18 before the scroll, 5..9 after it: above the new
+                // popup, though rows 14 and 15 are inside it before scrolling.
+                prev_popup_row: Some(14),
+                prev_popup_height: Some(4),
+                command_position: false,
+                command_context: None,
+                accept_single: false,
+                reuse_popup: false,
+                shift_tab_sequence: None,
+            },
+            "git\tcommand\tcommand\ngizmo\tcommand\tcommand\n",
+            &[],
+        );
+        let (header, tty) = read_frame(&mut reader);
+        let frame = TextFrameHeader::parse(header.trim_end()).unwrap();
+        assert_eq!((frame.cursor_row, frame.popup_row), (11, 12));
+
+        let scroll = tty.find("\u{1b}[9S").expect("scroll in frame");
+        for row in 6..=9 {
+            let clear = format!("\u{1b}[{row};1H\u{1b}[2K");
+            let at = tty
+                .find(&clear)
+                .unwrap_or_else(|| panic!("{clear:?} in {tty:?}"));
+            assert!(at > scroll, "{clear:?} before the scroll in {tty:?}");
+        }
+    }
+
+    #[test]
+    fn rows_after_scroll_drops_rows_pushed_off_the_top() {
+        assert_eq!(rows_after_scroll((14, 4), 0), (14, 4));
+        assert_eq!(rows_after_scroll((14, 4), 9), (5, 4));
+        assert_eq!(rows_after_scroll((3, 5), 5), (0, 3));
+        assert_eq!(rows_after_scroll((3, 2), 9), (0, 0));
     }
 
     #[test]
